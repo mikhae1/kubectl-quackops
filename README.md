@@ -4,7 +4,7 @@
 
 Tired of sifting through endless logs and documentation? QuackOps acts as your personal Kubernetes AI assistant, allowing you to interact with your cluster using natural language. Just describe your issue or request, and QuackOps will provide intelligent insights, suggest relevant commands, etc.
 
-QuackOps is optimized to integrate smoothly with small local models like `llama3` while also providing robust scalability for larger LLMs.
+QuackOps is optimized to integrate smoothly with small local models like [llama3](https://ollama.com/library/llama3) while also providing robust scalability for larger LLMs.
 
 ## Features
 
@@ -19,7 +19,11 @@ QuackOps is optimized to integrate smoothly with small local models like `llama3
 ```sh
 $ kubectl quackops 'why my pod is not working?'
 
-Based on the output of the `kubectl get pods` command, the pod named `my-nginx-ingress-hello-world-64f78448bd-v567q` is not working. The `STATUS` for this pod is `ImagePullBackOff`, indicating that there is an issue pulling the image required for this pod to run.
+Based on the output of the `kubectl get pods` command,
+the pod named `my-nginx-ingress-hello-world-64f78448bd-v567q`
+is not working. The `STATUS` for this pod is `ImagePullBackOff`,
+indicating that there is an issue pulling the image required
+for this pod to run.
 ```
 
 ## Installation
@@ -44,7 +48,7 @@ Use the following command to extract the binary from the downloaded `.tar.gz` fi
     ```
 
 1. Move the binary to your PATH:
-Move the executable to a directory included in your system’s PATH, like `/usr/local/bin`:
+Move the executable to a directory included in your system’s PATH, like /usr/local/bin:
     ```sh
     mv ~/Downloads/kubectl-quackops /usr/local/bin/kubectl-quackops
     ```
@@ -58,14 +62,14 @@ Confirm that QuackOps is recognized as a kubectl plugin by running:
 Summon the quack:
 
 ```sh
-kubectl quackops
+$ kubectl quackops
 ```
 
 ## Usage
 
 ### Lolcal LLMs
 
-When it comes to the sensitivity of your Kubernetes data, privacy is paramount. That's why we recommend using [Ollama](https://ollama.com/), a self-hosted, open-source LLM platform, with `QuackOps`.
+When it comes to the sensitivity of your Kubernetes data, privacy is paramount. That's why we recommend using [Ollama](https://ollama.com/), a self-hosted open-source LLM platform with `QuackOps`.
 
 Here's why:
 - *Data Stays Yours*: With Ollama, your cluster information never leaves your environment. No need to send sensitive logs or configurations to external servers.
@@ -84,7 +88,7 @@ time=2024-05-23T19:33:25.674+03:00 level=INFO source=routes.go:1143 msg="Listeni
 
 # start interactive chat
 $ kubectl quackops -p ollama -m llama3
-> ...
+> check nginx status
 ```
 
 You can download Ollama here: https://ollama.com/download.
@@ -97,9 +101,12 @@ For users seeking the most advanced AI capabilities, Kubectl-QuackOps seamlessly
 - **Access the Latest Models**: Leverage the latest advancements in LLMs, constantly updated and refined by OpenAI.
 - **Smart Insight**: OpenAI's models enable to debug the most complicated cases.
 
+Just set `OPENAI_API_KEY` key variable which can be obtained here: https://platform.openai.com/api-keys
+
 ```sh
-export OPENAI_API_KEY=...
-$ kubectl quackops
+export OPENAI_API_KEY=<YOUR-OPENAI-API-KEY>
+
+$ kubectl quackops -p openai -m gpt-3.5-turbo -x 4096
 > ...
 ```
 
