@@ -1,0 +1,10 @@
+vendor/
+.vscode/
+TODO/
+.DS_Store
+
+TODO*
+*.log
+*.bak
+kubectl-quackops
+.envrc
