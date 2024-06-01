@@ -17,7 +17,7 @@ QuackOps is optimized to integrate smoothly with small local models like [llama3
 ## Example
 
 ```sh
-$ kubectl quackops 'why my pod is not working?'
+$ kubectl quackops 'my pod is not working'
 
 Based on the output of the `kubectl get pods` command,
 the pod named `my-nginx-ingress-hello-world-64f78448bd-v567q`
@@ -67,7 +67,7 @@ $ kubectl quackops
 
 ## Usage
 
-### Lolcal LLMs
+### Local LLMs
 
 When it comes to the sensitivity of your Kubernetes data, privacy is paramount. That's why we recommend using [Ollama](https://ollama.com/), a self-hosted open-source LLM platform with `QuackOps`.
 
