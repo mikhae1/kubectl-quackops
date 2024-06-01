@@ -8,11 +8,12 @@ QuackOps is optimized to integrate smoothly with small local models like [llama3
 
 ## Features
 
-- **AI Assistance**: Utilizes LLM (Large Language Models) (currently [Ollama](https://ollama.com/) and [OpenAI](https://openai.com/) to provide intelligent suggestions and operations based on user input.
-- **Interactive Chat:** Use natural language to ask questions and receive assistance with Kubernetes debugging.
-- **Automatic command execution:** The tool can automatically execute whitelisted `kubectl` commands and use results as a context. Plugin consistently adheres to the current Kubernetes config context.
-- **Direct command execution:** Use '$' prefix to execute any user command directly and use it's output within the chat.
-- **Safe Command Execution:** Review and approve suggested kubectl commands before they are executed with `--safe-mode`.
+- **Natural Language Interface:** Interact with your cluster naturally. Ask questions and receive context-aware assistance through interactive chats or single queries.
+- **AI-Powered Suggestions:** The tool analyzes your requests, cluster state, and leverages power of selected LLM to offer intelligent debugging suggestions and solutions.
+- **Automated Command Execution:** Streamline your workflow with automated execution of whitelisted `kubectl` commands. The tool maintains context and uses command outputs to provide accurate assistance.
+- **Direct Command Execution:** Execute arbitrary commands directly within the chat interface using the `$` prefix (e.g., `$ kubectl get pods`). The tool integrates the output into its responses for a seamless experience.
+- **Safe Command Execution:**  Review and approve suggested `kubectl` commands before execution with `--safe-mode`. This ensures you maintain control and prevent accidental changes to your cluster.
+- **Supported LLM Providers:** Choose your preferred LLM provider, currently [Ollama](https://ollama.com/) and [OpenAI](https://openai.com/).
 
 ## Example
 
@@ -28,27 +29,28 @@ for this pod to run.
 
 ## Installation
 
-A kubectl plugin is a standalone executable file, whose name begins with `kubectl-`.
-To install a plugin, move its executable file to anywhere on your `$PATH`.
+QuackOps is packaged as a kubectl plugin, which is a standalone executable file whose name begins with `kubectl-`.
+You can install it by moving the executable file to any directory included in your `$PATH`.
 
 ### Manual installation
 
 1. Download the QuackOps binary
-Visit the [GitHub releases page](https://github.com/mikhae1/kubectl-quackops/releases) and download the latest version suitable for your operating system.
+Head over to the [GitHub releases page](https://github.com/mikhae1/kubectl-quackops/releases) and download the latest release archive suitable for your operating system (e.g., `kubectl-quackops-linux-amd64.tar.gz`)
 
-1. Extract binary
-Use the following command to extract the binary from the downloaded `.tar.gz` file:
+1. Extract the binary
+Use the following command to extract the binary from the downloaded archive:
     ```sh
     tar -xzf ~/Downloads/kubectl-quackops-linux-amd64.tar.gz -C ~/Downloads
     ```
+This will extract the `kubectl-quackops` binary to your `~/Downloads` directory.
 
-1. Make the binary executable, if needed:
+1. Make the binary executable (if needed):
     ```sh
     chmod +x ~/Downloads/kubectl-quackops
     ```
 
-1. Move the binary to your PATH:
-Move the executable to a directory included in your system’s PATH, like /usr/local/bin:
+1. Move the binary to your `$PATH`:
+Move the `kubectl-quackops` executable to a directory included in your system's `$PATH`, such as `/usr/local/bin`:
     ```sh
     mv ~/Downloads/kubectl-quackops /usr/local/bin/kubectl-quackops
     ```
@@ -67,48 +69,60 @@ $ kubectl quackops
 
 ## Usage
 
-### Local LLMs
+QuackOps offers flexible options to tailor your Kubernetes troubleshooting experience.
+Choose the LLM provider that best suits your needs.
 
-When it comes to the sensitivity of your Kubernetes data, privacy is paramount. That's why we recommend using [Ollama](https://ollama.com/), a self-hosted open-source LLM platform with `QuackOps`.
+### Ollama: Privacy and Control
 
-Here's why:
-- *Data Stays Yours*: With Ollama, your cluster information never leaves your environment. No need to send sensitive logs or configurations to external servers.
-- *Enhanced Security*: Maintain complete control over access and security protocols, ensuring your Kubernetes data remains protected.
+For maximum data security, leverage the power of local LLMs with [Ollama](https://ollama.com/).
 
-To get started with Ollama:
-```sh
-# pull llama3 model
-ollama pull llama3
+**Benefits:**
 
-# start ollama server
-$ ollama serve
+* **Data Sovereignty:**  Keep your cluster information confidential. Data remains within your environment, enhancing privacy.
+* **Enhanced Security:** Maintain complete control over access and security protocols for your Kubernetes data.
 
-time=2024-05-23T19:33:25.674+03:00 level=INFO source=routes.go:1143 msg="Listening on 127.0.0.1:11434 (version 0.1.32)"
-...
+**Getting Started:**
 
-# start interactive chat
-$ kubectl quackops -p ollama -m llama3
-> check nginx status
-```
+1. **Install Ollama:** Download and install Ollama from [https://ollama.com/download](https://ollama.com/download).
 
-You can download Ollama here: https://ollama.com/download.
+1. Download a Model (e.g., llama3):
+    ```sh
+    ollama pull llama3
+    ```
 
+1. Start ollama server:
+    ```sh
+    ollama serve
+    ```
 
-### OpenAI - Tap into Cutting-Edge AI
+1. Start interactive chat:
 
-For users seeking the most advanced AI capabilities, Kubectl-QuackOps seamlessly integrates with OpenAI's powerful APIs.
+    ```sh
+    kubectl quackops -p ollama -m llama3
+    ```
+
+### OpenAI: Cutting-Edge AI models
+
+For users seeking the most advanced AI capabilities.
 
 - **Access the Latest Models**: Leverage the latest advancements in LLMs, constantly updated and refined by OpenAI.
-- **Smart Insight**: OpenAI's models enable to debug the most complicated cases.
+- **Smart Insight**: OpenAI's models enable you to debug even the most complicated cases.
 
-Just set `OPENAI_API_KEY` key variable which can be obtained here: https://platform.openai.com/api-keys
+**Getting Started:**
 
-```sh
-export OPENAI_API_KEY=<YOUR-OPENAI-API-KEY>
+1. **Obtain an API Key:** Get your OpenAI API key at [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys).
 
-$ kubectl quackops -p openai -m gpt-3.5-turbo -x 4096
-> ...
-```
+1. **Set the API Key:**
+
+    ```sh
+    export OPENAI_API_KEY=<YOUR-OPENAI-API-KEY>
+    ```
+1. **Start QuackOps:**
+
+    ```sh
+    kubectl quackops -p openai -m gpt-3.5-turbo -x 4096
+    > ...
+    ```
 
 ## Configuration
 
