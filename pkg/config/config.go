@@ -46,7 +46,7 @@ func LoadConfig() *Config {
 		ApiURL:             getEnvArg("QU_API_URL", "http://localhost:11434/api").(string),
 		SafeMode:           getEnvArg("QU_SAFE_MODE", false).(bool),
 		Retries:            getEnvArg("QU_RETRIES", 3).(int),
-		Timeout:            getEnvArg("QU_TIMEOUT", 15).(int),
+		Timeout:            getEnvArg("QU_TIMEOUT", 30).(int),
 		MaxTokens:          getEnvArg("QU_MAX_TOKENS", 4096).(int),
 		AllowedKubectlCmds: getEnvArg("QU_ALLOWED_KUBECTL_CMDS", defaultAllowedKubectlCmds).([]string),
 		BlockedKubectlCmds: getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),

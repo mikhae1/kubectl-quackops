@@ -1,9 +1,6 @@
 # Kubectl-QuackOps
 
-<div align="left">
-    <img src=".github/quackops-logo.png" alt="QuackOps Logo" width="180" align="left" hspace="20">
-</div>
-
+<img src=".github/quackops-logo.png" alt="QuackOps Logo" width="180" align="left" hspace="20">
 
 **QuackOps** is a Kubectl plugin that leverages the power of AI to simplify your Kubernetes troubleshooting and management tasks.
 
