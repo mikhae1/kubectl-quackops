@@ -125,7 +125,11 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	if userMsgCount%2 == 1 || strings.HasPrefix(userPrompt, "$") {
 		augPrompt, err = retrieveRAG(cfg, userPrompt, lastTextPrompt)
 		if err != nil {
-			logger.Log("err", "Error retrieving RAG: %v", err)
+			if strings.HasPrefix(userPrompt, "$") {
+				fmt.Println(color.HiRedString(err.Error()))
+			} else {
+				logger.Log("err", "Error retrieving RAG: %v", err)
+			}
 		}
 	}
 
@@ -425,18 +429,6 @@ func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
 	wg.Wait()
 
 	var err error
-	noRes := true
-	for _, res := range results {
-		if res.Err == nil {
-			noRes = false
-			break
-		}
-	}
-
-	if noRes {
-		err = errors.New("error executing kubectl commands")
-	}
-
 	for _, res := range results {
 		logger.Log("in", "$ %s", res.Cmd)
 		if res.Out != "" {
@@ -444,6 +436,11 @@ func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
 		}
 		if res.Err != nil {
 			logger.Log("err", "%v", res.Err)
+			if err == nil {
+				err = res.Err
+			} else {
+				err = fmt.Errorf("%v; %w", res.Err, err)
+			}
 		}
 	}
 
@@ -482,19 +479,20 @@ func execKubectlCmd(cfg *config.Config, command string) (result CmdRes) {
 	defer cancel()
 
 	logger.Log("info", "Executing command: %s", command)
-	out, err := exec.CommandContext(ctx, "sh", "-c", command).Output()
+	output, err := exec.CommandContext(ctx, "sh", "-c", command).CombinedOutput()
 	if err != nil {
-		result.Err = fmt.Errorf("error executing command '%s': %w", command, err)
+		result.Err = fmt.Errorf("error executing command '%s': %w, output: %s", command, err, string(output))
 	} else {
-		result.Out = string(out)
-		if cfg.Verbose {
-			dim := color.New(color.Faint).SprintFunc()
-			bold := color.New(color.Bold).SprintFunc()
+		result.Out = string(output)
+	}
 
-			fmt.Println(bold("\n$ " + result.Cmd))
-			for _, line := range strings.Split(result.Out, "\n") {
-				fmt.Println(dim("-- " + line))
-			}
+	if cfg.Verbose {
+		dim := color.New(color.Faint).SprintFunc()
+		bold := color.New(color.Bold).SprintFunc()
+
+		fmt.Println(bold("\n$ " + result.Cmd))
+		for _, line := range strings.Split(result.Out, "\n") {
+			fmt.Println(dim("-- " + line))
 		}
 	}
 
