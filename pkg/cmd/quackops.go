@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
@@ -49,6 +52,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().IntVarP(&cfg.Timeout, "timeout", "t", cfg.Timeout, "Timeout for kubectl commands in seconds")
 	cmd.Flags().IntVarP(&cfg.MaxTokens, "max-tokens", "x", cfg.MaxTokens, "Maximum number of tokens in LLM context window")
 	cmd.Flags().BoolVarP(&cfg.Verbose, "verbose", "v", cfg.Verbose, "Enable verbose output")
+	cmd.Flags().BoolVarP(&cfg.DisableSecretFilter, "disable-secrets-filter", "c", cfg.DisableSecretFilter, "Disable filtering sensitive data in secrets from being sent to LLMs")
 
 	return cmd
 }
@@ -163,8 +167,8 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 			}
 
 			cmdResults, err = execDiagCmds(cfg, slices.Compact(cmds))
-			if err != nil {
-				logger.Log("warn", "Error executing kubectl commands: %v\n", err)
+			if len(cmdResults) == 0 {
+				logger.Log("warn", "No results found, retrying... %d/%d", i, cfg.Retries)
 				continue
 			}
 			break
@@ -175,6 +179,10 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 	for _, cmd := range cmdResults {
 		if cmd.Err != nil {
 			continue
+		}
+
+		if !cfg.DisableSecretFilter {
+			cmd.Out = filterSensitiveData(cmd.Out)
 		}
 
 		ctx := "Command: " + cmd.Cmd + "\nOutput: " + cmd.Out + "\n\n"
@@ -195,10 +203,110 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 		// TODO:
 		// augPrompt = fmt.Sprintf("%s\n\nAdditional information:\n%s", userPrompt, augRes)
 		// augPrompt = fmt.Sprintf("Analyze this information and give me the answer for %s:\n\n%s", userPrompt, augRes)
-		augPrompt = fmt.Sprintf("Analyze this information:\n%s\n\nAnd answer me: %s", augRes, userPrompt)
+		augPrompt = fmt.Sprintf("Analyze this information:\n%s", augRes)
+		if len(userPrompt) > 0 {
+			augPrompt += "\n\nAnd answer me: " + userPrompt
+		}
 	}
 
 	return augPrompt, err
+}
+
+// Hide sensitive data from Kubectl outputs
+func filterSensitiveData(input string) string {
+	var data map[string]interface{}
+
+	// Try to parse as JSON, if fails, try YAML
+	inputType := ""
+	if err := json.Unmarshal([]byte(input), &data); err == nil {
+		inputType = "json"
+	} else if err := yaml.Unmarshal([]byte(input), &data); err == nil {
+		inputType = "yaml"
+	} else {
+		// Handle plain text for describe commands
+		return filterDescribeOutput(input)
+	}
+
+	// Check if the kind is "Secret" or "ConfigMap"
+	if kind, ok := data["kind"].(string); ok && (kind == "Secret" || kind == "ConfigMap") {
+		// Check for data or stringData fields
+		for _, field := range []string{"data", "stringData"} {
+			if _, found := data[field]; found {
+				section := data[field].(map[string]interface{})
+				newSection := make(map[string]interface{})
+				for key, val := range section {
+					// strKey, _ := key.(string)
+					if strVal, ok := val.(string); ok && strVal != "" {
+						newSection[key] = "***FILTERED***"
+					} else {
+						newSection[key] = val
+					}
+				}
+				data[field] = newSection
+			}
+		}
+	}
+
+	// Serialize back
+	var output []byte
+	var err error
+	if inputType == "yaml" {
+		output, err = yaml.Marshal(data)
+	} else if inputType == "json" {
+		output, err = json.Marshal(data)
+	}
+
+	if err != nil {
+		logger.Log("warn", "Error marshaling data: %v", err)
+		return input // Return the original input if marshaling fails
+	}
+
+	return string(output)
+}
+
+// filterDescribeOutput filters sections from the kubectl describe output for Data section
+func filterDescribeOutput(input string) string {
+	var isConfigHeader = func(lines []string, index int) bool {
+		if index+1 < len(lines) {
+			return strings.HasPrefix(strings.TrimSpace(lines[index]), "Name:") &&
+				strings.HasPrefix(strings.TrimSpace(lines[index+1]), "Namespace:")
+		}
+		return false
+	}
+
+	var isSectionHeader = func(lines []string, index int) bool {
+		if index+1 < len(lines) {
+			return lines[index+1] == "===="
+		}
+		return false
+	}
+
+	var filteredOutput []string
+	edit := false
+
+	lines := strings.Split(input, "\n")
+	i := 0
+	for i < len(lines) {
+		if isConfigHeader(lines, i) {
+			edit = true
+		}
+
+		if edit && isSectionHeader(lines, i) && strings.HasPrefix(lines[i], "Data") {
+			// Append the field name, the '====', and the filter placeholder
+			filteredOutput = append(filteredOutput, lines[i], lines[i+1], "***FILTERED***", "")
+			i += 2 // Move past the header and '===='
+			// Skip the content under the current header
+			for i < len(lines) && !isSectionHeader(lines, i) && !isConfigHeader(lines, i) {
+				i++
+			}
+		} else {
+			// Add non-filtered lines directly to the output
+			filteredOutput = append(filteredOutput, lines[i])
+			i++
+		}
+	}
+
+	return strings.Join(filteredOutput, "\n")
 }
 
 // manageChatThreadContext manages the context window of the chat thread
@@ -309,8 +417,8 @@ func ollamaRequestWithThread(cfg *config.Config, prompt string) (string, error) 
 	return msg, nil
 }
 
+// getKubectlCmds retrieves kubectl commands based on the user input
 func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
-	// Generate dynamic prompt based on the complexity or keywords of user input
 	dynamicPrompt := generateKubectlPrompt(cfg, prompt)
 
 	shortPrompt := "Based on the problem described below, list safe, "
@@ -331,7 +439,7 @@ func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
 
 	// Join the allowed commands into a regex pattern
 	commandsPattern := strings.Join(cfg.AllowedKubectlCmds, "|")
-	rePattern := `\b(kubectl\s(?:` + commandsPattern + `)\s?[^` + "`" + `%#\n]*)\b`
+	rePattern := `kubectl\s(?:` + commandsPattern + `)\s?[^` + "`" + `%#\n]*`
 	re := regexp.MustCompile(rePattern)
 
 	matches := re.FindAllString(response, -1)
@@ -339,15 +447,18 @@ func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
 		return nil, errors.New("no valid kubectl commands found")
 	}
 
-	var trimmedCommands []string
+	anonCmdRe, _ := regexp.Compile(`.*<[A-Za-z_-]+>.*`)
+	var filteredCmds []string
 	for _, match := range matches {
-		trimmedCommand := strings.TrimSpace(match)
-		trimmedCommands = append(trimmedCommands, trimmedCommand)
+		trimCmd := strings.TrimSpace(match)
+		// check and remove commands with <resource> <name> format
+		if !anonCmdRe.MatchString(trimCmd) && !slices.Contains(filteredCmds, trimCmd) {
+			filteredCmds = append(filteredCmds, trimCmd)
+		}
 	}
 
-	logger.Log("info", "Kubectl commands: [%v]", strings.Join(trimmedCommands, ", "))
-
-	return trimmedCommands, nil
+	logger.Log("info", "Kubectl commands: \"%v\"", strings.Join(filteredCmds, ", "))
+	return filteredCmds, nil
 }
 
 // generateKubectlPrompt generates a dynamic prompt based on the user input

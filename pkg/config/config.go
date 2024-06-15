@@ -24,15 +24,17 @@ type Config struct {
 	AllowedKubectlCmds []string
 	BlockedKubectlCmds []string
 
-	DuckASCIIArt   string
-	Provider       string
-	Model          string
-	ApiURL         string
-	Retries        int
-	Timeout        int
-	MaxTokens      int
-	SafeMode       bool
-	Verbose        bool
+	DuckASCIIArt        string
+	Provider            string
+	Model               string
+	ApiURL              string
+	Retries             int
+	Timeout             int
+	MaxTokens           int
+	SafeMode            bool
+	Verbose             bool
+	DisableSecretFilter bool
+
 	KubectlPrompts []KubectlPrompt
 }
 

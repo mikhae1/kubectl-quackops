@@ -52,10 +52,10 @@ func InitLoggers(output io.Writer, flags int) {
 	initLogger("err", "ERR: ", color.New(color.FgRed).SprintFunc(), flags, output)
 
 	// Custom loggers
-	initLogger("llmIn", "[LLM] > ", color.New(color.FgBlue).SprintFunc(), flags, output)
-	initLogger("llmOut", "[LLM] < ", color.New(color.FgMagenta).SprintFunc(), flags, output)
-	initLogger("in", "> ", color.New(color.FgGreen).SprintFunc(), flags, output)
-	initLogger("out", "< ", color.New(color.FgWhite).SprintFunc(), flags, output)
+	initLogger("llmIn", "[LLM] > ", color.New(color.FgHiBlue).SprintFunc(), flags, output)
+	initLogger("llmOut", "[LLM] < ", color.New(color.FgBlue).SprintFunc(), flags, output)
+	initLogger("in", "> ", color.New(color.FgHiGreen).SprintFunc(), flags, output)
+	initLogger("out", "< ", color.New(color.FgGreen).SprintFunc(), flags, output)
 }
 
 // Log function to use defined loggers

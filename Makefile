@@ -3,7 +3,7 @@ BIN_NAME := kubectl-quackops
 GOOS := $(shell go env GOOS)
 GOARCH := $(shell go env GOARCH)
 
-CHECK_ARGS := -v -p openai -m gpt-3.5-turbo -t 30
+CHECK_ARGS := -v -x 4000
 
 all: build run
 
@@ -20,9 +20,9 @@ check-perf: build
 	{ echo 'analyze performance'; cat; } | DEBUG=1 kubectl quackops $(CHECK_ARGS)
 
 check-pods: build
-	{ echo 'find pods issues'; cat; } | DEBUG=1 kubectl quackops $(CHECK_ARGS)
+	{ echo 'find pod issues'; cat; } | DEBUG=1 kubectl quackops $(CHECK_ARGS)
 
-check-deployment: build
+check-deployments: build
 	{ echo 'find deployments issues'; cat; } | DEBUG=1 kubectl quackops $(CHECK_ARGS)
 
 check-ingress: build

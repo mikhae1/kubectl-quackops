@@ -14,19 +14,38 @@ QuackOps is optimized to integrate smoothly with small local models like [llama3
 - **AI-Powered Suggestions:** The tool analyzes your requests, cluster state, and leverages power of selected LLM to offer intelligent debugging suggestions and solutions.
 - **Automated Command Execution:** Streamline your workflow with automated execution of whitelisted `kubectl` commands. The tool maintains context and uses command outputs to provide accurate assistance.
 - **Direct Command Execution:** Execute arbitrary commands directly within the chat interface using the `$` prefix (e.g., `$ kubectl get pods`). The tool integrates the output into its responses for a seamless experience.
-- **Safe Command Execution:**  Review and approve suggested `kubectl` commands before execution with `--safe-mode`. This ensures you maintain control and prevent accidental changes to your cluster.
+- **Safe Command Execution:** By default, sensitive data is not transmitted to language models. Enable --safe-mode to manually review and approve any suggested kubectl commands before they are executed. This feature ensures that you retain full control over your cluster and helps prevent unintended modifications.
 - **Supported LLM Providers:** Choose your preferred LLM provider, currently [Ollama](https://ollama.com/) and [OpenAI](https://openai.com/).
 
 ## Example
 
 ```sh
-$ kubectl quackops 'my pod is not working'
+$ kubectl quackops -v 'my pod is not working'
 
-Based on the output of the `kubectl get pods` command,
-the pod named `my-nginx-ingress-hello-world-64f78448bd-v567q`
-is not working. The `STATUS` for this pod is `ImagePullBackOff`,
-indicating that there is an issue pulling the image required
-for this pod to run.
+kubectl get pods
+-- NAME                                            READY   STATUS             RESTARTS        AGE
+-- my-nginx-ingress-hello-world-6d8c5b76db-g5696   1/1     Running            14 (149m ago)   58d
+-- test-21081                                      1/1     Running            22 (149m ago)   95d
+-- example-hello-world-5cd56d45d5-8nh5x            1/1     Running            2 (149m ago)    17d
+-- my-nginx-ingress-hello-world-64f78448bd-v567q   0/1     ImagePullBackOff   0               28d
+--
+
+kubectl get events
+-- LAST SEEN   TYPE     REASON    OBJECT                                              MESSAGE
+-- 4m45s       Normal   BackOff   pod/my-nginx-ingress-hello-world-64f78448bd-v567q   Back-off pulling image "nginx:v1.16.0"
+--
+
+Based on the information provided:
+- The pod `my-nginx-ingress-hello-world-64f78448bd-v567q` is not working
+because it is in the `ImagePullBackOff` status which means it is unable to
+pull the specified image `nginx:v1.16.0`.
+
+- The issue is likely related to the incorrect image specified or the image
+not being available in the specified repository.
+
+To resolve the issue, you can check the image availability, correct the image
+name or tag, ensure the repository access is correct, and troubleshoot any
+network issues that may be preventing the pod from pulling the image.
 ```
 
 ## Installation
