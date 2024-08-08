@@ -83,7 +83,7 @@ func processCommands(cfg *config.Config, args []string) error {
 	}
 	defer rl.Close()
 
-	var hello = "Type your need or use '$' prefix to run commands. 'Bye' to quit. Let's quack it!"
+	var hello = "Tell me what you need! Use '$' prefix to run commands or type 'bye' to exit."
 	decodedArt, _ := base64.StdEncoding.DecodeString(cfg.DuckASCIIArt)
 	fmt.Println(string(decodedArt) + hello)
 
@@ -200,13 +200,8 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 	}
 
 	if len(augRes) > 0 {
-		// TODO:
-		// augPrompt = fmt.Sprintf("%s\n\nAdditional information:\n%s", userPrompt, augRes)
-		// augPrompt = fmt.Sprintf("Analyze this information and give me the answer for %s:\n\n%s", userPrompt, augRes)
-		augPrompt = fmt.Sprintf("Analyze this information:\n%s", augRes)
-		if len(userPrompt) > 0 {
-			augPrompt += "\n\nAnd answer me: " + userPrompt
-		}
+		fmt.Fprintln(os.Stderr, userPrompt)
+		augPrompt = fmt.Sprintf("As a Kubernetes administrator, help me with: '%s'.\n\nAdditional information (command outputs):\n\n%s", userPrompt, augRes)
 	}
 
 	return augPrompt, err
@@ -474,7 +469,7 @@ func generateKubectlPrompt(cfg *config.Config, prompt string) string {
 		defaultKubectlCmds = append(defaultKubectlCmds, createCommand(cmd))
 	}
 
-	basePrompt := "List safe, read-only kubectl commands that can help monitor or diagnose the Kubernetes cluster."
+	basePrompt := "As a Kubernetes administrator, list safe read-only kubectl commands that can help monitor or diagnose the Kubernetes cluster."
 
 	// Add dynamic content based on the analysis of the prompt
 	p := strings.ToLower(prompt)
@@ -499,10 +494,6 @@ func generateKubectlPrompt(cfg *config.Config, prompt string) string {
 		for _, cmd := range cfg.AllowedKubectlCmds {
 			defaultKubectlCmds = append(defaultKubectlCmds, createCommand(cmd))
 		}
-		basePrompt += "\nHere are some examples: " + strings.Join(defaultKubectlCmds, ", ") + "."
-	}
-
-	if useDefaultCmds {
 		basePrompt += "\nHere are some examples: " + strings.Join(defaultKubectlCmds, ", ") + "."
 	}
 

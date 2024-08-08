@@ -63,7 +63,6 @@ Use the following command to extract the binary from the downloaded archive:
     ```sh
     tar -xzf ~/Downloads/kubectl-quackops-linux-amd64.tar.gz -C ~/Downloads
     ```
-This will extract the `kubectl-quackops` binary to your `~/Downloads` directory.
 
 1. Make the binary executable (if needed):
     ```sh
@@ -82,7 +81,7 @@ Confirm that QuackOps is recognized as a kubectl plugin by running:
     kubectl plugin list
     ```
 
-Summon the quack:
+Summon the quAck:
 
 ```sh
 $ kubectl quackops
@@ -106,7 +105,7 @@ For maximum data security, leverage the power of local LLMs with [Ollama](https:
 
 1. **Install Ollama:** Download and install Ollama from [https://ollama.com/download](https://ollama.com/download).
 
-1. Download a Model (e.g., llama3):
+1. Download local LLM model (e.g., llama3):
     ```sh
     ollama pull llama3
     ```
@@ -117,7 +116,6 @@ For maximum data security, leverage the power of local LLMs with [Ollama](https:
     ```
 
 1. Start interactive chat:
-
     ```sh
     kubectl quackops -p ollama -m llama3
     ```
@@ -134,15 +132,13 @@ For users seeking the most advanced AI capabilities.
 1. **Obtain an API Key:** Get your OpenAI API key at [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys).
 
 1. **Set the API Key:**
-
     ```sh
     export OPENAI_API_KEY=<YOUR-OPENAI-API-KEY>
     ```
-1. **Start QuackOps:**
 
+1. **Start QuackOps:**
     ```sh
     kubectl quackops -p openai -m gpt-3.5-turbo -x 4096
-    > ...
     ```
 
 ## Configuration
@@ -151,7 +147,7 @@ The following environment variables can be used to configure the tool:
 
 - **OPENAI_API_KEY**: OpenAI API key. Obtain it here: https://platform.openai.com/api-keys
 - **QU_LLM_MODEL**: The name of the LLM model to use.
-- **QU_LLM_PROVIDER**: The LLM platform to use. Can be either `ollama` or `openai`.
+- **QU_LLM_PROVIDER**: The LLM platform to use. Can be either `ollama` or `openai` by now.
 - **QU_OLLAMA_HOST**: The address of the Ollama server.
 - **QU_KUBECTL_BLOCKED_CMDS_EXTRA**: Additional commads to block.
 - **DEBUG**: Enables debug logging.

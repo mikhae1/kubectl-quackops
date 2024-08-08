@@ -44,7 +44,7 @@ func LoadConfig() *Config {
 		ChatThread:         thread.New(),
 		DuckASCIIArt:       defaultDuckASCIIArt,
 		Provider:           getEnvArg("QU_LLM_PROVIDER", "ollama").(string),
-		Model:              getEnvArg("QU_LLM_MODEL", "llama3").(string),
+		Model:              getEnvArg("QU_LLM_MODEL", "llama3.1").(string),
 		ApiURL:             getEnvArg("QU_API_URL", "http://localhost:11434/api").(string),
 		SafeMode:           getEnvArg("QU_SAFE_MODE", false).(bool),
 		Retries:            getEnvArg("QU_RETRIES", 3).(int),
