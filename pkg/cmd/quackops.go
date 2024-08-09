@@ -200,7 +200,6 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 	}
 
 	if len(augRes) > 0 {
-		fmt.Fprintln(os.Stderr, userPrompt)
 		augPrompt = fmt.Sprintf("As a Kubernetes administrator, help me with: '%s'.\n\nAdditional information (command outputs):\n\n%s", userPrompt, augRes)
 	}
 
