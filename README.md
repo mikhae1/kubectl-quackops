@@ -6,7 +6,7 @@
 
 Tired of sifting through endless logs and documentation? QuackOps acts as your personal Kubernetes AI assistant, allowing you to interact with your cluster using natural language. Just describe your issue or request, and QuackOps will provide intelligent insights, suggest relevant commands, etc.
 
-QuackOps is optimized to integrate smoothly with small local models like [llama3](https://ollama.com/library/llama3) while also providing robust scalability for larger LLMs.
+QuackOps is optimized to integrate smoothly with small local models like [llama3](https://ollama.com/library/llama3.1) while also providing robust scalability for larger LLMs.
 
 ## Features
 
@@ -105,19 +105,19 @@ For maximum data security, leverage the power of local LLMs with [Ollama](https:
 
 1. **Install Ollama:** Download and install Ollama from [https://ollama.com/download](https://ollama.com/download).
 
-1. Download local LLM model (e.g., llama3):
-    ```sh
-    ollama pull llama3
-    ```
-
 1. Start ollama server:
     ```sh
     ollama serve
     ```
 
+1. Download local LLM model (e.g., llama3.1):
+    ```sh
+    ollama pull llama3.1
+    ```
+
 1. Start interactive chat:
     ```sh
-    kubectl quackops -p ollama -m llama3
+    kubectl quackops -p ollama -m llama3.1
     ```
 
 ### OpenAI: Cutting-Edge AI models
@@ -138,7 +138,7 @@ For users seeking the most advanced AI capabilities.
 
 1. **Start QuackOps:**
     ```sh
-    kubectl quackops -p openai -m gpt-3.5-turbo -x 4096
+    kubectl quackops -p openai -m gpt-4o -x 4096
     ```
 
 ## Configuration
