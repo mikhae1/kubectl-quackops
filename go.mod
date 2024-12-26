@@ -7,7 +7,7 @@ toolchain go1.22.3
 require (
 	github.com/chzyer/readline v1.5.1
 	github.com/fatih/color v1.16.0
-	github.com/henomis/lingoose v0.2.0
+	github.com/henomis/lingoose v0.3.0
 	github.com/spf13/cobra v1.7.0
 	github.com/spf13/pflag v1.0.5
 	gopkg.in/yaml.v3 v3.0.1

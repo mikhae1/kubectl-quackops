@@ -44,9 +44,9 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 		RunE:         runQuackOps(cfg, os.Args),
 	}
 
-	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "AI model provider (e.g., 'ollama', 'openai')")
-	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "AI model to use")
-	cmd.Flags().StringVarP(&cfg.ApiURL, "api-url", "u", cfg.ApiURL, "URL for AI API, used with 'ollama' provider")
+	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai')")
+	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "LLM model to use")
+	cmd.Flags().StringVarP(&cfg.ApiURL, "api-url", "u", cfg.ApiURL, "URL for LLM API, used with 'ollama' provider")
 	cmd.Flags().BoolVarP(&cfg.SafeMode, "safe-mode", "s", cfg.SafeMode, "Enable safe mode to prevent executing commands without confirmation")
 	cmd.Flags().IntVarP(&cfg.Retries, "retries", "r", cfg.Retries, "Number of retries for kubectl commands")
 	cmd.Flags().IntVarP(&cfg.Timeout, "timeout", "t", cfg.Timeout, "Timeout for kubectl commands in seconds")
@@ -61,12 +61,41 @@ func runQuackOps(cfg *config.Config, args []string) func(cmd *cobra.Command, arg
 	return func(cmd *cobra.Command, args []string) error {
 		logger.InitLoggers(os.Stderr, 0)
 
+		// Display the current K8s context so user can confirm before proceeding
+		if err := displayCurrentContext(cfg); err != nil {
+			fmt.Printf("Warning: could not retrieve current Kubernetes context: %v\n", err)
+		}
+
 		if err := processCommands(cfg, args); err != nil {
 			fmt.Printf("Error processing commands: %v\n", err)
 			return err
 		}
 		return nil
 	}
+}
+
+// displayCurrentContext shows the user which Kubernetes context is currently active
+func displayCurrentContext(cfg *config.Config) error {
+	res, err := execDiagCmds(cfg, []string{"$kubectl config current-context"})
+	if err != nil {
+		return err
+	}
+	ctxName := strings.TrimSpace(res[0].Out)
+
+	cmdRes := execKubectlCmd(cfg, "kubectl cluster-info")
+	if cmdRes.Err != nil {
+		return cmdRes.Err
+	}
+
+	info := strings.TrimSpace(cmdRes.Out)
+	if info == "" {
+		fmt.Println(color.HiRedString("Current Kubernetes context is empty or not set."))
+	} else {
+		infoLines := strings.Split(info, "\n")
+		fmt.Printf(color.HiYellowString("Using Kubernetes context")+": %s\n%s", ctxName, strings.Join(infoLines[:len(infoLines)-1], "\n"))
+	}
+
+	return nil
 }
 
 func processCommands(cfg *config.Config, args []string) error {
@@ -229,7 +258,6 @@ func filterSensitiveData(input string) string {
 				section := data[field].(map[string]interface{})
 				newSection := make(map[string]interface{})
 				for key, val := range section {
-					// strKey, _ := key.(string)
 					if strVal, ok := val.(string); ok && strVal != "" {
 						newSection[key] = "***FILTERED***"
 					} else {
@@ -415,8 +443,8 @@ func ollamaRequestWithThread(cfg *config.Config, prompt string) (string, error) 
 func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
 	dynamicPrompt := generateKubectlPrompt(cfg, prompt)
 
-	shortPrompt := "Based on the problem described below, list safe, "
-	shortPrompt += "read-only kubectl commands that can help monitor or diagnose the Kubernetes cluster."
+	shortPrompt := "Based on the problem described below, list safe, " +
+		"read-only kubectl commands that can help monitor or diagnose the Kubernetes cluster."
 
 	// Check if longPrompt exists in the chatThread history
 	augPrompt := dynamicPrompt
