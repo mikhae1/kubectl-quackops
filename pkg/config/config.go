@@ -40,16 +40,27 @@ type Config struct {
 
 // LoadConfig initializes the application configuration
 func LoadConfig() *Config {
+	provider := getEnvArg("QU_LLM_PROVIDER", "ollama").(string)
+
+	defaultMaxTokens := 16000
+	if provider == "google" {
+		defaultMaxTokens = 1048576 // https://ai.google.dev/gemini-api/docs/models/gemini
+	} else if provider == "ollama" {
+		defaultMaxTokens = 4096 // https://ai.meta.com/blog/meta-llama-3-1/
+	} else if provider == "openai" {
+		defaultMaxTokens = 128000 // https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/
+	}
+
 	return &Config{
 		ChatThread:         thread.New(),
 		DuckASCIIArt:       defaultDuckASCIIArt,
-		Provider:           getEnvArg("QU_LLM_PROVIDER", "ollama").(string),
+		Provider:           provider,
 		Model:              getEnvArg("QU_LLM_MODEL", "llama3.1").(string),
 		ApiURL:             getEnvArg("QU_API_URL", "http://localhost:11434/api").(string),
 		SafeMode:           getEnvArg("QU_SAFE_MODE", false).(bool),
 		Retries:            getEnvArg("QU_RETRIES", 3).(int),
 		Timeout:            getEnvArg("QU_TIMEOUT", 30).(int),
-		MaxTokens:          getEnvArg("QU_MAX_TOKENS", 4096).(int),
+		MaxTokens:          getEnvArg("QU_MAX_TOKENS", defaultMaxTokens).(int),
 		AllowedKubectlCmds: getEnvArg("QU_ALLOWED_KUBECTL_CMDS", defaultAllowedKubectlCmds).([]string),
 		BlockedKubectlCmds: getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),
 		KubectlPrompts: []KubectlPrompt{

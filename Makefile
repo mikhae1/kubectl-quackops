@@ -2,7 +2,7 @@ BIN_NAME := kubectl-quackops
 GOOS := $(shell go env GOOS)
 GOARCH := $(shell go env GOARCH)
 
-CHECK_ARGS := -v -x 4000
+CHECK_ARGS := -v
 export DEBUG := 1
 
 all: build run
@@ -29,7 +29,10 @@ check-ingress: build
 	{ echo 'check ingress'; cat; } | kubectl quackops $(CHECK_ARGS)
 
 check-storage: build
-	{ echo 'check storage'; cat; } | kubectl quackops $(CHECK_ARGS)
+	{ echo 'check storage issues'; cat; } | kubectl quackops $(CHECK_ARGS)
 
 check-network: build
-	{ echo 'check network'; cat; } | kubectl quackops $(CHECK_ARGS)
+	{ echo 'check network issues'; cat; } | kubectl quackops $(CHECK_ARGS)
+
+check-cluster: build
+	{ echo 'check cluster issues'; cat; } | kubectl quackops $(CHECK_ARGS)

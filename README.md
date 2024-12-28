@@ -2,20 +2,23 @@
 
 <img src=".github/quackops-logo.png" alt="QuackOps Logo" width="180" align="left" hspace="20">
 
-**QuackOps** is a Kubectl plugin that leverages the power of AI to simplify your Kubernetes troubleshooting and management tasks.
+**QuackOps** is a powerful `kubectl` plugin that transforms your Kubernetes troubleshooting experience through AI-powered assistance. It serves as your smart companion, translating natural language queries into actionable insights and commands.
 
-Tired of sifting through endless logs and documentation? QuackOps acts as your personal Kubernetes AI assistant, allowing you to interact with your cluster using natural language. Just describe your issue or request, and QuackOps will provide intelligent insights, suggest relevant commands, etc.
+Whether you're debugging a failing pod, optimizing resource usage, or seeking best practices, QuackOps streamlines your workflow by combining the precision of `kubectl` with the intuitive understanding of AI. Simply describe what you need, and let QuackOps guide you through your Kubernetes operations.
 
-QuackOps is optimized to integrate smoothly with small local models like [llama3](https://ollama.com/library/llama3.1) while also providing robust scalability for larger LLMs.
+Built with flexibility in mind, QuackOps works seamlessly with local models like [llama3](https://ollama.com/library/llama3.1) for enhanced privacy, while also supporting cloud-based LLMs for more advanced capabilities.
 
 ## Features
 
 - **Natural Language Interface:** Interact with your cluster naturally. Ask questions and receive context-aware assistance through interactive chats or single queries.
-- **AI-Powered Suggestions:** The tool analyzes your requests, cluster state, and leverages power of selected LLM to offer intelligent debugging suggestions and solutions.
-- **Automated Command Execution:** Streamline your workflow with automated execution of whitelisted `kubectl` commands. The tool maintains context and uses command outputs to provide accurate assistance.
+- **AI-Powered Suggestions:** The tool analyzes your requests, cluster state, and leverages the power of selected LLM to offer intelligent debugging suggestions and solutions.
+- **Automated Command Execution:** Streamlines your workflow by automatically executing whitelisted `kubectl` commands. The tool maintains context and uses command outputs to provide accurate assistance.
 - **Direct Command Execution:** Execute arbitrary commands directly within the chat interface using the `$` prefix (e.g., `$ kubectl get pods`). The tool integrates the output into its responses for a seamless experience.
 - **Safe Command Execution:** By default, sensitive data is not transmitted to language models. Enable `--safe-mode` to manually review and approve any suggested `kubectl` commands before they are executed. This feature ensures that you retain full control over your cluster and helps prevent unintended modifications.
-- **Supported LLM Providers:** Choose your preferred LLM provider, currently [Ollama](https://ollama.com/) and [OpenAI](https://openai.com/).
+- **Supported LLM Providers:** Choose your preferred LLM provider:
+  - [Ollama](https://ollama.com/) - For local execution and data privacy
+  - [OpenAI](https://openai.com/) - For access to cutting-edge language models
+  - [Google](https://gemini.google.com/) - For large context windows and enterprise-grade features
 
 ## Example
 
@@ -46,7 +49,7 @@ not being available in the specified repository.
 To resolve the issue, you can check the image availability, correct the image
 name or tag, ensure the repository access is correct, and troubleshoot any
 network issues that may be preventing the pod from pulling the image.
-```
+```****
 
 ## Installation
 
@@ -141,16 +144,54 @@ For users seeking the most advanced AI capabilities.
     kubectl quackops -p openai -m gpt-4o -x 4096
     ```
 
+### Google: Large Context Window
+
+For users requiring extensive context analysis and handling large command outputs.
+
+**Benefits:**
+- **Largest Context Window:** Process more information at once with Gemini's 1M+ token context window
+- **Efficient RAG:** Superior handling of long command outputs and cluster state analysis
+- **Cost-Effective:** Competitive pricing for enterprise-grade AI capabilities
+
+**Getting Started:**
+
+1. **Obtain an API Key:** Get your Google AI API key at [https://makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey)
+
+1. **Set the API Key:**
+    ```sh
+    export GOOGLE_API_KEY=<YOUR-GOOGLE-API-KEY>
+    ```
+
+1. **Start QuackOps:**
+    ```sh
+    kubectl quackops -p google -m gemini-2.0-flash-exp
+    ```
+
 ## Configuration
 
-The following environment variables can be used to configure the tool:
+The following options can be configured through environment variables or command-line flags:
 
-- **OPENAI_API_KEY**: OpenAI API key. Obtain it here: https://platform.openai.com/api-keys
-- **QU_LLM_MODEL**: The name of the LLM model to use.
-- **QU_LLM_PROVIDER**: The LLM platform to use. Can be either `ollama` or `openai` by now.
-- **QU_OLLAMA_HOST**: The address of the Ollama server.
-- **QU_KUBECTL_BLOCKED_CMDS_EXTRA**: Additional commads to block.
-- **DEBUG**: Enables debug logging.
+### Environment Variables
+
+- `OPENAI_API_KEY` - OpenAI API key ([get here](https://platform.openai.com/api-keys))
+- `GOOGLE_API_KEY` - Google AI API key ([get here](https://makersuite.google.com/app/apikey))
+- `QU_LLM_PROVIDER` - LLM platform to use (`ollama`, `openai`, or `google`)
+- `QU_LLM_MODEL` - Name of the LLM model to use
+- `QU_OLLAMA_HOST` - Address of the Ollama server
+- `QU_KUBECTL_BLOCKED_CMDS_EXTRA` - Additional commands to block
+- `DEBUG` - Enable debug logging
+
+### Command-Line Flags
+
+- `-p, --provider` - LLM model provider (e.g., 'ollama', 'openai', 'google')
+- `-m, --model` - LLM model to use
+- `-u, --api-url` - URL for LLM API (used with 'ollama' provider)
+- `-s, --safe-mode` - Enable safe mode to prevent executing commands without confirmation
+- `-r, --retries` - Number of retries for kubectl commands
+- `-t, --timeout` - Timeout for kubectl commands in seconds
+- `-x, --max-tokens` - Maximum number of tokens in LLM context window
+- `-v, --verbose` - Enable verbose output
+- `-c, --disable-secrets-filter` - Disable filtering sensitive data in secrets from being sent to LLMs
 
 ## Safety
 

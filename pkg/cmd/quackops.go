@@ -20,12 +20,15 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
+	"github.com/google/generative-ai-go/genai"
 	"github.com/henomis/lingoose/llm/ollama"
 	"github.com/henomis/lingoose/llm/openai"
 	"github.com/henomis/lingoose/thread"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/spf13/cobra"
+	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
@@ -44,7 +47,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 		RunE:         runQuackOps(cfg, os.Args),
 	}
 
-	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai')")
+	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai', 'google')")
 	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "LLM model to use")
 	cmd.Flags().StringVarP(&cfg.ApiURL, "api-url", "u", cfg.ApiURL, "URL for LLM API, used with 'ollama' provider")
 	cmd.Flags().BoolVarP(&cfg.SafeMode, "safe-mode", "s", cfg.SafeMode, "Enable safe mode to prevent executing commands without confirmation")
@@ -155,7 +158,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	var augPrompt string
 	var err error
 
-	if userMsgCount%2 == 1 || strings.HasPrefix(userPrompt, "$") {
+	if userMsgCount%2 == 1 || strings.HasPrefix(userPrompt, "$") || cfg.MaxTokens > 16000 {
 		augPrompt, err = retrieveRAG(cfg, userPrompt, lastTextPrompt)
 		if err != nil {
 			if strings.HasPrefix(userPrompt, "$") {
@@ -170,13 +173,12 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		augPrompt = userPrompt
 	}
 
-	answer, err := llmRequest(cfg, augPrompt)
+	_, err = llmRequest(cfg, augPrompt, true)
 	if err != nil {
 		return fmt.Errorf("error requesting LLM: %w", err)
 	}
 
 	manageChatThreadContext(cfg.ChatThread, cfg.MaxTokens)
-	fmt.Println(answer)
 	return nil
 }
 
@@ -228,8 +230,13 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 		userPrompt = lastTextPrompt
 	}
 
+	format := ""
+	if cfg.Provider == "google" {
+		format = "Format output for text terminals and do not use Markdown."
+	}
+
 	if len(augRes) > 0 {
-		augPrompt = fmt.Sprintf("As a Kubernetes administrator, help me with: '%s'.\n\nAdditional information (command outputs):\n\n%s", userPrompt, augRes)
+		augPrompt = fmt.Sprintf("Here are the commands and outputs:\n%s\n###\nYou are an experienced Kubernetes administrator.\nYour task is: '%s'.\n%s", augRes, userPrompt, format)
 	}
 
 	return augPrompt, err
@@ -333,6 +340,10 @@ func filterDescribeOutput(input string) string {
 
 // manageChatThreadContext manages the context window of the chat thread
 func manageChatThreadContext(chatThread *thread.Thread, maxTokens int) {
+	if chatThread == nil {
+		return
+	}
+
 	// If the token length exceeds the context window, remove the oldest message in loop
 	calculateThreadTokenLength := func(chatThread *thread.Thread) int {
 		threadLen := 0
@@ -369,9 +380,8 @@ func tokenize(text string) []string {
 	return tokens
 }
 
-func llmRequest(cfg *config.Config, prompt string) (string, error) {
+func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) {
 	truncPrompt := prompt
-	// TODO: it seems LLM could handle long prompt better than just truncating it
 	if len(truncPrompt) > cfg.MaxTokens*2 {
 		truncPrompt = truncPrompt[:cfg.MaxTokens*2] + "..."
 	}
@@ -381,9 +391,11 @@ func llmRequest(cfg *config.Config, prompt string) (string, error) {
 	var answer string
 	switch cfg.Provider {
 	case "ollama":
-		answer, err = ollamaRequestWithThread(cfg, truncPrompt)
+		answer, err = ollamaRequestWithThread(cfg, truncPrompt, stream)
 	case "openai":
-		answer, err = openaiRequestWithThread(cfg, truncPrompt)
+		answer, err = openaiRequestWithThread(cfg, truncPrompt, stream)
+	case "google":
+		answer, err = googleRequestWithThread(cfg, truncPrompt, stream)
 	default:
 		return "", fmt.Errorf("unsupported AI provider: %s", cfg.Provider)
 	}
@@ -392,8 +404,15 @@ func llmRequest(cfg *config.Config, prompt string) (string, error) {
 	return answer, err
 }
 
-func openaiRequestWithThread(cfg *config.Config, prompt string) (string, error) {
-	client := openai.New().WithModel(openai.Model(cfg.Model)).WithMaxTokens(cfg.MaxTokens)
+func openaiRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
+	client := openai.New().
+		WithModel(openai.Model(cfg.Model))
+
+	if stream {
+		client = client.WithStream(true, func(s string) {
+			fmt.Print(s)
+		})
+	}
 
 	cfg.ChatThread.AddMessage(thread.NewUserMessage().AddContent(thread.NewTextContent(prompt)))
 
@@ -402,7 +421,6 @@ func openaiRequestWithThread(cfg *config.Config, prompt string) (string, error) 
 		return "", fmt.Errorf("openai text generation failed: %w", err)
 	}
 
-	// Extract the response from the last message in the thread
 	msg := ""
 	for _, content := range cfg.ChatThread.LastMessage().Contents {
 		if content.Type == thread.ContentTypeText {
@@ -411,13 +429,22 @@ func openaiRequestWithThread(cfg *config.Config, prompt string) (string, error) 
 			return "", errors.New("invalid openai message type")
 		}
 	}
-
+	if stream {
+		fmt.Println() // Add newline after streaming
+	}
 	return msg, nil
 }
 
-// Function to reuse the same client and thread for Ollama requests
-func ollamaRequestWithThread(cfg *config.Config, prompt string) (string, error) {
-	client := ollama.New().WithModel(cfg.Model).WithEndpoint(cfg.ApiURL)
+func ollamaRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
+	client := ollama.New().
+		WithModel(cfg.Model).
+		WithEndpoint(cfg.ApiURL)
+
+	if stream {
+		client = client.WithStream(func(s string) {
+			fmt.Print(s)
+		})
+	}
 
 	cfg.ChatThread.AddMessage(thread.NewUserMessage().AddContent(thread.NewTextContent(prompt)))
 
@@ -426,7 +453,6 @@ func ollamaRequestWithThread(cfg *config.Config, prompt string) (string, error) 
 		return "", fmt.Errorf("ollama text generation failed: %w", err)
 	}
 
-	// Extract the response from the last message in the thread
 	msg := ""
 	for _, content := range cfg.ChatThread.LastMessage().Contents {
 		if content.Type == thread.ContentTypeText {
@@ -435,16 +461,78 @@ func ollamaRequestWithThread(cfg *config.Config, prompt string) (string, error) 
 			return "", errors.New("invalid ollama message type")
 		}
 	}
-
+	if stream {
+		fmt.Println() // Add newline after streaming
+	}
 	return msg, nil
+}
+
+func googleRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("GOOGLE_API_KEY")))
+	if err != nil {
+		return "", fmt.Errorf("failed to create Google GenAI client: %w", err)
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel(cfg.Model)
+	cs := model.StartChat()
+
+	// Add the user message to the thread before making the request
+	cfg.ChatThread.AddMessage(thread.NewUserMessage().AddContent(thread.NewTextContent(prompt)))
+
+	if stream {
+		iter := cs.SendMessageStream(ctx, genai.Text(prompt))
+		var response string
+		for {
+			resp, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				return "", fmt.Errorf("failed to get response: %w", err)
+			}
+			if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+				continue
+			}
+			chunk := resp.Candidates[0].Content.Parts[0].(genai.Text)
+			fmt.Print(string(chunk))
+			response += string(chunk)
+		}
+		fmt.Println() // Add newline after streaming
+
+		// Add the assistant's response to the thread
+		if response != "" {
+			cfg.ChatThread.AddMessage(thread.NewAssistantMessage().AddContent(thread.NewTextContent(response)))
+		}
+		return response, nil
+	}
+
+	// Non-streaming response
+	resp, err := cs.SendMessage(ctx, genai.Text(prompt))
+	if err != nil {
+		return "", fmt.Errorf("failed to get response: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("no response from model")
+	}
+
+	response := string(resp.Candidates[0].Content.Parts[0].(genai.Text))
+
+	// Add the assistant's response to the thread
+	if response != "" {
+		cfg.ChatThread.AddMessage(thread.NewAssistantMessage().AddContent(thread.NewTextContent(response)))
+	}
+	return response, nil
 }
 
 // getKubectlCmds retrieves kubectl commands based on the user input
 func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
 	dynamicPrompt := generateKubectlPrompt(cfg, prompt)
 
-	shortPrompt := "Based on the problem described below, list safe, " +
-		"read-only kubectl commands that can help monitor or diagnose the Kubernetes cluster."
+	shortPrompt := "You are Kubernetes administrator. List safe, " +
+		"read-only `kubectl` commands that can help monitor or diagnose the Kubernetes cluster."
 
 	// Check if longPrompt exists in the chatThread history
 	augPrompt := dynamicPrompt
@@ -454,7 +542,8 @@ func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
 	}
 	augPrompt += "\nProblem description: " + prompt
 
-	response, err := llmRequest(cfg, augPrompt)
+	// Don't stream diagnostic requests
+	response, err := llmRequest(cfg, augPrompt, false)
 	if err != nil {
 		return nil, fmt.Errorf("error requesting kubectl command: %w", err)
 	}
@@ -490,13 +579,7 @@ func generateKubectlPrompt(cfg *config.Config, prompt string) string {
 		return "kubectl " + cmd
 	}
 
-	// Generate default kubectl commands from configuration
-	defaultKubectlCmds := []string{}
-	for _, cmd := range cfg.AllowedKubectlCmds {
-		defaultKubectlCmds = append(defaultKubectlCmds, createCommand(cmd))
-	}
-
-	basePrompt := "As a Kubernetes administrator, list safe read-only kubectl commands that can help monitor or diagnose the Kubernetes cluster."
+	basePrompt := "You're experienced Kubernetes administrator. List safe read-only `kubectl` commands that can help monitor or diagnose the Kubernetes cluster."
 
 	// Add dynamic content based on the analysis of the prompt
 	p := strings.ToLower(prompt)
@@ -517,16 +600,16 @@ func generateKubectlPrompt(cfg *config.Config, prompt string) string {
 	}
 
 	if useDefaultCmds {
-		defaultKubectlCmds := []string{}
+		var defaultKubectlCmds []string
 		for _, cmd := range cfg.AllowedKubectlCmds {
 			defaultKubectlCmds = append(defaultKubectlCmds, createCommand(cmd))
 		}
-		basePrompt += "\nHere are some examples: " + strings.Join(defaultKubectlCmds, ", ") + "."
+		basePrompt += "\nExamples: " + strings.Join(defaultKubectlCmds, ", ") + "."
 	}
 
 	// Mention that commands should be formatted properly and non-destructive
-	enhancedPrompt := basePrompt + "\nEnsure commands are formatted on separate lines without additional descriptions. " +
-		"Use real resource names and avoid commands that modify the cluster. "
+	enhancedPrompt := basePrompt + "\nEnsure commands are formatted on separate lines without any descriptions. " +
+		"Use real resource names. and avoid commands that modify the cluster. "
 
 	return enhancedPrompt
 }
