@@ -17,8 +17,9 @@ Built with flexibility in mind, QuackOps works seamlessly with local models like
 - **Safe Command Execution:** By default, sensitive data is not transmitted to language models. Enable `--safe-mode` to manually review and approve any suggested `kubectl` commands before they are executed. This feature ensures that you retain full control over your cluster and helps prevent unintended modifications.
 - **Supported LLM Providers:** Choose your preferred LLM provider:
   - [Ollama](https://ollama.com/) - For local execution and data privacy
+  - [Google](https://gemini.google.com/) - For large context windows
   - [OpenAI](https://openai.com/) - For access to cutting-edge language models
-  - [Google](https://gemini.google.com/) - For large context windows and enterprise-grade features
+  - [Anthropic](https://anthropic.com/) - For reliable technical analysis and clear explanations
 
 ## Example
 

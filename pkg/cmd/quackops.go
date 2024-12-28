@@ -21,6 +21,7 @@ import (
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
 	"github.com/google/generative-ai-go/genai"
+	"github.com/henomis/lingoose/llm/anthropic"
 	"github.com/henomis/lingoose/llm/ollama"
 	"github.com/henomis/lingoose/llm/openai"
 	"github.com/henomis/lingoose/thread"
@@ -47,7 +48,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 		RunE:         runQuackOps(cfg, os.Args),
 	}
 
-	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai', 'google')")
+	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai', 'google', anthropic)")
 	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "LLM model to use")
 	cmd.Flags().StringVarP(&cfg.ApiURL, "api-url", "u", cfg.ApiURL, "URL for LLM API, used with 'ollama' provider")
 	cmd.Flags().BoolVarP(&cfg.SafeMode, "safe-mode", "s", cfg.SafeMode, "Enable safe mode to prevent executing commands without confirmation")
@@ -396,6 +397,8 @@ func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) 
 		answer, err = openaiRequestWithThread(cfg, truncPrompt, stream)
 	case "google":
 		answer, err = googleRequestWithThread(cfg, truncPrompt, stream)
+	case "anthropic":
+		answer, err = anthropicRequestWithThread(cfg, truncPrompt, stream)
 	default:
 		return "", fmt.Errorf("unsupported AI provider: %s", cfg.Provider)
 	}
@@ -433,6 +436,43 @@ func openaiRequestWithThread(cfg *config.Config, prompt string, stream bool) (st
 		fmt.Println() // Add newline after streaming
 	}
 	return msg, nil
+}
+
+func anthropicRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
+	client := anthropic.New().
+		WithModel(cfg.Model)
+
+	if stream {
+		client = client.WithStream(func(s string) {
+			if s != anthropic.EOS {
+				fmt.Print(s)
+			} else {
+				fmt.Println()
+			}
+		})
+	}
+
+	// Create a message and add it to the thread
+	cfg.ChatThread.AddMessage(thread.NewUserMessage().AddContent(thread.NewTextContent(prompt)))
+
+	err := client.Generate(context.Background(), cfg.ChatThread)
+	if err != nil {
+		return "", fmt.Errorf("anthropic text generation failed: %w", err)
+	}
+
+	var response string
+	lastMessage := cfg.ChatThread.LastMessage()
+	if lastMessage != nil && len(lastMessage.Contents) > 0 {
+		for _, content := range lastMessage.Contents {
+			if content.Type == thread.ContentTypeText {
+				response += content.Data.(string)
+			} else {
+				return "", errors.New("invalid anthropic message type")
+			}
+		}
+	}
+
+	return response, nil
 }
 
 func ollamaRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
