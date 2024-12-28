@@ -15,7 +15,7 @@ Built with flexibility in mind, QuackOps works seamlessly with various LLM provi
 - **Automated Command Execution:** Streamlines your workflow by automatically executing whitelisted `kubectl` commands. The tool maintains context and uses command outputs to provide accurate assistance.
 - **Direct Command Execution:** Execute arbitrary commands directly within the chat interface using the `$` prefix (e.g., `$ kubectl get pods`). The tool integrates the output into its responses for a seamless experience.
 - **Safe Command Execution:** By default, sensitive data is not transmitted to language models. Enable `--safe-mode` to manually review and approve any suggested `kubectl` commands before they are executed. This feature ensures that you retain full control over your cluster and helps prevent unintended modifications.
-- **Supported LLM Providers:** Choose your preferred LLM provider:
+- **Supported LLM Providers:**
   - [Ollama](https://ollama.com/) - For local execution and data privacy
   - [Google](https://gemini.google.com/) - For large context windows
   - [OpenAI](https://openai.com/) - For access to cutting-edge language models
