@@ -6,7 +6,7 @@
 
 Whether you're debugging a failing pod, optimizing resource usage, or seeking best practices, QuackOps streamlines your workflow by combining the precision of `kubectl` with the intuitive understanding of AI. Simply describe what you need, and let QuackOps guide you through your Kubernetes operations.
 
-Built with flexibility in mind, QuackOps works seamlessly with local models like [llama3](https://ollama.com/library/llama3.1) for enhanced privacy, while also supporting cloud-based LLMs for more advanced capabilities.
+Built with flexibility in mind, QuackOps works seamlessly with various LLM providers to suit your needs. Whether you prioritize privacy with local models like [llama3](https://ollama.com/library/llama3.1) or seek advanced capabilities with cloud-based LLMs, QuackOps has you covered.
 
 ## Features
 
@@ -24,7 +24,7 @@ Built with flexibility in mind, QuackOps works seamlessly with local models like
 ## Example
 
 ```sh
-$ kubectl quackops -v 'my pod is not working'
+$ kubectl quackops -v 'find and resolve issues with pods'
 
 kubectl get pods
 -- NAME                                            READY   STATUS             RESTARTS        AGE
@@ -50,14 +50,12 @@ not being available in the specified repository.
 To resolve the issue, you can check the image availability, correct the image
 name or tag, ensure the repository access is correct, and troubleshoot any
 network issues that may be preventing the pod from pulling the image.
-```****
+```
 
 ## Installation
 
 QuackOps is packaged as a kubectl plugin, which is a standalone executable file whose name begins with `kubectl-`.
 You can install it by moving the executable file to any directory included in your `$PATH`.
-
-### Manual installation
 
 1. Download the QuackOps binary
 Head over to the [GitHub releases page](https://github.com/mikhae1/kubectl-quackops/releases) and download the latest release archive suitable for your operating system (e.g., `kubectl-quackops-linux-amd64.tar.gz`)
