@@ -2,7 +2,7 @@
 
 <img src=".github/quackops-logo.png" alt="QuackOps Logo" width="180" align="left" hspace="20">
 
-**QuackOps** is an AI agent and a powerful kubectl plugin that transforms your Kubernetes troubleshooting experience through AI-powered assistance. It serves as your smart companion, translating natural language queries into actionable insights and commands.
+**QuackOps** is a powerful kubectl AI agent plugin that transforms your Kubernetes troubleshooting experience through AI-powered assistance. It serves as your smart companion, translating natural language queries into actionable insights and commands.
 
 Whether you're debugging a failing pod, optimizing resource usage, or seeking best practices, QuackOps streamlines your workflow by combining the precision of `kubectl` with the intuitive understanding of AI. Simply describe what you need, and let QuackOps guide you through your Kubernetes operations.
 
