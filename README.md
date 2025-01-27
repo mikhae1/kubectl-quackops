@@ -2,7 +2,7 @@
 
 <img src=".github/quackops-logo.png" alt="QuackOps Logo" width="180" align="left" hspace="20">
 
-**QuackOps** is a powerful `kubectl` AI agent plugin that transforms your Kubernetes troubleshooting experience through AI-powered assistance. It serves as your smart companion, translating natural language queries into actionable insights and commands.
+**QuackOps** is a powerful `kubectl` AI agent plugin that transforms your Kubernetes troubleshooting experience through AI assistance. It serves as your smart companion, translating natural language queries into actionable insights and commands.
 
 Whether you're debugging a failing pod, optimizing resource usage, or seeking best practices, QuackOps streamlines your workflow by combining the precision of `kubectl` with the intuitive understanding of AI. Simply describe what you need, and let QuackOps guide you through your Kubernetes operations.
 
@@ -94,7 +94,7 @@ $ kubectl quackops
 QuackOps offers flexible options to tailor your Kubernetes troubleshooting experience.
 Choose the LLM provider that best suits your needs.
 
-### Ollama: Privacy and Control
+### Ollama: Local Models for Privacy and Control
 
 For maximum data security, leverage the power of local LLMs with [Ollama](https://ollama.com/).
 
@@ -112,14 +112,14 @@ For maximum data security, leverage the power of local LLMs with [Ollama](https:
     ollama serve
     ```
 
-1. Download local LLM model (e.g., llama3.1):
+1. Download local LLM model (e.g., `llama3.1`, `deepseek-r1`):
     ```sh
-    ollama pull llama3.1
+    ollama run deepseek-r1:8b
     ```
 
 1. Start interactive chat:
     ```sh
-    kubectl quackops -p ollama -m llama3.1
+    kubectl quackops -p ollama
     ```
 
 ### OpenAI: Cutting-Edge AI models
