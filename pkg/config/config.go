@@ -117,7 +117,7 @@ func LoadConfig() *Config {
 			// gateways, http routes
 			{
 				MatchRe: regexp.MustCompile(`\b(gateway|route|httproute)s?\b`),
-				Prompt:  "Include commands to analyze Kebrnetes gateways.",
+				Prompt:  "Include commands to analyze Kubernetes gateways and routes.",
 				AllowedKubectls: []string{
 					"get gateway -A",
 					"get gatewayclasses -A",
@@ -176,8 +176,8 @@ func LoadConfig() *Config {
 			},
 			// network
 			{
-				MatchRe: regexp.MustCompile(`\b(network|subnet|cidr|ip|firewall|security|policy|ingress|egress|route|loadbalancer|lb|service|svc|endpoint|dns|domain|hostname|port|protocol|tcp|udp|icmp|http|https|tls|ssl|certificate|cert|ca|crl|ocsp|revocation|trust|key|encryption|decryption|authentication|endpoint|dns|domain|hostname|port|protocol|tcp|udp|icmp|http|https|tls|ssl|certificate|cert|ca)s?\b`),
-				Prompt:  "Include commands to analyze network resources.",
+				MatchRe: regexp.MustCompile(`\b(network|subnet|cidr|ip|firewall|security|policy|ingress|egress|route|loadbalancer|lb|service|svc|endpoint|dns|domain|hostname|port|protocol|tcp|udp|icmp|http|https|tls|ssl|certificate|cert|ca|crl|ocsp|revocation|trust|key|encryption|decryption|authentication)s?\b`),
+				Prompt:  "Include commands to analyze network resources and connectivity.",
 				AllowedKubectls: []string{
 					"get networkpolicy",
 					"get networkpolicy -A -o wide",
@@ -186,6 +186,7 @@ func LoadConfig() *Config {
 					"get endpoints -A -o wide",
 					"describe endpoints",
 					"describe endpoints -A",
+					"get service -A -o wide",
 				},
 				UseDefaultCmds: false,
 			},

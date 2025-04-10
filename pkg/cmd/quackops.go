@@ -185,9 +185,10 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augPrompt string, err error) {
 	var cmdResults []CmdRes
 	if strings.HasPrefix(prompt, "$") {
+		// Direct command execution
 		cmdResults, err = execDiagCmds(cfg, []string{prompt})
 	} else {
-		// retrieving kubectl commands and executing them
+		// Retrieve and execute relevant kubectl commands based on the user's query
 		for i := 0; i < cfg.Retries; i++ {
 			var cmds []string
 			cmds, err = getKubectlCmds(cfg, prompt)
@@ -205,37 +206,88 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 		}
 	}
 
-	augRes := ""
+	// Process command outputs
+	var contextBuilder strings.Builder
+
+	// Format each command result for context
 	for _, cmd := range cmdResults {
 		if cmd.Err != nil {
 			continue
 		}
 
+		// Filter sensitive data if enabled
+		output := cmd.Out
 		if !cfg.DisableSecretFilter {
-			cmd.Out = filterSensitiveData(cmd.Out)
+			output = filterSensitiveData(output)
 		}
 
-		ctx := "Command: " + cmd.Cmd + "\nOutput: " + cmd.Out + "\n\n"
-		// TODO: it seems LLM could handle long context better than just truncating it
-		// truncate the context if it exceeds the maximum token length
-		if len(tokenize(ctx)) > cfg.MaxTokens*2 {
-			ctx = ctx[:cfg.MaxTokens*2] + "..."
-		}
-		augRes += ctx
+		// Format the command and its output
+		contextBuilder.WriteString("Command: ")
+		contextBuilder.WriteString(cmd.Cmd)
+		contextBuilder.WriteString("\n\nOutput:\n")
+		contextBuilder.WriteString(output)
+		contextBuilder.WriteString("\n\n---\n\n")
 	}
 
+	contextData := contextBuilder.String()
+
+	// If the context is too large, intelligently truncate it rather than just cutting it off
+	if len(tokenize(contextData)) > cfg.MaxTokens*2 {
+		// Split into sections by command
+		sections := strings.Split(contextData, "\n\n---\n\n")
+
+		// Keep the first and last sections (usually most important)
+		var truncatedBuilder strings.Builder
+		if len(sections) >= 2 {
+			truncatedBuilder.WriteString(sections[0])
+			truncatedBuilder.WriteString("\n\n---\n\n")
+
+			// Add a note about truncation
+			truncatedBuilder.WriteString("(Some command outputs were omitted for brevity)\n\n---\n\n")
+
+			// Add the last section
+			truncatedBuilder.WriteString(sections[len(sections)-1])
+		} else {
+			// If there's only one section, truncate it
+			truncatedBuilder.WriteString(contextData[:cfg.MaxTokens*2])
+			truncatedBuilder.WriteString("\n...(output truncated)...")
+		}
+
+		contextData = truncatedBuilder.String()
+	}
+
+	// Determine the actual user prompt
 	userPrompt := prompt
 	if strings.HasPrefix(prompt, "$") {
 		userPrompt = lastTextPrompt
 	}
 
-	format := ""
+	// Customize output format based on the provider
+	outputFormat := ""
 	if cfg.Provider == "google" {
-		format = "Format output for text terminals and do not use Markdown."
+		outputFormat = "Format your response for a terminal environment without using Markdown or syntax highlighting."
+	} else {
+		outputFormat = "Provide a clear, concise analysis that is easy to read in a terminal environment."
 	}
 
-	if len(augRes) > 0 {
-		augPrompt = fmt.Sprintf("Here are the commands and outputs:\n%s\n###\nYou are an experienced Kubernetes administrator.\nYour task is: '%s'.\n%s", augRes, userPrompt, format)
+	// Construct the final prompt with clear instructions
+	if len(contextData) > 0 {
+		augPrompt = fmt.Sprintf(`# Kubernetes Diagnostic Analysis
+
+## Command Outputs
+%s
+
+## Task
+%s
+
+## Guidelines
+- You are an experienced Kubernetes administrator with deep expertise in diagnostics
+- Analyze the command outputs above and provide insights on the issue
+- Identify potential problems or anomalies in the cluster state
+- Suggest next steps or additional commands if needed
+- %s
+
+`, contextData, userPrompt, outputFormat)
 	}
 
 	return augPrompt, err
@@ -586,89 +638,115 @@ func promptExistsInHistory(messages []llms.ChatMessage, prompt string) bool {
 
 // getKubectlCmds retrieves kubectl commands based on the user input
 func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
-	dynamicPrompt := generateKubectlPrompt(cfg, prompt)
+	// Generate a context-aware prompt based on user input
+	systemPrompt := generateKubectlPrompt(cfg, prompt)
 
-	shortPrompt := "You are Kubernetes administrator. List safe, " +
-		"read-only `kubectl` commands that can help monitor or diagnose the Kubernetes cluster."
+	// Use a shorter prompt for repeated interactions to avoid repetition
+	shortPrompt := "As a Kubernetes expert, provide safe, read-only kubectl commands to diagnose the following issue."
 
-	// Check if longPrompt exists in the chat history
-	augPrompt := dynamicPrompt
-	if promptExistsInHistory(cfg.ChatMessages, dynamicPrompt) {
-		augPrompt = shortPrompt
-		logger.Log("info", "Using short prompt")
+	// Check if long prompt exists in the chat history to avoid repetition
+	finalPrompt := systemPrompt
+	if promptExistsInHistory(cfg.ChatMessages, systemPrompt) {
+		finalPrompt = shortPrompt
+		logger.Log("info", "Using condensed prompt for context efficiency")
 	}
-	augPrompt += "\nProblem description: " + prompt
 
-	// Don't stream diagnostic requests
+	// Construct the final prompt with clear instructions
+	augPrompt := finalPrompt + "\n\nIssue description: " + prompt + "\n\nProvide commands as a plain list without descriptions or backticks."
+
+	// Execute LLM request without streaming for diagnostic requests
 	response, err := llmRequest(cfg, augPrompt, false)
 	if err != nil {
-		return nil, fmt.Errorf("error requesting kubectl command: %w", err)
+		return nil, fmt.Errorf("error requesting kubectl diagnostics: %w", err)
 	}
 
-	// Join the allowed commands into a regex pattern
+	// Extract valid kubectl commands using regex pattern
 	commandsPattern := strings.Join(cfg.AllowedKubectlCmds, "|")
 	rePattern := `kubectl\s(?:` + commandsPattern + `)\s?[^` + "`" + `%#\n]*`
 	re := regexp.MustCompile(rePattern)
 
 	matches := re.FindAllString(response, -1)
 	if matches == nil {
-		return nil, errors.New("no valid kubectl commands found")
+		return nil, errors.New("no valid kubectl commands found in response")
 	}
 
-	anonCmdRe, _ := regexp.Compile(`.*<[A-Za-z_-]+>.*`)
+	// Remove template commands with placeholders and duplicates
+	anonCmdRe := regexp.MustCompile(`.*<[A-Za-z_-]+>.*`)
 	var filteredCmds []string
 	for _, match := range matches {
 		trimCmd := strings.TrimSpace(match)
-		// check and remove commands with <resource> <name> format
 		if !anonCmdRe.MatchString(trimCmd) && !slices.Contains(filteredCmds, trimCmd) {
 			filteredCmds = append(filteredCmds, trimCmd)
 		}
 	}
 
-	logger.Log("info", "Kubectl commands: \"%v\"", strings.Join(filteredCmds, ", "))
+	logger.Log("info", "Generated kubectl commands: \"%v\"", strings.Join(filteredCmds, ", "))
 	return filteredCmds, nil
 }
 
-// generateKubectlPrompt generates a dynamic prompt based on the user input
+// generateKubectlPrompt generates a context-aware prompt based on the user's query
 func generateKubectlPrompt(cfg *config.Config, prompt string) string {
-	// Function to create command strings prefixed with "kubectl"
+	// Function to create formatted command strings
 	createCommand := func(cmd string) string {
 		return "kubectl " + cmd
 	}
 
-	basePrompt := "You're experienced Kubernetes administrator. List safe read-only `kubectl` commands that can help monitor or diagnose the Kubernetes cluster."
+	// Core system prompt with clear role and purpose
+	systemPrompt := `You are an expert Kubernetes administrator specializing in cluster diagnostics.
 
-	// Add dynamic content based on the analysis of the prompt
+Task: Analyze the user's issue and provide appropriate kubectl commands for diagnostics.
+
+Guidelines:
+- Provide only safe, read-only commands that will not modify cluster state
+- Commands should be specific and target the exact resources relevant to the issue
+- Focus on commands that provide the most useful diagnostic information
+- Include namespace flags where appropriate (-n or --all-namespaces/-A)
+- Prefer commands that give comprehensive information (e.g., -o wide, --show-labels)
+`
+
+	// Analyze the query to determine the appropriate focus areas
 	p := strings.ToLower(prompt)
 	useDefaultCmds := true
 
+	// Apply specialized prompt extensions based on detected patterns
 	for _, kp := range cfg.KubectlPrompts {
 		if kp.MatchRe.MatchString(p) {
-			basePrompt += kp.Prompt
+			// Add specialized context based on the matched pattern
+			systemPrompt += "\n" + strings.TrimSpace(kp.Prompt)
+
 			if !kp.UseDefaultCmds {
-				kubectlCmds := make([]string, len(kp.AllowedKubectls))
-				for i, cmd := range kp.AllowedKubectls {
-					kubectlCmds[i] = createCommand(cmd)
+				// Add specialized commands for this specific context
+				var kubectlCmds []string
+				for _, cmd := range kp.AllowedKubectls {
+					kubectlCmds = append(kubectlCmds, createCommand(cmd))
 				}
-				basePrompt += " like: " + strings.Join(kubectlCmds, ", ")
+				systemPrompt += "\n\nRelevant commands for this scenario: " + strings.Join(kubectlCmds, ", ")
 				useDefaultCmds = kp.UseDefaultCmds
 			}
 		}
 	}
 
+	// Add default command examples if no specialized ones were used
 	if useDefaultCmds {
 		var defaultKubectlCmds []string
 		for _, cmd := range cfg.AllowedKubectlCmds {
 			defaultKubectlCmds = append(defaultKubectlCmds, createCommand(cmd))
 		}
-		basePrompt += "\nExamples: " + strings.Join(defaultKubectlCmds, ", ") + "."
+		systemPrompt += "\n\nCommand reference: " + strings.Join(defaultKubectlCmds, ", ")
 	}
 
-	// Mention that commands should be formatted properly and non-destructive
-	enhancedPrompt := basePrompt + "\nEnsure commands are formatted on separate lines without any descriptions. " +
-		"Use real resource names. and avoid commands that modify the cluster. "
+	// Add formatting instructions
+	systemPrompt += `
 
-	return enhancedPrompt
+Output format:
+- Provide only the exact commands to run (no markdown formatting)
+- One command per line
+- Do not include explanations or descriptions
+- Use only actual resource names, not placeholders
+- Never include destructive commands that modify cluster state
+`
+
+	return systemPrompt
 }
 
 func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
