@@ -1,0 +1,33 @@
+apiVersion: krew.googlecontainertools.github.com/v1alpha2
+kind: Plugin
+metadata:
+  name: quackops
+spec:
+  version: {{ .TagName }}
+  homepage: https://github.com/mikhae1/kubectl-quackops
+  shortDescription: "AI-powered Kubectl plugin for Kubernetes management assistance"
+  description: |
+    QuackOps is a Kubectl plugin that offers interactive LLM chat sessions
+    to simplify your Kubernetes troubleshooting and management tasks.
+
+    QuackOps is optimized to integrate smoothly with small local models like `llama3`
+    while also providing robust scalability for larger LLMs.
+  platforms:
+  - selector:
+      matchLabels:
+        os: linux
+        arch: amd64
+    {{addURIAndSha "https://github.com/mikhae1/kubectl-quackops/releases/download/{{ .TagName }}/kubectl-quackops-linux-amd64-{{ .TagName }}.tar.gz" .TagName }}
+    bin: kubectl-quackops
+  - selector:
+      matchLabels:
+        os: darwin
+        arch: amd64
+    {{addURIAndSha "https://github.com/mikhae1/kubectl-quackops/releases/download/{{ .TagName }}/kubectl-quackops-darwin-amd64-{{ .TagName }}.tar.gz" .TagName }}
+    bin: kubectl-quackops
+  - selector:
+      matchLabels:
+        os: darwin
+        arch: arm64
+    {{addURIAndSha "https://github.com/mikhae1/kubectl-quackops/releases/download/{{ .TagName }}/kubectl-quackops-darwin-arm64-{{ .TagName }}.tar.gz" .TagName }}
+    bin: kubectl-quackops

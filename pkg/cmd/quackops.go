@@ -20,16 +20,14 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
-	"github.com/google/generative-ai-go/genai"
-	"github.com/henomis/lingoose/llm/anthropic"
-	"github.com/henomis/lingoose/llm/ollama"
-	"github.com/henomis/lingoose/llm/openai"
-	"github.com/henomis/lingoose/thread"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/spf13/cobra"
-	"google.golang.org/api/iterator"
-	"google.golang.org/api/option"
+	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/anthropic"
+	"github.com/tmc/langchaingo/llms/googleai"
+	"github.com/tmc/langchaingo/llms/ollama"
+	"github.com/tmc/langchaingo/llms/openai"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
@@ -48,7 +46,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 		RunE:         runQuackOps(cfg, os.Args),
 	}
 
-	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai', 'google', anthropic)")
+	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai', 'google', 'anthropic')")
 	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "LLM model to use")
 	cmd.Flags().StringVarP(&cfg.ApiURL, "api-url", "u", cfg.ApiURL, "URL for LLM API, used with 'ollama' provider")
 	cmd.Flags().BoolVarP(&cfg.SafeMode, "safe-mode", "s", cfg.SafeMode, "Enable safe mode to prevent executing commands without confirmation")
@@ -179,7 +177,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		return fmt.Errorf("error requesting LLM: %w", err)
 	}
 
-	manageChatThreadContext(cfg.ChatThread, cfg.MaxTokens)
+	manageChatThreadContext(cfg.ChatMessages, cfg.MaxTokens)
 	return nil
 }
 
@@ -340,38 +338,34 @@ func filterDescribeOutput(input string) string {
 }
 
 // manageChatThreadContext manages the context window of the chat thread
-func manageChatThreadContext(chatThread *thread.Thread, maxTokens int) {
-	if chatThread == nil {
+func manageChatThreadContext(chatMessages []llms.ChatMessage, maxTokens int) {
+	if chatMessages == nil {
 		return
 	}
 
 	// If the token length exceeds the context window, remove the oldest message in loop
-	calculateThreadTokenLength := func(chatThread *thread.Thread) int {
+	calculateThreadTokenLength := func(messages []llms.ChatMessage) int {
 		threadLen := 0
-		for _, message := range chatThread.Messages {
-			for _, content := range message.Contents {
-				if content.Type == thread.ContentTypeText {
-					tokens := tokenize(content.Data.(string))
-					threadLen += len(tokens)
-				}
-			}
+		for _, message := range messages {
+			tokens := tokenize(message.GetContent())
+			threadLen += len(tokens)
 		}
 		return threadLen
 	}
 
-	threadLen := calculateThreadTokenLength(chatThread)
+	threadLen := calculateThreadTokenLength(chatMessages)
 	if threadLen > maxTokens {
-		logger.Log("warn", "Thread should be truncated: %d messages, %d tokens", chatThread.CountMessages(), threadLen)
+		logger.Log("warn", "Thread should be truncated: %d messages, %d tokens", len(chatMessages), threadLen)
 	}
 
 	// Truncate the thread if it exceeds the maximum token length
-	for calculateThreadTokenLength(chatThread) > maxTokens && len(chatThread.Messages) > 0 {
+	for calculateThreadTokenLength(chatMessages) > maxTokens && len(chatMessages) > 0 {
 		// Remove the oldest message
-		chatThread.Messages = chatThread.Messages[1:]
-		logger.Log("info", "Thread after truncation: tokens: %d, messages: %v", calculateThreadTokenLength(chatThread), chatThread.CountMessages())
+		chatMessages = chatMessages[1:]
+		logger.Log("info", "Thread after truncation: tokens: %d, messages: %v", calculateThreadTokenLength(chatMessages), len(chatMessages))
 	}
 
-	logger.Log("info", "\nThread: %d messages, %d tokens", chatThread.CountMessages(), calculateThreadTokenLength(chatThread))
+	logger.Log("info", "\nThread: %d messages, %d tokens", len(chatMessages), calculateThreadTokenLength(chatMessages))
 }
 
 // tokenize approximates tokenization by splitting on whitespace and punctuation.
@@ -392,13 +386,13 @@ func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) 
 	var answer string
 	switch cfg.Provider {
 	case "ollama":
-		answer, err = ollamaRequestWithThread(cfg, truncPrompt, stream)
-	case "openai":
-		answer, err = openaiRequestWithThread(cfg, truncPrompt, stream)
+		answer, err = ollamaRequestWithChat(cfg, truncPrompt, stream)
+	case "openai", "deepseek":
+		answer, err = openaiRequestWithChat(cfg, truncPrompt, stream)
 	case "google":
-		answer, err = googleRequestWithThread(cfg, truncPrompt, stream)
+		answer, err = googleRequestWithChat(cfg, truncPrompt, stream)
 	case "anthropic":
-		answer, err = anthropicRequestWithThread(cfg, truncPrompt, stream)
+		answer, err = anthropicRequestWithChat(cfg, truncPrompt, stream)
 	default:
 		return "", fmt.Errorf("unsupported AI provider: %s", cfg.Provider)
 	}
@@ -407,164 +401,187 @@ func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) 
 	return answer, err
 }
 
-func openaiRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
-	client := openai.New().
-		WithModel(openai.Model(cfg.Model))
-
-	if stream {
-		client = client.WithStream(true, func(s string) {
-			fmt.Print(s)
-		})
+func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
+	llmOptions := []openai.Option{
+		openai.WithModel(cfg.Model),
 	}
 
-	cfg.ChatThread.AddMessage(thread.NewUserMessage().AddContent(thread.NewTextContent(prompt)))
+	if cfg.Provider == "deepseek" {
+		llmOptions = append(llmOptions, openai.WithBaseURL(cfg.ApiURL))
+	}
 
-	err := client.Generate(context.Background(), cfg.ChatThread)
+	client, err := openai.New(llmOptions...)
+	if err != nil {
+		return "", fmt.Errorf("failed to create OpenAI client: %w", err)
+	}
+
+	// Create a human message from the prompt
+	humanMessage := llms.HumanChatMessage{Content: prompt}
+
+	// Add to chat history
+	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
+
+	// Prepare options for generation
+	options := []llms.CallOption{}
+	if stream {
+		callbackFn := func(ctx context.Context, chunk []byte) error {
+			fmt.Print(string(chunk))
+			return nil
+		}
+		options = append(options, llms.WithStreamingFunc(callbackFn))
+	}
+
+	// Generate response
+	response, err := client.Call(context.Background(), prompt, options...)
 	if err != nil {
 		return "", fmt.Errorf("openai text generation failed: %w", err)
 	}
 
-	msg := ""
-	for _, content := range cfg.ChatThread.LastMessage().Contents {
-		if content.Type == thread.ContentTypeText {
-			msg += content.Data.(string)
-		} else {
-			return "", errors.New("invalid openai message type")
-		}
-	}
+	// Add the response to the chat history
+	cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response})
+
 	if stream {
 		fmt.Println() // Add newline after streaming
 	}
-	return msg, nil
+	return response, nil
 }
 
-func anthropicRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
-	client := anthropic.New().
-		WithModel(cfg.Model)
-
-	if stream {
-		client = client.WithStream(func(s string) {
-			if s != anthropic.EOS {
-				fmt.Print(s)
-			} else {
-				fmt.Println()
-			}
-		})
+func anthropicRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
+	client, err := anthropic.New()
+	if err != nil {
+		return "", fmt.Errorf("failed to create Anthropic client: %w", err)
 	}
 
-	// Create a message and add it to the thread
-	cfg.ChatThread.AddMessage(thread.NewUserMessage().AddContent(thread.NewTextContent(prompt)))
+	// Create a human message from the prompt
+	humanMessage := llms.HumanChatMessage{Content: prompt}
 
-	err := client.Generate(context.Background(), cfg.ChatThread)
+	// Add to chat history
+	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
+
+	// Prepare options for generation
+	options := []llms.CallOption{
+		llms.WithModel(cfg.Model),
+	}
+	if stream {
+		callbackFn := func(ctx context.Context, chunk []byte) error {
+			fmt.Print(string(chunk))
+			return nil
+		}
+		options = append(options, llms.WithStreamingFunc(callbackFn))
+	}
+
+	// Generate response
+	response, err := client.Call(context.Background(), prompt, options...)
 	if err != nil {
 		return "", fmt.Errorf("anthropic text generation failed: %w", err)
 	}
 
-	var response string
-	lastMessage := cfg.ChatThread.LastMessage()
-	if lastMessage != nil && len(lastMessage.Contents) > 0 {
-		for _, content := range lastMessage.Contents {
-			if content.Type == thread.ContentTypeText {
-				response += content.Data.(string)
-			} else {
-				return "", errors.New("invalid anthropic message type")
-			}
-		}
-	}
+	// Add the response to the chat history
+	cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response})
 
+	if stream {
+		fmt.Println() // Add newline after streaming
+	}
 	return response, nil
 }
 
-func ollamaRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
-	client := ollama.New().
-		WithModel(cfg.Model).
-		WithEndpoint(cfg.ApiURL)
-
-	if stream {
-		client = client.WithStream(func(s string) {
-			fmt.Print(s)
-		})
+func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
+	// Make sure the API URL is properly formatted - it should not end with /api
+	serverURL := cfg.ApiURL
+	if strings.HasSuffix(serverURL, "/api") {
+		serverURL = strings.TrimSuffix(serverURL, "/api")
 	}
 
-	cfg.ChatThread.AddMessage(thread.NewUserMessage().AddContent(thread.NewTextContent(prompt)))
+	client, err := ollama.New(
+		ollama.WithModel(cfg.Model),
+		ollama.WithServerURL(serverURL),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to create Ollama client: %w", err)
+	}
 
-	err := client.Generate(context.Background(), cfg.ChatThread)
+	// Create a human message from the prompt
+	humanMessage := llms.HumanChatMessage{Content: prompt}
+
+	// Add to chat history
+	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
+
+	// Prepare options for generation
+	options := []llms.CallOption{}
+	if stream {
+		callbackFn := func(ctx context.Context, chunk []byte) error {
+			fmt.Print(string(chunk))
+			return nil
+		}
+		options = append(options, llms.WithStreamingFunc(callbackFn))
+	}
+
+	// Generate response
+	response, err := client.Call(context.Background(), prompt, options...)
 	if err != nil {
 		return "", fmt.Errorf("ollama text generation failed: %w", err)
 	}
 
-	msg := ""
-	for _, content := range cfg.ChatThread.LastMessage().Contents {
-		if content.Type == thread.ContentTypeText {
-			msg += content.Data.(string)
-		} else {
-			return "", errors.New("invalid ollama message type")
-		}
-	}
-	if stream {
-		fmt.Println() // Add newline after streaming
-	}
-	return msg, nil
-}
-
-func googleRequestWithThread(cfg *config.Config, prompt string, stream bool) (string, error) {
-	ctx := context.Background()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("GOOGLE_API_KEY")))
-	if err != nil {
-		return "", fmt.Errorf("failed to create Google GenAI client: %w", err)
-	}
-	defer client.Close()
-
-	model := client.GenerativeModel(cfg.Model)
-	cs := model.StartChat()
-
-	// Add the user message to the thread before making the request
-	cfg.ChatThread.AddMessage(thread.NewUserMessage().AddContent(thread.NewTextContent(prompt)))
+	// Add the response to the chat history
+	cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response})
 
 	if stream {
-		iter := cs.SendMessageStream(ctx, genai.Text(prompt))
-		var response string
-		for {
-			resp, err := iter.Next()
-			if err == iterator.Done {
-				break
-			}
-			if err != nil {
-				return "", fmt.Errorf("failed to get response: %w", err)
-			}
-			if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-				continue
-			}
-			chunk := resp.Candidates[0].Content.Parts[0].(genai.Text)
-			fmt.Print(string(chunk))
-			response += string(chunk)
-		}
 		fmt.Println() // Add newline after streaming
-
-		// Add the assistant's response to the thread
-		if response != "" {
-			cfg.ChatThread.AddMessage(thread.NewAssistantMessage().AddContent(thread.NewTextContent(response)))
-		}
-		return response, nil
-	}
-
-	// Non-streaming response
-	resp, err := cs.SendMessage(ctx, genai.Text(prompt))
-	if err != nil {
-		return "", fmt.Errorf("failed to get response: %w", err)
-	}
-
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("no response from model")
-	}
-
-	response := string(resp.Candidates[0].Content.Parts[0].(genai.Text))
-
-	// Add the assistant's response to the thread
-	if response != "" {
-		cfg.ChatThread.AddMessage(thread.NewAssistantMessage().AddContent(thread.NewTextContent(response)))
 	}
 	return response, nil
+}
+
+func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
+	ctx := context.Background()
+
+	// Create GoogleAI client
+	client, err := googleai.New(ctx,
+		googleai.WithAPIKey(os.Getenv("GOOGLE_API_KEY")),
+		googleai.WithDefaultModel(cfg.Model),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to create Google AI client: %w", err)
+	}
+
+	// Create a human message from the prompt
+	humanMessage := llms.HumanChatMessage{Content: prompt}
+
+	// Add to chat history
+	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
+
+	// Prepare options for generation
+	options := []llms.CallOption{}
+	if stream {
+		callbackFn := func(ctx context.Context, chunk []byte) error {
+			fmt.Print(string(chunk))
+			return nil
+		}
+		options = append(options, llms.WithStreamingFunc(callbackFn))
+	}
+
+	// Generate response
+	response, err := client.Call(ctx, prompt, options...)
+	if err != nil {
+		return "", fmt.Errorf("google AI text generation failed: %w", err)
+	}
+
+	// Add the response to the chat history
+	cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response})
+
+	if stream {
+		fmt.Println() // Add newline after streaming
+	}
+	return response, nil
+}
+
+// Helper function to check if a prompt exists in chat history
+func promptExistsInHistory(messages []llms.ChatMessage, prompt string) bool {
+	for _, msg := range messages {
+		if strings.Contains(msg.GetContent(), prompt) {
+			return true
+		}
+	}
+	return false
 }
 
 // getKubectlCmds retrieves kubectl commands based on the user input
@@ -574,9 +591,9 @@ func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
 	shortPrompt := "You are Kubernetes administrator. List safe, " +
 		"read-only `kubectl` commands that can help monitor or diagnose the Kubernetes cluster."
 
-	// Check if longPrompt exists in the chatThread history
+	// Check if longPrompt exists in the chat history
 	augPrompt := dynamicPrompt
-	if strings.Contains(cfg.ChatThread.String(), dynamicPrompt) {
+	if promptExistsInHistory(cfg.ChatMessages, dynamicPrompt) {
 		augPrompt = shortPrompt
 		logger.Log("info", "Using short prompt")
 	}

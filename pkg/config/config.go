@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/henomis/lingoose/thread"
+	"github.com/tmc/langchaingo/llms"
 )
 
 type KubectlPrompt = struct {
@@ -19,7 +19,7 @@ type KubectlPrompt = struct {
 }
 
 type Config struct {
-	ChatThread *thread.Thread
+	ChatMessages []llms.ChatMessage
 
 	AllowedKubectlCmds []string
 	BlockedKubectlCmds []string
@@ -46,7 +46,7 @@ func LoadConfig() *Config {
 	defaultModel := "llama3.1"
 	if provider == "google" {
 		defaultMaxTokens = 1048576 // https://ai.google.dev/gemini-api/docs/models/gemini
-		defaultModel = "gemini-2.0-flash-thinking-exp-1219"
+		defaultModel = "gemini-2.0-flash"
 	} else if provider == "ollama" {
 		defaultMaxTokens = 4096 // https://ai.meta.com/blog/meta-llama-3-1/
 		defaultModel = "llama3.1"
@@ -59,11 +59,11 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
-		ChatThread:         thread.New(),
+		ChatMessages:       []llms.ChatMessage{},
 		DuckASCIIArt:       defaultDuckASCIIArt,
 		Provider:           provider,
 		Model:              getEnvArg("QU_LLM_MODEL", defaultModel).(string),
-		ApiURL:             getEnvArg("QU_API_URL", "http://localhost:11434/api").(string),
+		ApiURL:             getEnvArg("QU_API_URL", "http://localhost:11434").(string),
 		SafeMode:           getEnvArg("QU_SAFE_MODE", false).(bool),
 		Retries:            getEnvArg("QU_RETRIES", 3).(int),
 		Timeout:            getEnvArg("QU_TIMEOUT", 30).(int),
@@ -303,4 +303,4 @@ var defaultBlockedKubectlCmds = []string{
 	"mv",
 }
 
-var defaultDuckASCIIArt = `4qCA4qCA4qCA4qKA4qOE4qKA4qO04qC/4qCf4qCb4qCb4qCb4qCb4qCb4qC34qK24qOE4qGA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKiv+Khv+Kgg+KggOKggOKggOKggOKggOKggOKggOKggOKhgOKiqeKjt+KhhOKggOKggOKggOKggOKggOKggOKggArioIDioIDioIDiorDiopbiob/ioIHioIDioIDioIDioIDiooLio6bio4TioIDioIBv4qGH4qK44qO34qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKjvOKgg+KggOKggOKggOKggOKggOKggG/ioZvioIDioIDioJDioJDioJLiorvioYbioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qO/4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qKA4qO04qG+4qC/4qC/4qK/4qG/4qK34qOk4qOA4qGA4qCA4qCA4qCACuKggOKggOKggOKggOKjv+KhgOKggOKggOKggOKggOKggOKggOKisOKjv+KgieKggOKguuKgh+KgmOKgg+KggOKgieKgmeKgm+Kit+KjhOKggArioIDioIDioIDioIDioLjio6fioIDioIDioIDioIDioIDioIDioJjioL/io6bio6Tio4TioIDioIDioIDioIDioIDioIDioIDiooDio7/ioIIK4qCA4qCA4qCA4qCA4qCA4qO54qOn4qGA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qKJ4qO54qG/4qO34qO24qO24qG24qK24qCb4qCb4qCB4qCACuKggOKggOKioOKjtuKgn+Kgi+KgmeKgm+KggOKggOKggOKggOKggOKggOKgiOKiv+Kjj+KjgOKggOKgieKgieKgieKgieKggOKggOKggOKggArioIDio7DioZ/ioIHioIDioIDioIDioIDioIDioIDioIDioIDioIDioIDioIDioIDiorvioZ/io6fioYDioIDioIDioIDioIDioIDioIDioIAK4qK44qGf4qCA4qCA4qCA4qCA4qCA4qCA4qOA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCY4qO34qCY4qOn4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKiuOKjt+KggOKhgOKiuOKggOKiuOKigOKjv+KggOKggOKggOKggOKggOKggOKggOKggOKiueKhh+KiueKhh+KggOKggOKggOKggOKggOKggArioIDior/ioYTioYfio7zioIDiorjio7zioIfioIDioIDioIDio6Dio6TioIDioIDioIDio7jioYfiorjioYfioIDioIDioIDioIDioIDioIAK4qCA4qCI4qK/4qO94qK54qGA4qO/4qO/4qGA4qCA4qCA4qCA4qCJ4qCJ4qCA4qCA4qOg4qG/4qOn4qG/4qCB4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKgueKjr+KjgeKhv+KgieKgm+Kit+KjtuKgtuKgpOKipuKhtuKgn+Kgi+KggOKggOKggOKggOKggOKggOKggOKggOKggOKggArioIDioIDioIDioIDioJjioJ/ioIPioIDioIDiorjioYfioIDioIDiorjio4fio6Dio4TioIDioIDioIDioIDioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qOg4qO/4qO34qG24qCA4qCY4qC74qC/4qCb4qCB4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKggOKggOKggOKgieKggeKgieKgieKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggAo=`
+var defaultDuckASCIIArt = `4qCA4qCA4qCA4qKA4qOE4qKA4qO04qC/4qCf4qCb4qCb4qCb4qCb4qCb4qC34qK24qOE4qGA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKiv+Khv+Kgg+KggOKggOKggOKggOKggOKggOKggOKggOKhgOKiqeKjt+KhhOKggOKggOKggOKggOKggOKggOKggArioIDioIDioIDiorDiopbiob/ioIHioIDioIDioIDioIDiooLio6bio4TioIDioIBv4qGH4qK44qO34qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKjvOKgg+KggOKggOKggOKggOKggOKggG/ioZvioIDioIDioJDioJDioJLiorvioYbioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qO/4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qKA4qO04qG+4qC/4qC/4qK/4qG/4qK34qOk4qOA4qGA4qCA4qCA4qCACuKggOKggOKggOKggOKjv+KhgOKggOKggOKggOKggOKggOKggOKisOKjv+KgieKggOKguuKgh+KgmOKgg+KggOKgieKgmeKgm+Kit+KjhOKggArioIDioIDioIDioIDioLjioJ/ioIPioIDioIDiorjioYfioIDioIDiorjio4fio6Dio4TioIDioIDioIDioIDioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qOg4qO/4qO34qG24qCA4qCY4qC74qC/4qCb4qCB4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKggOKggOKggOKgieKggeKgieKgieKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggAo=`
