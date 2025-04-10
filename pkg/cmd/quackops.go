@@ -18,6 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/briandowns/spinner"
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
@@ -184,6 +185,14 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 // retrieveRAG retrieves the data for RAG
 func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augPrompt string, err error) {
 	var cmdResults []CmdRes
+
+	// Create a spinner for diagnostic information gathering
+	s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+	s.Suffix = " Gathering diagnostic information..."
+	s.Color("cyan", "bold")
+	s.Start()
+	defer s.Stop()
+
 	if strings.HasPrefix(prompt, "$") {
 		// Direct command execution
 		cmdResults, err = execDiagCmds(cfg, []string{prompt})
@@ -434,6 +443,17 @@ func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) 
 	}
 	logger.Log("llmIn", "[%s/%s]: %s", cfg.Provider, cfg.Model, truncPrompt)
 
+	// Create a spinner for LLM response
+	s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
+	s.Color("green", "bold")
+
+	// Start spinner if not streaming (for streaming, we'll show the output directly)
+	if !stream {
+		s.Start()
+		defer s.Stop()
+	}
+
 	var err error
 	var answer string
 	switch cfg.Provider {
@@ -476,7 +496,19 @@ func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 	// Prepare options for generation
 	options := []llms.CallOption{}
 	if stream {
+		// Create a spinner for streaming that stops on first chunk
+		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+		s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
+		s.Color("green", "bold")
+		s.Start()
+
+		var spinnerStopped sync.Once
 		callbackFn := func(ctx context.Context, chunk []byte) error {
+			// Stop spinner on first chunk
+			spinnerStopped.Do(func() {
+				s.Stop()
+				fmt.Print("\r") // Clear the line
+			})
 			fmt.Print(string(chunk))
 			return nil
 		}
@@ -515,7 +547,19 @@ func anthropicRequestWithChat(cfg *config.Config, prompt string, stream bool) (s
 		llms.WithModel(cfg.Model),
 	}
 	if stream {
+		// Create a spinner for streaming that stops on first chunk
+		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+		s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
+		s.Color("green", "bold")
+		s.Start()
+
+		var spinnerStopped sync.Once
 		callbackFn := func(ctx context.Context, chunk []byte) error {
+			// Stop spinner on first chunk
+			spinnerStopped.Do(func() {
+				s.Stop()
+				fmt.Print("\r") // Clear the line
+			})
 			fmt.Print(string(chunk))
 			return nil
 		}
@@ -561,7 +605,19 @@ func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 	// Prepare options for generation
 	options := []llms.CallOption{}
 	if stream {
+		// Create a spinner for streaming that stops on first chunk
+		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+		s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
+		s.Color("green", "bold")
+		s.Start()
+
+		var spinnerStopped sync.Once
 		callbackFn := func(ctx context.Context, chunk []byte) error {
+			// Stop spinner on first chunk
+			spinnerStopped.Do(func() {
+				s.Stop()
+				fmt.Print("\r") // Clear the line
+			})
 			fmt.Print(string(chunk))
 			return nil
 		}
@@ -604,7 +660,19 @@ func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 	// Prepare options for generation
 	options := []llms.CallOption{}
 	if stream {
+		// Create a spinner for streaming that stops on first chunk
+		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+		s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
+		s.Color("green", "bold")
+		s.Start()
+
+		var spinnerStopped sync.Once
 		callbackFn := func(ctx context.Context, chunk []byte) error {
+			// Stop spinner on first chunk
+			spinnerStopped.Do(func() {
+				s.Stop()
+				fmt.Print("\r") // Clear the line
+			})
 			fmt.Print(string(chunk))
 			return nil
 		}
@@ -653,6 +721,13 @@ func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
 
 	// Construct the final prompt with clear instructions
 	augPrompt := finalPrompt + "\n\nIssue description: " + prompt + "\n\nProvide commands as a plain list without descriptions or backticks."
+
+	// Create a spinner for command generation
+	s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+	s.Suffix = " Generating diagnostic commands..."
+	s.Color("blue", "bold")
+	s.Start()
+	defer s.Stop()
 
 	// Execute LLM request without streaming for diagnostic requests
 	response, err := llmRequest(cfg, augPrompt, false)
@@ -752,16 +827,64 @@ Output format:
 func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
 	var wg sync.WaitGroup
 	results := make([]CmdRes, len(commands))
+	startTime := time.Now()
+
+	// Create channels to track progress
+	statusChan := make(chan struct {
+		index int
+		done  bool
+		err   error
+	}, len(commands))
+
+	// Create a spinner for execution status - using a more visually appealing spinner (dots)
+	s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+	s.Suffix = fmt.Sprintf(" Executing %d commands...", len(commands))
+	s.Color("cyan", "bold")
+	s.Start()
+
+	// Track command status
+	completedCount := 0
+	failedCount := 0
+	statusMap := make(map[int]bool)
+	firstCommandCompleted := false
+
+	// Start a goroutine to update the spinner message
+	go func() {
+		for status := range statusChan {
+			if status.done {
+				completedCount++
+				statusMap[status.index] = status.err == nil
+				if status.err != nil {
+					failedCount++
+				}
+			}
+
+			s.Suffix = fmt.Sprintf(" Executing %d commands... %d/%d completed",
+				len(commands), completedCount, len(commands))
+		}
+	}()
 
 	for i, command := range commands {
 		if cfg.SafeMode && !strings.HasPrefix(command, "$") {
+			// Stop spinner temporarily to show the confirmation prompt
+			s.Stop()
 			fmt.Printf("\nExecute '%s' (y/N)?", command)
 			reader := bufio.NewReader(os.Stdin)
 			input, _ := reader.ReadString('\n')
 			input = strings.TrimSpace(input)
 
+			// Restart spinner after confirmation
+			if completedCount < len(commands) {
+				s.Start()
+			}
+
 			if strings.ToLower(input) != "y" {
 				fmt.Println("Skipping...")
+				statusChan <- struct {
+					index int
+					done  bool
+					err   error
+				}{i, true, nil}
 				continue
 			}
 		}
@@ -769,20 +892,72 @@ func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
 		wg.Add(1)
 		go func(idx int, cmd string) {
 			defer wg.Done()
+			cmdStart := time.Now()
 			results[idx] = execKubectlCmd(cfg, cmd)
+			cmdDuration := time.Since(cmdStart)
+
+			// Send status update
+			statusChan <- struct {
+				index int
+				done  bool
+				err   error
+			}{idx, true, results[idx].Err}
+
+			// Print command result immediately with improved formatting
+			if !cfg.Verbose {
+				checkmark := color.GreenString("✓")
+				cmdLabel := color.HiWhiteString("running:")
+				if results[idx].Err != nil {
+					checkmark = color.RedString("✗")
+				}
+
+				if !firstCommandCompleted {
+					fmt.Println() // Add newline before first command output
+					firstCommandCompleted = true
+				}
+
+				fmt.Printf("%s %s %s %s\n",
+					checkmark,
+					cmdLabel,
+					color.CyanString(cmd),
+					color.HiBlackString("in %dms", cmdDuration.Milliseconds()))
+			}
 		}(i, command)
 	}
 
 	wg.Wait()
+	close(statusChan)
+	s.Stop()
+
+	// Print summary with improved formatting
+	totalDuration := time.Since(startTime)
+	successCount := completedCount - failedCount
+	summaryColor := color.HiGreenString
+	if failedCount > 0 {
+		summaryColor = color.HiYellowString
+	}
+
+	fmt.Printf("%s %s %s\n",
+		color.GreenString("✓"),
+		color.HiWhiteString("Executing %d command(s):", len(commands)),
+		summaryColor("%d/%d completed in %s (%d failed)",
+			successCount,
+			len(commands),
+			color.HiBlackString("%dms", totalDuration.Milliseconds()),
+			failedCount))
 
 	var err error
 	for _, res := range results {
-		logger.Log("in", "$ %s", res.Cmd)
-		if res.Out != "" {
-			logger.Log("out", res.Out)
+		if !cfg.Verbose {
+			logger.Log("in", "$ %s", res.Cmd)
+			if res.Out != "" {
+				logger.Log("out", res.Out)
+			}
 		}
 		if res.Err != nil {
-			logger.Log("err", "%v", res.Err)
+			if !cfg.Verbose {
+				logger.Log("err", "%v", res.Err)
+			}
 			if err == nil {
 				err = res.Err
 			} else {
@@ -833,6 +1008,7 @@ func execKubectlCmd(cfg *config.Config, command string) (result CmdRes) {
 		result.Out = string(output)
 	}
 
+	// Only print verbose output when requested
 	if cfg.Verbose {
 		dim := color.New(color.Faint).SprintFunc()
 		bold := color.New(color.Bold).SprintFunc()
