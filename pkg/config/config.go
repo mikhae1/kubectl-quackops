@@ -24,16 +24,17 @@ type Config struct {
 	AllowedKubectlCmds []string
 	BlockedKubectlCmds []string
 
-	DuckASCIIArt        string
-	Provider            string
-	Model               string
-	ApiURL              string
-	Retries             int
-	Timeout             int
-	MaxTokens           int
-	SafeMode            bool
-	Verbose             bool
-	DisableSecretFilter bool
+	DuckASCIIArt          string
+	Provider              string
+	Model                 string
+	ApiURL                string
+	Retries               int
+	Timeout               int
+	MaxTokens             int
+	SafeMode              bool
+	Verbose               bool
+	DisableSecretFilter   bool
+	DisableMarkdownFormat bool
 
 	KubectlPrompts []KubectlPrompt
 }
@@ -59,17 +60,18 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
-		ChatMessages:       []llms.ChatMessage{},
-		DuckASCIIArt:       defaultDuckASCIIArt,
-		Provider:           provider,
-		Model:              getEnvArg("QU_LLM_MODEL", defaultModel).(string),
-		ApiURL:             getEnvArg("QU_API_URL", "http://localhost:11434").(string),
-		SafeMode:           getEnvArg("QU_SAFE_MODE", false).(bool),
-		Retries:            getEnvArg("QU_RETRIES", 3).(int),
-		Timeout:            getEnvArg("QU_TIMEOUT", 30).(int),
-		MaxTokens:          getEnvArg("QU_MAX_TOKENS", defaultMaxTokens).(int),
-		AllowedKubectlCmds: getEnvArg("QU_ALLOWED_KUBECTL_CMDS", defaultAllowedKubectlCmds).([]string),
-		BlockedKubectlCmds: getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),
+		ChatMessages:          []llms.ChatMessage{},
+		DuckASCIIArt:          defaultDuckASCIIArt,
+		Provider:              provider,
+		Model:                 getEnvArg("QU_LLM_MODEL", defaultModel).(string),
+		ApiURL:                getEnvArg("QU_API_URL", "http://localhost:11434").(string),
+		SafeMode:              getEnvArg("QU_SAFE_MODE", false).(bool),
+		Retries:               getEnvArg("QU_RETRIES", 3).(int),
+		Timeout:               getEnvArg("QU_TIMEOUT", 30).(int),
+		MaxTokens:             getEnvArg("QU_MAX_TOKENS", defaultMaxTokens).(int),
+		AllowedKubectlCmds:    getEnvArg("QU_ALLOWED_KUBECTL_CMDS", defaultAllowedKubectlCmds).([]string),
+		BlockedKubectlCmds:    getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),
+		DisableMarkdownFormat: getEnvArg("QU_DISABLE_MARKDOWN_FORMAT", false).(bool),
 		KubectlPrompts: []KubectlPrompt{
 			{
 				MatchRe:        regexp.MustCompile(`\b(error|fail|crash|exception|debug|warn|issue|problem|trouble|fault|bug)s?\b`),

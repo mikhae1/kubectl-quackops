@@ -22,6 +22,7 @@ import (
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/spf13/cobra"
 	"github.com/tmc/langchaingo/llms"
@@ -56,6 +57,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().IntVarP(&cfg.MaxTokens, "max-tokens", "x", cfg.MaxTokens, "Maximum number of tokens in LLM context window")
 	cmd.Flags().BoolVarP(&cfg.Verbose, "verbose", "v", cfg.Verbose, "Enable verbose output")
 	cmd.Flags().BoolVarP(&cfg.DisableSecretFilter, "disable-secrets-filter", "c", cfg.DisableSecretFilter, "Disable filtering sensitive data in secrets from being sent to LLMs")
+	cmd.Flags().BoolVarP(&cfg.DisableMarkdownFormat, "disable-markdown", "d", cfg.DisableMarkdownFormat, "Disable Markdown formatting and colorization of LLM outputs (by default, responses are formatted with Markdown)")
 
 	return cmd
 }
@@ -273,8 +275,8 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 
 	// Customize output format based on the provider
 	outputFormat := ""
-	if cfg.Provider == "google" {
-		outputFormat = "Format your response for a terminal environment without using Markdown or syntax highlighting."
+	if !cfg.DisableMarkdownFormat {
+		outputFormat = "Format your response using Markdown, including headings, lists, and code blocks for improved readability in a terminal environment."
 	} else {
 		outputFormat = "Provide a clear, concise analysis that is easy to read in a terminal environment."
 	}
@@ -441,6 +443,7 @@ func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) 
 	if len(truncPrompt) > cfg.MaxTokens*2 {
 		truncPrompt = truncPrompt[:cfg.MaxTokens*2] + "..."
 	}
+
 	logger.Log("llmIn", "[%s/%s]: %s", cfg.Provider, cfg.Model, truncPrompt)
 
 	// Create a spinner for LLM response
@@ -473,6 +476,51 @@ func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) 
 	return answer, err
 }
 
+// createStreamingCallback creates a callback function for streaming LLM responses with optional Markdown formatting
+func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner) (func(ctx context.Context, chunk []byte) error, func()) {
+	var spinnerStopped sync.Once
+	var mdWriter *formatter.StreamingWriter
+
+	// Create the writer based on configuration
+	if !cfg.DisableMarkdownFormat {
+		// Create a streaming writer that formats Markdown
+		mdWriter = formatter.NewStreamingWriter(os.Stdout)
+	}
+
+	// Create cleanup function for the markdown writer
+	cleanup := func() {
+		if mdWriter != nil {
+			if err := mdWriter.Flush(); err != nil {
+				logger.Log("err", "Error flushing markdown writer: %v", err)
+			}
+			if err := mdWriter.Close(); err != nil {
+				logger.Log("err", "Error closing markdown writer: %v", err)
+			}
+		}
+	}
+
+	// Callback function for processing chunks
+	callback := func(ctx context.Context, chunk []byte) error {
+		// Stop spinner on first chunk
+		spinnerStopped.Do(func() {
+			spinner.Stop()
+			fmt.Print("\r") // Clear the line
+		})
+
+		// Process the chunk with Markdown formatting if enabled
+		if !cfg.DisableMarkdownFormat && mdWriter != nil {
+			_, err := mdWriter.Write(chunk)
+			return err
+		}
+
+		// Default: write the chunk directly
+		fmt.Print(string(chunk))
+		return nil
+	}
+
+	return callback, cleanup
+}
+
 func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
 	llmOptions := []openai.Option{
 		openai.WithModel(cfg.Model),
@@ -495,6 +543,8 @@ func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 
 	// Prepare options for generation
 	options := []llms.CallOption{}
+	var cleanupFn func()
+
 	if stream {
 		// Create a spinner for streaming that stops on first chunk
 		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
@@ -502,21 +552,20 @@ func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 		s.Color("green", "bold")
 		s.Start()
 
-		var spinnerStopped sync.Once
-		callbackFn := func(ctx context.Context, chunk []byte) error {
-			// Stop spinner on first chunk
-			spinnerStopped.Do(func() {
-				s.Stop()
-				fmt.Print("\r") // Clear the line
-			})
-			fmt.Print(string(chunk))
-			return nil
-		}
+		// Create streaming callback with markdown formatting support
+		callbackFn, cleanup := createStreamingCallback(cfg, s)
+		cleanupFn = cleanup
 		options = append(options, llms.WithStreamingFunc(callbackFn))
 	}
 
 	// Generate response
 	response, err := client.Call(context.Background(), prompt, options...)
+
+	// Call cleanup after stream is complete
+	if stream && cleanupFn != nil {
+		defer cleanupFn()
+	}
+
 	if err != nil {
 		return "", fmt.Errorf("openai text generation failed: %w", err)
 	}
@@ -546,6 +595,8 @@ func anthropicRequestWithChat(cfg *config.Config, prompt string, stream bool) (s
 	options := []llms.CallOption{
 		llms.WithModel(cfg.Model),
 	}
+	var cleanupFn func()
+
 	if stream {
 		// Create a spinner for streaming that stops on first chunk
 		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
@@ -553,21 +604,20 @@ func anthropicRequestWithChat(cfg *config.Config, prompt string, stream bool) (s
 		s.Color("green", "bold")
 		s.Start()
 
-		var spinnerStopped sync.Once
-		callbackFn := func(ctx context.Context, chunk []byte) error {
-			// Stop spinner on first chunk
-			spinnerStopped.Do(func() {
-				s.Stop()
-				fmt.Print("\r") // Clear the line
-			})
-			fmt.Print(string(chunk))
-			return nil
-		}
+		// Create streaming callback with markdown formatting support
+		callbackFn, cleanup := createStreamingCallback(cfg, s)
+		cleanupFn = cleanup
 		options = append(options, llms.WithStreamingFunc(callbackFn))
 	}
 
 	// Generate response
 	response, err := client.Call(context.Background(), prompt, options...)
+
+	// Call cleanup after stream is complete
+	if stream && cleanupFn != nil {
+		defer cleanupFn()
+	}
+
 	if err != nil {
 		return "", fmt.Errorf("anthropic text generation failed: %w", err)
 	}
@@ -604,6 +654,8 @@ func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 
 	// Prepare options for generation
 	options := []llms.CallOption{}
+	var cleanupFn func()
+
 	if stream {
 		// Create a spinner for streaming that stops on first chunk
 		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
@@ -611,21 +663,20 @@ func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 		s.Color("green", "bold")
 		s.Start()
 
-		var spinnerStopped sync.Once
-		callbackFn := func(ctx context.Context, chunk []byte) error {
-			// Stop spinner on first chunk
-			spinnerStopped.Do(func() {
-				s.Stop()
-				fmt.Print("\r") // Clear the line
-			})
-			fmt.Print(string(chunk))
-			return nil
-		}
+		// Create streaming callback with markdown formatting support
+		callbackFn, cleanup := createStreamingCallback(cfg, s)
+		cleanupFn = cleanup
 		options = append(options, llms.WithStreamingFunc(callbackFn))
 	}
 
 	// Generate response
 	response, err := client.Call(context.Background(), prompt, options...)
+
+	// Call cleanup after stream is complete
+	if stream && cleanupFn != nil {
+		defer cleanupFn()
+	}
+
 	if err != nil {
 		return "", fmt.Errorf("ollama text generation failed: %w", err)
 	}
@@ -659,6 +710,8 @@ func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 
 	// Prepare options for generation
 	options := []llms.CallOption{}
+	var cleanupFn func()
+
 	if stream {
 		// Create a spinner for streaming that stops on first chunk
 		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
@@ -666,21 +719,20 @@ func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 		s.Color("green", "bold")
 		s.Start()
 
-		var spinnerStopped sync.Once
-		callbackFn := func(ctx context.Context, chunk []byte) error {
-			// Stop spinner on first chunk
-			spinnerStopped.Do(func() {
-				s.Stop()
-				fmt.Print("\r") // Clear the line
-			})
-			fmt.Print(string(chunk))
-			return nil
-		}
+		// Create streaming callback with markdown formatting support
+		callbackFn, cleanup := createStreamingCallback(cfg, s)
+		cleanupFn = cleanup
 		options = append(options, llms.WithStreamingFunc(callbackFn))
 	}
 
 	// Generate response
 	response, err := client.Call(ctx, prompt, options...)
+
+	// Call cleanup after stream is complete
+	if stream && cleanupFn != nil {
+		defer cleanupFn()
+	}
+
 	if err != nil {
 		return "", fmt.Errorf("google AI text generation failed: %w", err)
 	}
