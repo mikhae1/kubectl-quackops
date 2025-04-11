@@ -118,7 +118,7 @@ func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
 		if bytes.HasPrefix(line, []byte("```")) {
 			f.inCodeBlock = !f.inCodeBlock
 			// Use a different color for code block delimiter
-			result.Write([]byte(color.New(color.FgHiYellow).Sprint(string(line))))
+			result.Write([]byte(color.New(color.FgYellow, color.Bold).Sprint(string(line))))
 			if i < len(lines)-1 {
 				result.WriteByte('\n')
 			}
@@ -168,18 +168,18 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 
 			switch level {
 			case 1:
-				return []byte(color.New(color.FgHiBlue, color.Bold).Sprint(string(line)))
+				return []byte(color.New(color.FgBlue, color.Bold).Sprint(string(line)))
 			case 2:
 				return []byte(color.New(color.FgBlue, color.Bold).Sprint(string(line)))
 			default:
-				return []byte(color.New(color.FgCyan, color.Bold).Sprint(string(line)))
+				return []byte(color.New(color.FgBlue, color.Bold).Sprint(string(line)))
 			}
 		}
 	}
 
 	// Blockquotes
 	if bytes.HasPrefix(line, []byte(">")) {
-		return []byte(color.New(color.FgHiGreen).Sprint(string(line)))
+		return []byte(color.New(color.FgGreen).Sprint(string(line)))
 	}
 
 	// Lists (unordered)
@@ -194,9 +194,9 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 		// Color only the bullet and process the rest of the line for other formatting
 		if bulletPos < len(line) {
 			var result bytes.Buffer
-			result.Write(line[:prefixLen])                                                                   // Write leading whitespace
-			result.Write([]byte(color.New(color.FgHiMagenta).Sprint(string(line[prefixLen : prefixLen+1])))) // Color the bullet
-			result.Write([]byte(" "))                                                                        // Add a space after the bullet
+			result.Write(line[:prefixLen])                                                                 // Write leading whitespace
+			result.Write([]byte(color.New(color.FgMagenta).Sprint(string(line[prefixLen : prefixLen+1])))) // Color the bullet
+			result.Write([]byte(" "))                                                                      // Add a space after the bullet
 
 			// Process the rest of the line for inline elements
 			restOfLine := line[bulletPos:]
@@ -221,8 +221,8 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 
 		if numEnd+1 < len(line) && line[numEnd] == '.' && line[numEnd+1] == ' ' {
 			var result bytes.Buffer
-			result.Write(line[:prefixLen])                                                                // Write leading whitespace
-			result.Write([]byte(color.New(color.FgHiMagenta).Sprint(string(line[prefixLen : numEnd+1])))) // Color the number and dot
+			result.Write(line[:prefixLen])                                                              // Write leading whitespace
+			result.Write([]byte(color.New(color.FgMagenta).Sprint(string(line[prefixLen : numEnd+1])))) // Color the number and dot
 
 			// Process the rest of the line for inline elements
 			restOfLine := line[numEnd+2:] // +2 to skip the dot and space
@@ -252,6 +252,9 @@ var (
 
 	// Link [text](url)
 	linkRegex = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+
+	// Numbers and number-letter combinations (like "2m", "500Mi", "(329 days)")
+
 )
 
 // formatInlineElements formats inline Markdown elements
@@ -266,12 +269,12 @@ func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
 	// Process double backticks first to avoid conflicts with single backticks
 	text = doubleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
 		content := doubleBacktickCodeRegex.FindStringSubmatch(match)[1]
-		return "``" + color.New(color.FgHiYellow).Sprint(content) + "``"
+		return "``" + color.New(color.FgYellow).Sprint(content) + "``"
 	})
 
 	text = singleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
 		content := singleBacktickCodeRegex.FindStringSubmatch(match)[1]
-		return "`" + color.New(color.FgHiYellow).Sprint(content) + "`"
+		return "`" + color.New(color.FgYellow).Sprint(content) + "`"
 	})
 
 	// Process links [text](url)
@@ -281,9 +284,9 @@ func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
 		url := parts[2]
 
 		if linkText != "" && url != "" {
-			return color.New(color.FgHiBlue, color.Underline).Sprintf("%s (%s)", linkText, url)
+			return color.New(color.FgBlue, color.Underline).Sprintf("%s (%s)", linkText, url)
 		} else if linkText != "" {
-			return color.New(color.FgHiBlue, color.Underline).Sprint(linkText)
+			return color.New(color.FgBlue, color.Underline).Sprint(linkText)
 		}
 		return match
 	})
@@ -321,7 +324,7 @@ func (f *MarkdownFormatter) colorizeQuotedStrings(text []byte) []byte {
 		result.Write(text[lastIndex:match[0]])
 		// Write colored quoted text
 		quotedText := text[match[0]:match[1]]
-		result.Write([]byte(color.New(color.FgHiGreen).Sprint(string(quotedText))))
+		result.Write([]byte(color.New(color.FgGreen).Sprint(string(quotedText))))
 		lastIndex = match[1]
 	}
 	// Write remaining text after last double quote match
@@ -342,7 +345,7 @@ func (f *MarkdownFormatter) colorizeQuotedStrings(text []byte) []byte {
 		result.Write(leadingSpace)
 
 		// Write colored quoted text (which includes the quotes)
-		result.Write([]byte(color.New(color.FgHiCyan).Sprint(string(quotedContent))))
+		result.Write([]byte(color.New(color.FgCyan).Sprint(string(quotedContent))))
 
 		// Update lastIndex to after this match
 		lastIndex = bytes.Index(remainingText[lastIndex:], fullMatch) + lastIndex + len(fullMatch)
