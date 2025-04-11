@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 	"github.com/briandowns/spinner"
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
+	"github.com/mikhae1/kubectl-quackops/pkg/animator"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
@@ -58,6 +60,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().BoolVarP(&cfg.Verbose, "verbose", "v", cfg.Verbose, "Enable verbose output")
 	cmd.Flags().BoolVarP(&cfg.DisableSecretFilter, "disable-secrets-filter", "c", cfg.DisableSecretFilter, "Disable filtering sensitive data in secrets from being sent to LLMs")
 	cmd.Flags().BoolVarP(&cfg.DisableMarkdownFormat, "disable-markdown", "d", cfg.DisableMarkdownFormat, "Disable Markdown formatting and colorization of LLM outputs (by default, responses are formatted with Markdown)")
+	cmd.Flags().BoolVarP(&cfg.DisableAnimation, "disable-animation", "a", cfg.DisableAnimation, "Disable typewriter animation effect for LLM outputs")
 
 	return cmd
 }
@@ -480,14 +483,24 @@ func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) 
 func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner) (func(ctx context.Context, chunk []byte) error, func()) {
 	var spinnerStopped sync.Once
 	var mdWriter *formatter.StreamingWriter
+	var animWriter *animator.TypewriterWriter
 
-	// Create the writer based on configuration
-	if !cfg.DisableMarkdownFormat {
-		// Create a streaming writer that formats Markdown
-		mdWriter = formatter.NewStreamingWriter(os.Stdout)
+	// Create writers based on configuration
+	var outputWriter io.Writer = os.Stdout
+
+	// Add typewriter animation if enabled
+	if !cfg.DisableAnimation {
+		animWriter = animator.NewTypewriterWriter(outputWriter)
+		outputWriter = animWriter
 	}
 
-	// Create cleanup function for the markdown writer
+	// Add markdown formatting if enabled
+	if !cfg.DisableMarkdownFormat {
+		// Create a streaming writer that formats Markdown
+		mdWriter = formatter.NewStreamingWriter(outputWriter)
+	}
+
+	// Create cleanup function for the writers
 	cleanup := func() {
 		if mdWriter != nil {
 			if err := mdWriter.Flush(); err != nil {
@@ -495,6 +508,15 @@ func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner) (func
 			}
 			if err := mdWriter.Close(); err != nil {
 				logger.Log("err", "Error closing markdown writer: %v", err)
+			}
+		}
+
+		if animWriter != nil {
+			if err := animWriter.Flush(); err != nil {
+				logger.Log("err", "Error flushing animator writer: %v", err)
+			}
+			if err := animWriter.Close(); err != nil {
+				logger.Log("err", "Error closing animator writer: %v", err)
 			}
 		}
 	}
@@ -513,7 +535,13 @@ func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner) (func
 			return err
 		}
 
-		// Default: write the chunk directly
+		// If Markdown is disabled but animation is enabled
+		if cfg.DisableMarkdownFormat && !cfg.DisableAnimation && animWriter != nil {
+			_, err := animWriter.Write(chunk)
+			return err
+		}
+
+		// Default: write the chunk directly to stdout
 		fmt.Print(string(chunk))
 		return nil
 	}

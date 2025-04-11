@@ -35,6 +35,7 @@ type Config struct {
 	Verbose               bool
 	DisableSecretFilter   bool
 	DisableMarkdownFormat bool
+	DisableAnimation      bool
 
 	KubectlPrompts []KubectlPrompt
 }
@@ -72,6 +73,7 @@ func LoadConfig() *Config {
 		AllowedKubectlCmds:    getEnvArg("QU_ALLOWED_KUBECTL_CMDS", defaultAllowedKubectlCmds).([]string),
 		BlockedKubectlCmds:    getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),
 		DisableMarkdownFormat: getEnvArg("QU_DISABLE_MARKDOWN_FORMAT", false).(bool),
+		DisableAnimation:      getEnvArg("QU_DISABLE_ANIMATION", false).(bool),
 		KubectlPrompts: []KubectlPrompt{
 			{
 				MatchRe:        regexp.MustCompile(`\b(error|fail|crash|exception|debug|warn|issue|problem|trouble|fault|bug)s?\b`),
