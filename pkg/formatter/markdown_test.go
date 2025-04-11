@@ -23,13 +23,28 @@ func TestMarkdownFormatter_ProcessChunk(t *testing.T) {
 		},
 		{
 			name:   "code block across chunks",
-			chunks: []string{"```", "code", "block", "```", "\n"},
+			chunks: []string{"```\n", "code\n", "block\n", "```\n"},
 			want:   "```\ncode\nblock\n```\n",
 		},
 		{
 			name:   "multiple lines in chunks",
 			chunks: []string{"Line 1\nLi", "ne 2\nLine 3\n"},
 			want:   "Line 1\nLine 2\nLine 3\n",
+		},
+		{
+			name:   "single backtick code",
+			chunks: []string{"Text with `co", "de` in it", "\n"},
+			want:   "Text with `code` in it\n",
+		},
+		{
+			name:   "double backtick code",
+			chunks: []string{"Text with ``co", "de`` in it", "\n"},
+			want:   "Text with ``code`` in it\n",
+		},
+		{
+			name:   "mixed backtick code",
+			chunks: []string{"Single `code` and double ``co", "de`` here", "\n"},
+			want:   "Single `code` and double ``code`` here\n",
 		},
 	}
 

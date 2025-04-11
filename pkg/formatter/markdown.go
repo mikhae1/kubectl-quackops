@@ -7,16 +7,13 @@ import (
 	"regexp"
 
 	"github.com/fatih/color"
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
 )
 
 // MarkdownFormatter handles streaming Markdown formatting
 type MarkdownFormatter struct {
 	buffer       bytes.Buffer // Buffer for accumulating text
 	colorEnabled bool
-	markdown     goldmark.Markdown
+	inCodeBlock  bool // Track if we're inside a code block
 }
 
 // FormatterOption represents options for configuring the formatter
@@ -37,7 +34,6 @@ func WithColorDisabled() FormatterOption {
 // NewMarkdownFormatter creates a new MarkdownFormatter
 func NewMarkdownFormatter(opts ...FormatterOption) *MarkdownFormatter {
 	f := &MarkdownFormatter{
-		markdown:     goldmark.New(),
 		colorEnabled: true,
 	}
 
@@ -51,8 +47,16 @@ func NewMarkdownFormatter(opts ...FormatterOption) *MarkdownFormatter {
 // ProcessChunk processes a chunk of text, formats any complete lines,
 // and returns the formatted output
 func (f *MarkdownFormatter) ProcessChunk(chunk []byte) []byte {
-	// Add the new chunk to our buffer
-	f.buffer.Write(chunk)
+	// Special handling for code blocks
+	if f.inCodeBlock && !bytes.Contains(chunk, []byte("```")) && !bytes.Contains(chunk, []byte("\n")) {
+		// This is a code block content chunk without delimiters or newlines
+		// In this case, we want to add a newline after it
+		newChunk := append(chunk, '\n')
+		f.buffer.Write(newChunk)
+	} else {
+		// Regular processing
+		f.buffer.Write(chunk)
+	}
 
 	// Find the last newline in the buffer
 	bufferData := f.buffer.Bytes()
@@ -82,8 +86,15 @@ func (f *MarkdownFormatter) Flush() []byte {
 		return nil
 	}
 
+	// Ensure we add a newline to the end of the buffer to process it properly
+	if !bytes.HasSuffix(f.buffer.Bytes(), []byte("\n")) {
+		f.buffer.WriteString("\n")
+	}
+
 	result := f.formatMarkdown(f.buffer.Bytes())
 	f.buffer.Reset()
+	// Reset code block state after flush
+	f.inCodeBlock = false
 	return result
 }
 
@@ -103,8 +114,26 @@ func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
 			continue
 		}
 
-		formattedLine := f.formatLine(line)
-		result.Write(formattedLine)
+		// Check for code block markers (```)
+		if bytes.HasPrefix(line, []byte("```")) {
+			f.inCodeBlock = !f.inCodeBlock
+			// Use a different color for code block delimiter
+			result.Write([]byte(color.New(color.FgHiYellow).Sprint(string(line))))
+			if i < len(lines)-1 {
+				result.WriteByte('\n')
+			}
+			continue
+		}
+
+		// If we're inside a code block, don't process Markdown
+		if f.inCodeBlock {
+			// Color the entire code block content
+			result.Write([]byte(color.New(color.FgYellow).Sprint(string(line))))
+		} else {
+			// Normal Markdown processing
+			formattedLine := f.formatLine(line)
+			result.Write(formattedLine)
+		}
 
 		if i < len(lines)-1 {
 			result.WriteByte('\n')
@@ -209,84 +238,72 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 	return f.formatInlineElements(line)
 }
 
+// Regular expressions for inline Markdown elements
+var (
+	// Bold (**text**)
+	boldRegex = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+
+	// Italic (*text*)
+	italicRegex = regexp.MustCompile(`\*([^*]+)\*`)
+
+	// Code spans (single and double backticks)
+	singleBacktickCodeRegex = regexp.MustCompile("`([^`]+)`")
+	doubleBacktickCodeRegex = regexp.MustCompile("``([^`]+)``")
+
+	// Link [text](url)
+	linkRegex = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+)
+
 // formatInlineElements formats inline Markdown elements
 func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
-	reader := text.NewReader(line)
-	doc := f.markdown.Parser().Parse(reader)
-
-	var result bytes.Buffer
-	source := line
-
-	// Walk the parsed AST and format inline elements
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
-
-		switch n.Kind() {
-		case ast.KindText:
-			text := n.(*ast.Text)
-			// Process the text to colorize quoted strings
-			processedText := f.colorizeQuotedStrings(text.Segment.Value(source))
-			result.Write(processedText)
-
-		case ast.KindEmphasis:
-			em := n.(*ast.Emphasis)
-			var content string
-			for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-				if textNode, ok := c.(*ast.Text); ok {
-					content += string(textNode.Segment.Value(source))
-				}
-			}
-
-			if em.Level == 2 { // Bold
-				result.Write([]byte(color.New(color.Bold).Sprint(content)))
-			} else { // Italic
-				result.Write([]byte(color.New(color.Italic).Sprint(content)))
-			}
-			return ast.WalkSkipChildren, nil
-
-		case ast.KindCodeSpan:
-			var content string
-			for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-				if textNode, ok := c.(*ast.Text); ok {
-					content += string(textNode.Segment.Value(source))
-				}
-			}
-			result.Write([]byte(color.New(color.FgHiYellow).Sprint(content)))
-			return ast.WalkSkipChildren, nil
-
-		case ast.KindLink:
-			var text string
-			var destination string
-
-			if link, ok := n.(*ast.Link); ok {
-				destination = string(link.Destination)
-			}
-
-			for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-				if textNode, ok := c.(*ast.Text); ok {
-					text += string(textNode.Segment.Value(source))
-				}
-			}
-
-			if text != "" && destination != "" {
-				result.Write([]byte(color.New(color.FgHiBlue, color.Underline).Sprintf("%s (%s)", text, destination)))
-			} else if text != "" {
-				result.Write([]byte(color.New(color.FgHiBlue, color.Underline).Sprint(text)))
-			}
-			return ast.WalkSkipChildren, nil
-		}
-
-		return ast.WalkContinue, nil
-	})
-
-	// If nothing was formatted or there was an error, return the original line
-	if result.Len() == 0 {
+	if len(line) == 0 {
 		return line
 	}
 
-	return result.Bytes()
+	text := string(line)
+
+	// Process code spans first (to avoid issues with other elements inside code)
+	// Process double backticks first to avoid conflicts with single backticks
+	text = doubleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
+		content := doubleBacktickCodeRegex.FindStringSubmatch(match)[1]
+		return "``" + color.New(color.FgHiYellow).Sprint(content) + "``"
+	})
+
+	text = singleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
+		content := singleBacktickCodeRegex.FindStringSubmatch(match)[1]
+		return "`" + color.New(color.FgHiYellow).Sprint(content) + "`"
+	})
+
+	// Process links [text](url)
+	text = linkRegex.ReplaceAllStringFunc(text, func(match string) string {
+		parts := linkRegex.FindStringSubmatch(match)
+		linkText := parts[1]
+		url := parts[2]
+
+		if linkText != "" && url != "" {
+			return color.New(color.FgHiBlue, color.Underline).Sprintf("%s (%s)", linkText, url)
+		} else if linkText != "" {
+			return color.New(color.FgHiBlue, color.Underline).Sprint(linkText)
+		}
+		return match
+	})
+
+	// Process bold text
+	text = boldRegex.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract the bold content (without asterisks)
+		content := boldRegex.FindStringSubmatch(match)[1]
+		return color.New(color.Bold).Sprint(content)
+	})
+
+	// Process italic text
+	text = italicRegex.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract the italic content (without asterisks)
+		content := italicRegex.FindStringSubmatch(match)[1]
+		return color.New(color.Italic).Sprint(content)
+	})
+
+	// Process quoted strings
+	return f.colorizeQuotedStrings([]byte(text))
 }
 
 // colorizeQuotedStrings processes text to colorize content in double or single quotes

@@ -76,4 +76,4 @@ options := []llms.CallOption{
 
 ## Implementation Details
 
-The formatter uses the [goldmark](https://github.com/yuin/goldmark) library for parsing Markdown and [fatih/color](https://github.com/fatih/color) for ANSI color formatting.
+The formatter uses regular expressions for parsing Markdown elements and [fatih/color](https://github.com/fatih/color) for ANSI color formatting.
