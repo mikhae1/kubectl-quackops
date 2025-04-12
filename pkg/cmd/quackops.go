@@ -550,6 +550,9 @@ func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner) (func
 }
 
 func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
+	ctx := context.Background()
+
+	// Set OpenAI client options
 	llmOptions := []openai.Option{
 		openai.WithModel(cfg.Model),
 	}
@@ -558,114 +561,41 @@ func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 		llmOptions = append(llmOptions, openai.WithBaseURL(cfg.ApiURL))
 	}
 
+	// Create OpenAI client
 	client, err := openai.New(llmOptions...)
 	if err != nil {
 		return "", fmt.Errorf("failed to create OpenAI client: %w", err)
 	}
 
-	// Create a human message from the prompt
-	humanMessage := llms.HumanChatMessage{Content: prompt}
-
-	// Add to chat history
-	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
-
-	// Prepare options for generation
-	options := []llms.CallOption{}
-	var cleanupFn func()
-
-	if stream {
-		// Create a spinner for streaming that stops on first chunk
-		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
-		s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
-		s.Color("green", "bold")
-		s.Start()
-
-		// Create streaming callback with markdown formatting support
-		callbackFn, cleanup := createStreamingCallback(cfg, s)
-		cleanupFn = cleanup
-		options = append(options, llms.WithStreamingFunc(callbackFn))
-	}
-
-	// Generate response
-	response, err := client.Call(context.Background(), prompt, options...)
-
-	// Call cleanup after stream is complete
-	if stream && cleanupFn != nil {
-		defer cleanupFn()
-	}
-
-	if err != nil {
-		return "", fmt.Errorf("openai text generation failed: %w", err)
-	}
-
-	// Add the response to the chat history
-	cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response})
-
-	if stream {
-		fmt.Println() // Add newline after streaming
-	}
-	return response, nil
+	// Use the common LLM request handler
+	return handleLLMRequest(ctx, cfg, client, prompt, stream, nil)
 }
 
 func anthropicRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
+	ctx := context.Background()
+
+	// Create Anthropic client
 	client, err := anthropic.New()
 	if err != nil {
 		return "", fmt.Errorf("failed to create Anthropic client: %w", err)
 	}
 
-	// Create a human message from the prompt
-	humanMessage := llms.HumanChatMessage{Content: prompt}
-
-	// Add to chat history
-	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
-
-	// Prepare options for generation
-	options := []llms.CallOption{
+	// Use the common LLM request handler
+	return handleLLMRequest(ctx, cfg, client, prompt, stream, []llms.CallOption{
 		llms.WithModel(cfg.Model),
-	}
-	var cleanupFn func()
-
-	if stream {
-		// Create a spinner for streaming that stops on first chunk
-		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
-		s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
-		s.Color("green", "bold")
-		s.Start()
-
-		// Create streaming callback with markdown formatting support
-		callbackFn, cleanup := createStreamingCallback(cfg, s)
-		cleanupFn = cleanup
-		options = append(options, llms.WithStreamingFunc(callbackFn))
-	}
-
-	// Generate response
-	response, err := client.Call(context.Background(), prompt, options...)
-
-	// Call cleanup after stream is complete
-	if stream && cleanupFn != nil {
-		defer cleanupFn()
-	}
-
-	if err != nil {
-		return "", fmt.Errorf("anthropic text generation failed: %w", err)
-	}
-
-	// Add the response to the chat history
-	cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response})
-
-	if stream {
-		fmt.Println() // Add newline after streaming
-	}
-	return response, nil
+	})
 }
 
 func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
+	ctx := context.Background()
+
 	// Make sure the API URL is properly formatted - it should not end with /api
 	serverURL := cfg.ApiURL
 	if strings.HasSuffix(serverURL, "/api") {
 		serverURL = strings.TrimSuffix(serverURL, "/api")
 	}
 
+	// Create Ollama client
 	client, err := ollama.New(
 		ollama.WithModel(cfg.Model),
 		ollama.WithServerURL(serverURL),
@@ -674,48 +604,8 @@ func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 		return "", fmt.Errorf("failed to create Ollama client: %w", err)
 	}
 
-	// Create a human message from the prompt
-	humanMessage := llms.HumanChatMessage{Content: prompt}
-
-	// Add to chat history
-	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
-
-	// Prepare options for generation
-	options := []llms.CallOption{}
-	var cleanupFn func()
-
-	if stream {
-		// Create a spinner for streaming that stops on first chunk
-		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
-		s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
-		s.Color("green", "bold")
-		s.Start()
-
-		// Create streaming callback with markdown formatting support
-		callbackFn, cleanup := createStreamingCallback(cfg, s)
-		cleanupFn = cleanup
-		options = append(options, llms.WithStreamingFunc(callbackFn))
-	}
-
-	// Generate response
-	response, err := client.Call(context.Background(), prompt, options...)
-
-	// Call cleanup after stream is complete
-	if stream && cleanupFn != nil {
-		defer cleanupFn()
-	}
-
-	if err != nil {
-		return "", fmt.Errorf("ollama text generation failed: %w", err)
-	}
-
-	// Add the response to the chat history
-	cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response})
-
-	if stream {
-		fmt.Println() // Add newline after streaming
-	}
-	return response, nil
+	// Use the common LLM request handler
+	return handleLLMRequest(ctx, cfg, client, prompt, stream, nil)
 }
 
 func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (string, error) {
@@ -730,16 +620,26 @@ func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 		return "", fmt.Errorf("failed to create Google AI client: %w", err)
 	}
 
+	// Use the common LLM request handler
+	return handleLLMRequest(ctx, cfg, client, prompt, stream, []llms.CallOption{
+		llms.WithMaxTokens(cfg.MaxTokens / 2),
+	})
+}
+
+// handleLLMRequest handles common LLM request logic for all providers
+func handleLLMRequest(ctx context.Context, cfg *config.Config, client llms.Model, prompt string, stream bool, baseOptions []llms.CallOption) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// Create a human message from the prompt
 	humanMessage := llms.HumanChatMessage{Content: prompt}
 
 	// Add to chat history
 	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
 
-	// Google AI may truncate responses without this parameter
-	options := []llms.CallOption{
-		llms.WithMaxTokens(cfg.MaxTokens / 2),
-	}
+	// Prepare options for generation
+	options := baseOptions
 	var cleanupFn func()
 
 	if stream {
@@ -756,7 +656,7 @@ func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 	}
 
 	// Generate response
-	response, err := client.Call(ctx, prompt, options...)
+	response, err := llms.GenerateFromSinglePrompt(ctx, client, prompt, options...)
 
 	// Call cleanup after stream is complete
 	if stream && cleanupFn != nil {
@@ -764,7 +664,7 @@ func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("google AI text generation failed: %w", err)
+		return "", fmt.Errorf("%s text generation failed: %w", cfg.Provider, err)
 	}
 
 	// Add the response to the chat history
