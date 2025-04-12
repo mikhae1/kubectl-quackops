@@ -114,7 +114,35 @@ func processCommands(cfg *config.Config, args []string) error {
 		}
 	}
 
-	rl, err := readline.New("> ")
+	// Create a more modern prompt
+	rlConfig := &readline.Config{
+		Prompt:          color.New(color.Bold).Sprint("❯ "),
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+	}
+
+	var rl *readline.Instance
+	// Add listener to handle $ at beginning of line
+	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
+		// Check if the line has $ after the current key event
+		hasCommandPrefix := len(line) > 0 && line[0] == '$'
+
+		// Update prompt based on current state
+		if hasCommandPrefix {
+			rl.SetPrompt(color.New(color.FgCyan, color.Bold).Sprint("$ ❯ "))
+		} else {
+			rl.SetPrompt(color.New(color.Bold).Sprint("❯ "))
+		}
+
+		// Always reset on Enter or Interrupt
+		if key == readline.CharEnter || key == readline.CharInterrupt {
+			rl.SetPrompt(color.New(color.Bold).Sprint("❯ "))
+		}
+
+		return line, pos, false
+	})
+
+	rl, err := readline.NewEx(rlConfig)
 	if err != nil {
 		log.Fatalf("Failed to create interactive prompt instance: %v", err)
 	}
