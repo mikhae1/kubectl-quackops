@@ -31,6 +31,7 @@ type Config struct {
 	Retries               int
 	Timeout               int
 	MaxTokens             int
+	SpinnerTimeout        int
 	SafeMode              bool
 	Verbose               bool
 	DisableSecretFilter   bool
@@ -74,6 +75,7 @@ func LoadConfig() *Config {
 		BlockedKubectlCmds:    getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),
 		DisableMarkdownFormat: getEnvArg("QU_DISABLE_MARKDOWN_FORMAT", false).(bool),
 		DisableAnimation:      getEnvArg("QU_DISABLE_ANIMATION", false).(bool),
+		SpinnerTimeout:        80,
 		KubectlPrompts: []KubectlPrompt{
 			{
 				MatchRe:        regexp.MustCompile(`\b(error|fail|crash|exception|debug|warn|issue|problem|trouble|fault|bug)s?\b`),

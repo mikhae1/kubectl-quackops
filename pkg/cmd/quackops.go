@@ -192,7 +192,7 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 	var cmdResults []CmdRes
 
 	// Create a spinner for diagnostic information gathering
-	s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Suffix = " Gathering diagnostic information..."
 	s.Color("cyan", "bold")
 	s.Start()
@@ -450,7 +450,7 @@ func llmRequest(cfg *config.Config, prompt string, stream bool) (string, error) 
 	logger.Log("llmIn", "[%s/%s]: %s", cfg.Provider, cfg.Model, truncPrompt)
 
 	// Create a spinner for LLM response
-	s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
 	s.Color("green", "bold")
 
@@ -644,7 +644,7 @@ func handleLLMRequest(ctx context.Context, cfg *config.Config, client llms.Model
 
 	if stream {
 		// Create a spinner for streaming that stops on first chunk
-		s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+		s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 		s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
 		s.Color("green", "bold")
 		s.Start()
@@ -705,7 +705,7 @@ func getKubectlCmds(cfg *config.Config, prompt string) ([]string, error) {
 	augPrompt := finalPrompt + "\n\nIssue description: " + prompt + "\n\nProvide commands as a plain list without descriptions or backticks."
 
 	// Create a spinner for command generation
-	s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Suffix = " Generating diagnostic commands..."
 	s.Color("blue", "bold")
 	s.Start()
@@ -819,7 +819,7 @@ func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
 	}, len(commands))
 
 	// Create a spinner for execution status - using a more visually appealing spinner (dots)
-	s := spinner.New(spinner.CharSets[11], 80*time.Millisecond)
+	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Suffix = fmt.Sprintf(" Executing %d commands...", len(commands))
 	s.Color("cyan", "bold")
 	s.Start()
