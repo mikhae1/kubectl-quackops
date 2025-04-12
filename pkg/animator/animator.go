@@ -35,7 +35,7 @@ func NewTypewriterWriter(outWriter io.Writer, options ...TypewriterOption) *Type
 	ctx, cancel := context.WithCancel(context.Background())
 	tw := &TypewriterWriter{
 		outWriter:      outWriter,
-		delay:          15 * time.Millisecond, // Default delay between characters
+		delay:          5 * time.Millisecond, // Default delay between characters
 		ctx:            ctx,
 		cancel:         cancel,
 		charBuffer:     make([]byte, 0),

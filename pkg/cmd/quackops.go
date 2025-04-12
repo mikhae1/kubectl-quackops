@@ -192,7 +192,7 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 	var cmdResults []CmdRes
 
 	// Create a spinner for diagnostic information gathering
-	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
+	s := spinner.New(spinner.CharSets[11], 10*time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Suffix = " Gathering diagnostic information..."
 	s.Color("cyan", "bold")
 	s.Start()

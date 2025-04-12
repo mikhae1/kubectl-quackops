@@ -172,3 +172,54 @@ func TestFormattedMarkdown(t *testing.T) {
 		})
 	}
 }
+
+func TestCodeBlockMarkerRegex(t *testing.T) {
+	// Define the regex pattern directly in the test (not using the one from markdown.go)
+	regex := codeBlockMarkerRegex
+
+	testCases := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{
+			name:     "Basic code block",
+			input:    "```",
+			expected: true,
+		},
+		{
+			name:     "Code block with language",
+			input:    "```go",
+			expected: true,
+		},
+		{
+			name:     "Code block with hyphenated language",
+			input:    "```bash-script",
+			expected: true,
+		},
+		{
+			name:     "Code block with space",
+			input:    " ```bash",
+			expected: true,
+		},
+		{
+			name:     "Not a code block - indent",
+			input:    "not```bash",
+			expected: false,
+		},
+		{
+			name:     "Special chars in lang",
+			input:    "```c++",
+			expected: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := regex.MatchString(tc.input)
+			if result != tc.expected {
+				t.Errorf("expected %v, got %v for input: %s", tc.expected, result, tc.input)
+			}
+		})
+	}
+}

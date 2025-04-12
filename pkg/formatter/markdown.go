@@ -9,6 +9,27 @@ import (
 	"github.com/fatih/color"
 )
 
+// Regular expressions for inline Markdown elements
+var (
+	// Bold (**text**)
+	boldRegex = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+
+	// Italic (*text*)
+	italicRegex = regexp.MustCompile(`\*([^*]+)\*`)
+
+	// Code spans (single and double backticks)
+	singleBacktickCodeRegex = regexp.MustCompile("`([^`]+)`")
+	doubleBacktickCodeRegex = regexp.MustCompile("``([^`]+)``")
+
+	// Link [text](url)
+	linkRegex = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+
+	// Code block markers (```language)
+	codeBlockMarkerRegex = regexp.MustCompile(`(^|\s)` + "```" + `([a-zA-Z0-9_+-]*)`)
+
+	// Numbers and number-letter combinations (like "2m", "500Mi", "(329 days)")
+)
+
 // MarkdownFormatter handles streaming Markdown formatting
 type MarkdownFormatter struct {
 	buffer       bytes.Buffer // Buffer for accumulating text
@@ -48,11 +69,17 @@ func NewMarkdownFormatter(opts ...FormatterOption) *MarkdownFormatter {
 // and returns the formatted output
 func (f *MarkdownFormatter) ProcessChunk(chunk []byte) []byte {
 	// Special handling for code blocks
-	if f.inCodeBlock && !bytes.Contains(chunk, []byte("```")) && !bytes.Contains(chunk, []byte("\n")) {
-		// This is a code block content chunk without delimiters or newlines
-		// In this case, we want to add a newline after it
-		newChunk := append(chunk, '\n')
-		f.buffer.Write(newChunk)
+	if f.inCodeBlock && !bytes.Contains(chunk, []byte("```")) {
+		// Inside a code block but not at the end marker
+		// Check if the chunk already has a newline
+		if !bytes.Contains(chunk, []byte("\n")) {
+			// This is a code block content chunk without delimiters or newlines
+			// We shouldn't automatically add a newline, as it might break code lines
+			f.buffer.Write(chunk)
+		} else {
+			// If it does have a newline, process normally
+			f.buffer.Write(chunk)
+		}
 	} else {
 		// Regular processing
 		f.buffer.Write(chunk)
@@ -114,11 +141,11 @@ func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
 			continue
 		}
 
-		// Check for code block markers (```)
-		if bytes.HasPrefix(line, []byte("```")) {
+		// Check for code block markers (```) with optional language specification
+		if codeBlockMarkerRegex.Match(line) {
 			f.inCodeBlock = !f.inCodeBlock
 			// Use a different color for code block delimiter
-			result.Write([]byte(color.New(color.FgYellow, color.Bold).Sprint(string(line))))
+			result.Write(line)
 			if i < len(lines)-1 {
 				result.WriteByte('\n')
 			}
@@ -127,8 +154,7 @@ func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
 
 		// If we're inside a code block, don't process Markdown
 		if f.inCodeBlock {
-			// Color the entire code block content
-			result.Write([]byte(color.New(color.FgYellow).Sprint(string(line))))
+			result.Write([]byte(color.New(color.Italic).Sprint(string(line))))
 		} else {
 			// Normal Markdown processing
 			formattedLine := f.formatLine(line)
@@ -238,25 +264,6 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 	return f.formatInlineElements(line)
 }
 
-// Regular expressions for inline Markdown elements
-var (
-	// Bold (**text**)
-	boldRegex = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-
-	// Italic (*text*)
-	italicRegex = regexp.MustCompile(`\*([^*]+)\*`)
-
-	// Code spans (single and double backticks)
-	singleBacktickCodeRegex = regexp.MustCompile("`([^`]+)`")
-	doubleBacktickCodeRegex = regexp.MustCompile("``([^`]+)``")
-
-	// Link [text](url)
-	linkRegex = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-
-	// Numbers and number-letter combinations (like "2m", "500Mi", "(329 days)")
-
-)
-
 // formatInlineElements formats inline Markdown elements
 func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
 	if len(line) == 0 {
@@ -269,12 +276,12 @@ func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
 	// Process double backticks first to avoid conflicts with single backticks
 	text = doubleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
 		content := doubleBacktickCodeRegex.FindStringSubmatch(match)[1]
-		return "``" + color.New(color.FgYellow).Sprint(content) + "``"
+		return "``" + color.New(color.FgHiCyan).Sprint(content) + "``"
 	})
 
 	text = singleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
 		content := singleBacktickCodeRegex.FindStringSubmatch(match)[1]
-		return "`" + color.New(color.FgYellow).Sprint(content) + "`"
+		return "`" + color.New(color.FgHiCyan).Sprint(content) + "`"
 	})
 
 	// Process links [text](url)
