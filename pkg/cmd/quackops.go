@@ -736,8 +736,10 @@ func googleRequestWithChat(cfg *config.Config, prompt string, stream bool) (stri
 	// Add to chat history
 	cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
 
-	// Prepare options for generation
-	options := []llms.CallOption{}
+	// Google AI may truncate responses without this parameter
+	options := []llms.CallOption{
+		llms.WithMaxTokens(cfg.MaxTokens / 2),
+	}
 	var cleanupFn func()
 
 	if stream {
