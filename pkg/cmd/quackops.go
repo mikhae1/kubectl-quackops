@@ -36,12 +36,6 @@ import (
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
-type CmdRes struct {
-	Cmd string
-	Out string
-	Err error
-}
-
 func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cfg := config.LoadConfig()
 	cmd := &cobra.Command{
@@ -109,6 +103,9 @@ func displayCurrentContext(cfg *config.Config) error {
 }
 
 func processCommands(cfg *config.Config, args []string) error {
+	// Clear stored command results at the beginning of a new session
+	cfg.StoredUserCmdResults = nil
+
 	if len(args) > 0 {
 		userPrompt := strings.TrimSpace(args[0])
 		if userPrompt != "" {
@@ -116,7 +113,6 @@ func processCommands(cfg *config.Config, args []string) error {
 		}
 	}
 
-	// Create a more modern prompt
 	rlConfig := &readline.Config{
 		Prompt:       color.New(color.Bold).Sprint("❯ "),
 		EOFPrompt:    "exit",
@@ -193,14 +189,35 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	var augPrompt string
 	var err error
 
-	if userMsgCount%2 == 1 || strings.HasPrefix(userPrompt, "$") || cfg.MaxTokens > 16000 {
-		augPrompt, err = retrieveRAG(cfg, userPrompt, lastTextPrompt)
+	// If the prompt starts with $, execute the command and store the result
+	// We don't run LLM query after command execution
+	if strings.HasPrefix(userPrompt, "$") {
+		// Execute the command
+		cmdResults, err := execDiagCmds(cfg, []string{userPrompt})
 		if err != nil {
-			if strings.HasPrefix(userPrompt, "$") {
-				fmt.Println(color.HiRedString(err.Error()))
-			} else {
-				logger.Log("err", "Error retrieving RAG: %v", err)
-			}
+			fmt.Println(color.HiRedString(err.Error()))
+		}
+		// Store the command results for the next user prompt
+		if len(cmdResults) > 0 {
+			cfg.StoredUserCmdResults = append(cfg.StoredUserCmdResults, cmdResults...)
+		}
+		return nil
+	}
+
+	// Non-command user prompts
+	if userMsgCount%2 == 1 || cfg.MaxTokens > 16000 {
+		if len(cfg.StoredUserCmdResults) > 0 {
+			// Use stored command results instead of running diagnostic commands
+			augPrompt, err = createAugPromptFromCmdResults(cfg, userPrompt, cfg.StoredUserCmdResults)
+			// Clear stored results after using them
+			cfg.StoredUserCmdResults = nil
+		} else {
+			// No stored commands, retrieve diagnostic commands as before
+			augPrompt, err = retrieveRAG(cfg, userPrompt, lastTextPrompt)
+		}
+
+		if err != nil {
+			logger.Log("err", "Error retrieving RAG: %v", err)
 		}
 	}
 
@@ -219,7 +236,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 // retrieveRAG retrieves the data for RAG
 func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augPrompt string, err error) {
-	var cmdResults []CmdRes
+	var cmdResults []config.CmdRes
 
 	// Create a spinner for diagnostic information gathering
 	s := spinner.New(spinner.CharSets[11], 10*time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
@@ -228,26 +245,21 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 	s.Start()
 	defer s.Stop()
 
-	if strings.HasPrefix(prompt, "$") {
-		// Direct command execution
-		cmdResults, err = execDiagCmds(cfg, []string{prompt})
-	} else {
-		// Retrieve and execute relevant kubectl commands based on the user's query
-		for i := 0; i < cfg.Retries; i++ {
-			var cmds []string
-			cmds, err = getKubectlCmds(cfg, prompt)
-			if err != nil {
-				logger.Log("warn", "Error retrieving kubectl commands: %v", err)
-				continue
-			}
-
-			cmdResults, err = execDiagCmds(cfg, slices.Compact(cmds))
-			if len(cmdResults) == 0 {
-				logger.Log("warn", "No results found, retrying... %d/%d", i, cfg.Retries)
-				continue
-			}
-			break
+	// Retrieve and execute relevant kubectl commands based on the user's query
+	for i := 0; i < cfg.Retries; i++ {
+		var cmds []string
+		cmds, err = getKubectlCmds(cfg, prompt)
+		if err != nil {
+			logger.Log("warn", "Error retrieving kubectl commands: %v", err)
+			continue
 		}
+
+		cmdResults, err = execDiagCmds(cfg, slices.Compact(cmds))
+		if len(cmdResults) == 0 {
+			logger.Log("warn", "No results found, retrying... %d/%d", i, cfg.Retries)
+			continue
+		}
+		break
 	}
 
 	// Process command outputs
@@ -302,9 +314,6 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 
 	// Determine the actual user prompt
 	userPrompt := prompt
-	if strings.HasPrefix(prompt, "$") {
-		userPrompt = lastTextPrompt
-	}
 
 	// Customize output format based on the provider
 	outputFormat := ""
@@ -335,6 +344,96 @@ func retrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string) (augP
 	}
 
 	return augPrompt, err
+}
+
+// createAugPromptFromCmdResults formats command results for RAG in the same way as retrieveRAG
+func createAugPromptFromCmdResults(cfg *config.Config, prompt string, cmdResults []config.CmdRes) (augPrompt string, err error) {
+	// Process command outputs in the same way as retrieveRAG
+	var contextBuilder strings.Builder
+
+	// Format each command result for context
+	validResults := 0
+	for _, cmd := range cmdResults {
+		if cmd.Err != nil {
+			continue
+		}
+		validResults++
+
+		// Filter sensitive data if enabled
+		output := cmd.Out
+		if !cfg.DisableSecretFilter {
+			output = filterSensitiveData(output)
+		}
+
+		// Format the command and its output
+		contextBuilder.WriteString("Command: ")
+		contextBuilder.WriteString(cmd.Cmd)
+		contextBuilder.WriteString("\n\nOutput:\n")
+		contextBuilder.WriteString(output)
+		contextBuilder.WriteString("\n\n---\n\n")
+	}
+
+	// If no valid results, return empty prompt
+	if validResults == 0 {
+		return "", fmt.Errorf("no valid command results found")
+	}
+
+	contextData := contextBuilder.String()
+
+	// If the context is too large, intelligently truncate it rather than just cutting it off
+	if len(tokenize(contextData)) > cfg.MaxTokens*2 {
+		// Split into sections by command
+		sections := strings.Split(contextData, "\n\n---\n\n")
+
+		// Keep the first and last sections (usually most important)
+		var truncatedBuilder strings.Builder
+		if len(sections) >= 2 {
+			truncatedBuilder.WriteString(sections[0])
+			truncatedBuilder.WriteString("\n\n---\n\n")
+
+			// Add a note about truncation
+			truncatedBuilder.WriteString("(Some command outputs were omitted for brevity)\n\n---\n\n")
+
+			// Add the last section
+			truncatedBuilder.WriteString(sections[len(sections)-1])
+		} else {
+			// If there's only one section, truncate it
+			truncatedBuilder.WriteString(contextData[:cfg.MaxTokens*2])
+			truncatedBuilder.WriteString("\n...(output truncated)...")
+		}
+
+		contextData = truncatedBuilder.String()
+	}
+
+	// Customize output format based on the provider
+	outputFormat := ""
+	if !cfg.DisableMarkdownFormat {
+		outputFormat = "Format your response using Markdown, including headings, lists, and code blocks for improved readability in a terminal environment."
+	} else {
+		outputFormat = "Provide a clear, concise analysis that is easy to read in a terminal environment."
+	}
+
+	// Construct the final prompt with clear instructions
+	if len(contextData) > 0 {
+		augPrompt = fmt.Sprintf(`# Kubernetes Diagnostic Analysis
+
+## Command Outputs
+%s
+
+## Task
+%s
+
+## Guidelines
+- You are an experienced Kubernetes administrator with deep expertise in diagnostics
+- Analyze the command outputs above and provide insights on the issue
+- Identify potential problems or anomalies in the cluster state
+- Suggest next steps or additional commands if needed
+- %s
+
+`, contextData, prompt, outputFormat)
+	}
+
+	return augPrompt, nil
 }
 
 // Hide sensitive data from Kubectl outputs
@@ -836,9 +935,10 @@ Output format:
 	return systemPrompt
 }
 
-func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
+func execDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error) {
+	logger.Log("info", "Executing diagnostic commands: %v", commands)
 	var wg sync.WaitGroup
-	results := make([]CmdRes, len(commands))
+	results := make([]config.CmdRes, len(commands))
 	startTime := time.Now()
 
 	// Create channels to track progress
@@ -928,11 +1028,14 @@ func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
 					firstCommandCompleted = true
 				}
 
-				fmt.Printf("%s %s %s %s\n",
-					checkmark,
-					cmdLabel,
-					color.CyanString(cmd),
-					color.HiBlackString("in %dms", cmdDuration.Milliseconds()))
+				// Skip printing the summary for $ commands since we're showing the detailed output
+				if !strings.HasPrefix(cmd, "$") {
+					fmt.Printf("%s %s %s %s\n",
+						checkmark,
+						cmdLabel,
+						color.CyanString(cmd),
+						color.HiBlackString("in %dms", cmdDuration.Milliseconds()))
+				}
 			}
 		}(i, command)
 	}
@@ -962,12 +1065,12 @@ func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
 	for _, res := range results {
 		if !cfg.Verbose {
 			logger.Log("in", "$ %s", res.Cmd)
-			if res.Out != "" {
+			if res.Out != "" && !strings.HasPrefix(res.Cmd, "$") {
 				logger.Log("out", res.Out)
 			}
 		}
 		if res.Err != nil {
-			if !cfg.Verbose {
+			if !cfg.Verbose && !strings.HasPrefix(res.Cmd, "$") {
 				logger.Log("err", "%v", res.Err)
 			}
 			if err == nil {
@@ -981,7 +1084,7 @@ func execDiagCmds(cfg *config.Config, commands []string) ([]CmdRes, error) {
 	return results, err
 }
 
-func execKubectlCmd(cfg *config.Config, command string) (result CmdRes) {
+func execKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 	result.Cmd = command
 
 	if !strings.HasPrefix(command, "kubectl") && !strings.HasPrefix(command, "$") {
@@ -1021,7 +1124,7 @@ func execKubectlCmd(cfg *config.Config, command string) (result CmdRes) {
 	}
 
 	// Only print verbose output when requested
-	if cfg.Verbose {
+	if cfg.Verbose || strings.HasPrefix(result.Cmd, "$") {
 		dim := color.New(color.Faint).SprintFunc()
 		bold := color.New(color.Bold).SprintFunc()
 

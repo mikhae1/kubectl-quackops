@@ -10,6 +10,13 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
+// CmdRes represents the result of executing a command
+type CmdRes struct {
+	Cmd string
+	Out string
+	Err error
+}
+
 type KubectlPrompt = struct {
 	MatchRe         *regexp.Regexp
 	Prompt          string
@@ -39,7 +46,8 @@ type Config struct {
 	DisableAnimation      bool
 	MaxCompletions        int
 
-	KubectlPrompts []KubectlPrompt
+	KubectlPrompts       []KubectlPrompt
+	StoredUserCmdResults []CmdRes
 }
 
 // LoadConfig initializes the application configuration
@@ -78,6 +86,7 @@ func LoadConfig() *Config {
 		DisableAnimation:      getEnvArg("QU_DISABLE_ANIMATION", false).(bool),
 		MaxCompletions:        getEnvArg("QU_MAX_COMPLETIONS", 50).(int),
 		SpinnerTimeout:        80,
+		StoredUserCmdResults:  []CmdRes{},
 		KubectlPrompts: []KubectlPrompt{
 			{
 				MatchRe:        regexp.MustCompile(`\b(error|fail|crash|exception|debug|warn|issue|problem|trouble|fault|bug)s?\b`),
