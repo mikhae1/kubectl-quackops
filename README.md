@@ -18,18 +18,23 @@ Built with flexibility in mind, QuackOps works seamlessly with various LLM provi
   - **[OpenAI](https://openai.com/)** - Leverage cutting-edge models like o3 for complex diagnostics
   - **[Anthropic](https://anthropic.com/)** - Utilize Claude models for reliable technical analysis
 
-- **Interactive Troubleshooting:**
-  - Start conversational debugging sessions to solve complex problems
-  - Execute arbitrary commands directly with the `$` prefix (e.g., `$ kubectl exec -it my-pod -- /bin/bash`)
-  - Maintain context across multiple interactions
+- **Interactive Sessions:**
+  - Execute arbitrary commands directly with the `$` prefix (e.g., `$ kubectl describe my-pod`)
+  - Maintain context across multiple queries for deeper troubleshooting sessions
+  - Chain commands together to analyze complex issues step-by-step
+  - Auto-completion support for cli commands through tab completion
+  - Interactive shell-like experience with command history navigation (up/down arrows)
 
-- **Enterprise-Ready Security:**
+- **Security:**
   - **Secret Protection:** Automatically filters sensitive data from output sent to LLMs
   - **Safe Mode:** Review and approve commands before execution with `--safe-mode` flag
   - **Command Whitelisting:** Prevents destructive operations with configurable command restrictions
 
+- **Syntax highlighting:**
+  - Markdown-based output formatting with color-coded elements for better readability
+
 - **DevOps Workflow Integration:**
-  - Works in CI/CD pipelines for automated diagnostics
+  - Works in CI/CD pipelines for automated diagnostics in non interactive mode
 
 ## 🔍 Use Cases
 
@@ -276,6 +281,24 @@ QuackOps is highly configurable through environment variables or command-line fl
 | `-c, --disable-secrets-filter` | Disable filtering sensitive data in secrets from being sent to LLMs | `false` |
 | `-d, --disable-markdown` | Disable Markdown formatting and colorization of LLM outputs | `false` |
 | `-a, --disable-animation` | Disable typewriter animation effect for LLM outputs | `false` |
+
+## 🔄 Shell Completions
+
+QuackOps provides intelligent tab completion for command execution mode (commands starting with `$`), leveraging bash-compatible shell completions:
+
+- **Command Completions:** When typing `$ `, type and press Tab to see available commands.
+- **Argument Completions:** QuackOps supports completions for cli tools like `kubectl`, `helm`, and other CLI tools that implement completion.
+- **File Path Completions:** Automatically complete file paths when navigating the filesystem.
+
+Note that completions rely on bash-compatible shell completion functions being available on your system. The feature works best in environments where bash completion is properly configured.
+
+### Example Usage
+
+```sh
+$ kubectl <tab>              # Shows kubectl subcommands
+$ kubectl get po<tab>        # Completes to 'pods'
+$ kubectl get pods -n <tab>  # Shows available namespaces
+```
 
 ## 🛡️ Security Considerations
 
