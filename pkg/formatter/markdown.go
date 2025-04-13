@@ -276,7 +276,7 @@ func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
 	// Process double backticks first to avoid conflicts with single backticks
 	text = doubleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
 		content := doubleBacktickCodeRegex.FindStringSubmatch(match)[1]
-		return "``" + color.New(color.FgHiCyan).Sprint(content) + "``"
+		return "`" + color.New(color.FgHiCyan, color.Bold).Sprint(content) + "`"
 	})
 
 	text = singleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {

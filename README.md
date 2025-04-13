@@ -217,7 +217,7 @@ For users requiring extensive context analysis and handling large command output
 
 3. **Start QuackOps:**
    ```sh
-   kubectl quackops -p google -m gemini-2.0-flash-exp
+   kubectl quackops -p google -m gemini-2.0-flash-thinking-exp
    ```
 
 ### Anthropic: Reliable Technical Analysis
