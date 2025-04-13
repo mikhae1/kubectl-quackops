@@ -129,7 +129,7 @@ func processCommands(cfg *config.Config, args []string) error {
 
 		// Update prompt based on current state
 		if hasCommandPrefix {
-			rl.SetPrompt(color.New(color.FgCyan, color.Bold).Sprint("$ ❯ "))
+			rl.SetPrompt(color.New(color.FgHiRed, color.Bold).Sprint("$ ❯ "))
 		} else {
 			rl.SetPrompt(color.New(color.Bold).Sprint("❯ "))
 		}
