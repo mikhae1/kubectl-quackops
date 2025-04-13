@@ -76,7 +76,7 @@ func LoadConfig() *Config {
 		BlockedKubectlCmds:    getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),
 		DisableMarkdownFormat: getEnvArg("QU_DISABLE_MARKDOWN_FORMAT", false).(bool),
 		DisableAnimation:      getEnvArg("QU_DISABLE_ANIMATION", false).(bool),
-		MaxCompletions:        getEnvArg("QU_MAX_COMPLETIONS", 20).(int),
+		MaxCompletions:        getEnvArg("QU_MAX_COMPLETIONS", 50).(int),
 		SpinnerTimeout:        80,
 		KubectlPrompts: []KubectlPrompt{
 			{
