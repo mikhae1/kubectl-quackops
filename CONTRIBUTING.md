@@ -181,13 +181,26 @@ make check-cluster
 
 ## Release Process
 
-Releases are managed by the project maintainers. The process typically includes:
+The project uses [GoReleaser](https://goreleaser.com/) for building and publishing releases.
 
-1. **Version Bump**: Updating version numbers in relevant files
-2. **Changelog Update**: Documenting changes in the release notes
-3. **Tag Creation**: Creating a Git tag for the new version
-4. **Binary Building**: Building and publishing binaries for different platforms
-5. **Krew Plugin Update**: Updating the Krew plugin index
+To create a new release:
+
+1. Create and push a new tag following semantic versioning:
+   ```bash
+   git tag -a v0.1.0 -m "First release"
+   git push origin v0.1.0
+   ```
+
+2. The GitHub Actions workflow will automatically:
+   - Run all tests and linting checks
+   - Build binaries for all supported platforms (Linux/macOS, amd64/arm64)
+   - Create GitHub release with proper assets
+   - Generate a changelog from commit messages
+   - Prepare Krew plugin manifest
+
+The release will be available on GitHub and ready for installation via Krew.
+
+> **Note**: The CI pipeline will only create a release if all tests pass. Make sure to run tests locally before tagging a release.
 
 ## Additional Resources
 

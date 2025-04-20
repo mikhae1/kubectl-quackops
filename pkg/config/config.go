@@ -38,6 +38,7 @@ type Config struct {
 	Retries               int
 	Timeout               int
 	MaxTokens             int
+	Temperature           float64
 	SpinnerTimeout        int
 	SafeMode              bool
 	Verbose               bool
@@ -45,6 +46,21 @@ type Config struct {
 	DisableMarkdownFormat bool
 	DisableAnimation      bool
 	MaxCompletions        int
+	HistoryFile           string
+	DisableHistory        bool
+	KubectlBinaryPath     string
+
+	// Embedding model configuration
+	EmbeddingModel        string
+	OllamaEmbeddingModels string
+
+	// Prompt templates for various parts of the application
+	KubectlStartPrompt       string
+	KubectlShortPrompt       string
+	KubectlFormatPrompt      string
+	DiagnosticAnalysisPrompt string
+	MarkdownFormatPrompt     string
+	PlainFormatPrompt        string
 
 	KubectlPrompts       []KubectlPrompt
 	StoredUserCmdResults []CmdRes
@@ -56,18 +72,35 @@ func LoadConfig() *Config {
 
 	defaultMaxTokens := 16000
 	defaultModel := "llama3.1"
+	defaultEmbeddingModel := "models/text-embedding-large-exp"
 	if provider == "google" {
-		defaultMaxTokens = 1048576 // https://ai.google.dev/gemini-api/docs/models/gemini
-		defaultModel = "gemini-2.0-flash"
+		// https://ai.google.dev/gemini-api/docs/models/gemini
+		defaultMaxTokens = 128000 // best for Gemini exp tier
+		defaultModel = "gemini-2.5-flash-preview-04-17"
+		defaultEmbeddingModel = "models/text-embedding-004"
 	} else if provider == "ollama" {
-		defaultMaxTokens = 4096 // https://ai.meta.com/blog/meta-llama-3-1/
+		// https://ai.meta.com/blog/meta-llama-3-1/
+		defaultMaxTokens = 4096
 		defaultModel = "llama3.1"
 	} else if provider == "openai" {
-		defaultMaxTokens = 128000 // https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/
+		// https://platform.openai.com/docs/models/gpt-4o-mini
+		defaultMaxTokens = 128000
 		defaultModel = "gpt-4o-mini"
+		defaultEmbeddingModel = "text-embedding-3-small"
 	} else if provider == "anthropic" {
-		defaultMaxTokens = 200000 // Claude has a 200k context window
+		defaultMaxTokens = 200000
 		defaultModel = "claude-3-5-sonnet-latest"
+		defaultEmbeddingModel = "nomic-embed-text"
+	}
+
+	// Get home directory for history file
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	defaultHistoryFile := ""
+	if homeDir != "" {
+		defaultHistoryFile = fmt.Sprintf("%s/.quackops_history", homeDir)
 	}
 
 	return &Config{
@@ -80,13 +113,30 @@ func LoadConfig() *Config {
 		Retries:               getEnvArg("QU_RETRIES", 3).(int),
 		Timeout:               getEnvArg("QU_TIMEOUT", 30).(int),
 		MaxTokens:             getEnvArg("QU_MAX_TOKENS", defaultMaxTokens).(int),
+		Temperature:           getEnvArg("QU_TEMPERATURE", 0.0).(float64),
 		AllowedKubectlCmds:    getEnvArg("QU_ALLOWED_KUBECTL_CMDS", defaultAllowedKubectlCmds).([]string),
 		BlockedKubectlCmds:    getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),
 		DisableMarkdownFormat: getEnvArg("QU_DISABLE_MARKDOWN_FORMAT", false).(bool),
 		DisableAnimation:      getEnvArg("QU_DISABLE_ANIMATION", false).(bool),
 		MaxCompletions:        getEnvArg("QU_MAX_COMPLETIONS", 50).(int),
-		SpinnerTimeout:        80,
+		HistoryFile:           getEnvArg("QU_HISTORY_FILE", defaultHistoryFile).(string),
+		DisableHistory:        getEnvArg("QU_DISABLE_HISTORY", false).(bool),
+		KubectlBinaryPath:     getEnvArg("QU_KUBECTL_BINARY", "kubectl").(string),
+		SpinnerTimeout:        300,
 		StoredUserCmdResults:  []CmdRes{},
+
+		// Embedding model configuration
+		EmbeddingModel:        getEnvArg("QU_EMBEDDING_MODEL", defaultEmbeddingModel).(string),
+		OllamaEmbeddingModels: getEnvArg("QU_OLLAMA_EMBEDDING_MODELS", "nomic-embed-text,mxbai-embed-large,all-minilm-l6-v2").(string),
+
+		// Prompt templates
+		KubectlStartPrompt:       getEnvArg("QU_KUBECTL_SYSTEM_PROMPT", defaultKubectlStartPrompt).(string),
+		KubectlShortPrompt:       getEnvArg("QU_KUBECTL_SHORT_PROMPT", "As a Kubernetes expert, based on your previous response, provide only the essential and safe read-only kubectl commands to help diagnose the following issue").(string),
+		KubectlFormatPrompt:      getEnvArg("QU_KUBECTL_FORMAT_PROMPT", defaultKubectlFormatPrompt).(string),
+		DiagnosticAnalysisPrompt: getEnvArg("QU_DIAGNOSTIC_ANALYSIS_PROMPT", defaultDiagnosticAnalysisPrompt).(string),
+		MarkdownFormatPrompt:     getEnvArg("QU_MARKDOWN_FORMAT_PROMPT", "Format your response using Markdown, including headings, lists, and code blocks for improved readability in a terminal environment.").(string),
+		PlainFormatPrompt:        getEnvArg("QU_PLAIN_FORMAT_PROMPT", "Provide a clear, concise analysis that is easy to read in a terminal environment.").(string),
+
 		KubectlPrompts: []KubectlPrompt{
 			{
 				MatchRe:        regexp.MustCompile(`\b(error|fail|crash|exception|debug|warn|issue|problem|trouble|fault|bug)s?\b`),
@@ -322,3 +372,202 @@ var defaultBlockedKubectlCmds = []string{
 }
 
 var defaultDuckASCIIArt = `4qCA4qCA4qCA4qKA4qOE4qKA4qO04qC/4qCf4qCb4qCb4qCb4qCb4qCb4qC34qK24qOE4qGA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKiv+Khv+Kgg+KggOKggOKggOKggOKggOKggOKggOKggOKhgOKiqeKjt+KhhOKggOKggOKggOKggOKggOKggOKggArioIDioIDioIDiorDiopbiob/ioIHioIDioIDioIDioIDiooLio6bio4TioIDioIBv4qGH4qK44qO34qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKjvOKgg+KggOKggOKggOKggOKggOKggG/ioZvioIDioIDioJDioJDioJLiorvioYbioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qO/4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qKA4qO04qG+4qC/4qC/4qK/4qG/4qK34qOk4qOA4qGA4qCA4qCA4qCACuKggOKggOKggOKggOKjv+KhgOKggOKggOKggOKggOKggOKggOKisOKjv+KgieKggOKguuKgh+KgmOKgg+KggOKgieKgmeKgm+Kit+KjhOKggArioIDioIDioIDioIDioLjioJ/ioIPioIDioIDiorjioYfioIDioIDiorjio4fio6Dio4TioIDioIDioIDioIDioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qOg4qO/4qO34qG24qCA4qCY4qC74qC/4qCb4qCB4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKggOKggOKggOKgieKggeKgieKgieKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggAo=`
+
+// Default prompt templates
+var defaultKubectlStartPrompt = `You are an expert Kubernetes administrator specializing in cluster diagnostics.
+
+Task: Analyze the user's issue and provide appropriate kubectl commands for diagnostics.
+
+## Guidelines:
+- Provide only safe, read-only commands that will not modify cluster state
+- Commands should be specific and target the exact resources relevant to the issue
+- Focus on commands that provide the most useful diagnostic information
+- Include namespace flags where appropriate (-n or --all-namespaces/-A)
+- Prefer commands that give comprehensive information (e.g., -o wide, --show-labels)
+`
+
+var defaultKubectlFormatPrompt = `
+## Output format:
+- Provide only the exact commands to run (no markdown formatting)
+- One command per line
+- Do not include explanations or descriptions
+- Use only actual resource names, not placeholders
+- Never include destructive commands that modify cluster state
+`
+
+var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
+
+## Command Outputs
+%s
+
+## Task
+%s
+
+## Guidelines
+- You are an experienced Kubernetes administrator with deep expertise in diagnostics
+- Analyze the command outputs above and provide insights on the issue
+- Identify potential problems or anomalies in the cluster state
+- Suggest next steps or additional commands if needed
+- %s
+
+`
+
+// EnvVarInfo contains information about an environment variable
+type EnvVarInfo struct {
+	DefaultValue interface{}
+	Type         string
+	Description  string
+}
+
+// GetEnvVarsInfo returns information about all environment variables used by the application
+func GetEnvVarsInfo() map[string]EnvVarInfo {
+	envVars := map[string]EnvVarInfo{
+		"QU_LLM_PROVIDER": {
+			DefaultValue: "ollama",
+			Type:         "string",
+			Description:  "LLM model provider (e.g., 'ollama', 'openai', 'google', 'anthropic')",
+		},
+		"QU_LLM_MODEL": {
+			DefaultValue: "provider-dependent",
+			Type:         "string",
+			Description:  "LLM model to use",
+		},
+		"QU_API_URL": {
+			DefaultValue: "http://localhost:11434",
+			Type:         "string",
+			Description:  "URL for LLM API, used with 'ollama' provider",
+		},
+		"QU_SAFE_MODE": {
+			DefaultValue: false,
+			Type:         "bool",
+			Description:  "Enable safe mode to prevent executing commands without confirmation",
+		},
+		"QU_KUBECTL_BINARY": {
+			DefaultValue: "kubectl",
+			Type:         "string",
+			Description:  "Path to kubectl binary to use for executing commands",
+		},
+		"QU_RETRIES": {
+			DefaultValue: 3,
+			Type:         "int",
+			Description:  "Number of retries for kubectl commands",
+		},
+		"QU_TIMEOUT": {
+			DefaultValue: 30,
+			Type:         "int",
+			Description:  "Timeout for kubectl commands in seconds",
+		},
+		"QU_MAX_TOKENS": {
+			DefaultValue: "provider-dependent",
+			Type:         "int",
+			Description:  "Maximum number of tokens in LLM context window",
+		},
+		"QU_TEMPERATURE": {
+			DefaultValue: 0.7,
+			Type:         "float",
+			Description:  "Temperature parameter for LLM generation",
+		},
+		"QU_ALLOWED_KUBECTL_CMDS": {
+			DefaultValue: "see defaultAllowedKubectlCmds",
+			Type:         "[]string",
+			Description:  "Comma-separated list of allowed kubectl commands",
+		},
+		"QU_BLOCKED_KUBECTL_CMDS": {
+			DefaultValue: "see defaultBlockedKubectlCmds",
+			Type:         "[]string",
+			Description:  "Comma-separated list of blocked kubectl commands",
+		},
+		"QU_KUBECTL_BLOCKED_CMDS_EXTRA": {
+			DefaultValue: "",
+			Type:         "string",
+			Description:  "Comma-separated list of additional blocked kubectl commands",
+		},
+		"QU_DISABLE_MARKDOWN_FORMAT": {
+			DefaultValue: false,
+			Type:         "bool",
+			Description:  "Disable Markdown formatting and colorization of LLM outputs",
+		},
+		"QU_DISABLE_ANIMATION": {
+			DefaultValue: true,
+			Type:         "bool",
+			Description:  "Disable typewriter animation effect for LLM outputs",
+		},
+		"QU_MAX_COMPLETIONS": {
+			DefaultValue: 50,
+			Type:         "int",
+			Description:  "Maximum number of completions to display",
+		},
+		"QU_HISTORY_FILE": {
+			DefaultValue: "~/.quackops_history",
+			Type:         "string",
+			Description:  "Path to the history file",
+		},
+		"QU_DISABLE_HISTORY": {
+			DefaultValue: false,
+			Type:         "bool",
+			Description:  "Disable storing prompt history in a file",
+		},
+		"QU_EMBEDDING_MODEL": {
+			DefaultValue: "provider-dependent",
+			Type:         "string",
+			Description:  "Embedding model to use",
+		},
+		"QU_OLLAMA_EMBEDDING_MODELS": {
+			DefaultValue: "nomic-embed-text,mxbai-embed-large,all-minilm-l6-v2",
+			Type:         "string",
+			Description:  "Comma-separated list of Ollama embedding models",
+		},
+		"QU_KUBECTL_SYSTEM_PROMPT": {
+			DefaultValue: "see defaultKubectlStartPrompt",
+			Type:         "string",
+			Description:  "Start prompt for kubectl command generation",
+		},
+		"QU_KUBECTL_SHORT_PROMPT": {
+			DefaultValue: "As a Kubernetes expert, provide safe, read-only kubectl commands to diagnose the following issue.",
+			Type:         "string",
+			Description:  "Short prompt for kubectl command generation",
+		},
+		"QU_KUBECTL_SHORT_PROMPT_2": {
+			DefaultValue: "As a Kubernetes expert, based on your previous answer, provide only relevant safe read-only kubectl commands to diagnose the following issue.",
+			Type:         "string",
+			Description:  "Secondary short prompt for kubectl command generation",
+		},
+		"QU_KUBECTL_FORMAT_PROMPT": {
+			DefaultValue: "see defaultKubectlFormatPrompt",
+			Type:         "string",
+			Description:  "Format prompt for kubectl command generation",
+		},
+		"QU_DIAGNOSTIC_ANALYSIS_PROMPT": {
+			DefaultValue: "see defaultDiagnosticAnalysisPrompt",
+			Type:         "string",
+			Description:  "Prompt for diagnostic analysis",
+		},
+		"QU_MARKDOWN_FORMAT_PROMPT": {
+			DefaultValue: "Format your response using Markdown, including headings, lists, and code blocks for improved readability in a terminal environment.",
+			Type:         "string",
+			Description:  "Prompt for Markdown formatting",
+		},
+		"QU_PLAIN_FORMAT_PROMPT": {
+			DefaultValue: "Provide a clear, concise analysis that is easy to read in a terminal environment.",
+			Type:         "string",
+			Description:  "Prompt for plain text formatting",
+		},
+		"OPENAI_API_KEY": {
+			DefaultValue: "",
+			Type:         "string",
+			Description:  "OpenAI API key, required when using OpenAI provider",
+		},
+		"GOOGLE_API_KEY": {
+			DefaultValue: "",
+			Type:         "string",
+			Description:  "Google AI API key, required when using Google provider",
+		},
+		"ANTHROPIC_API_KEY": {
+			DefaultValue: "",
+			Type:         "string",
+			Description:  "Anthropic API key, required when using Anthropic provider",
+		},
+	}
+
+	return envVars
+}

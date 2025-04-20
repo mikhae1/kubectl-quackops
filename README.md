@@ -21,9 +21,8 @@ Built with flexibility in mind, QuackOps works seamlessly with various LLM provi
 - **Interactive Sessions:**
   - Execute arbitrary commands directly with the `$` prefix (e.g., `$ kubectl describe my-pod`)
   - Maintain context across multiple queries for deeper troubleshooting sessions
-  - Chain commands together to analyze complex issues step-by-step
+  - Chain commands and prompts together to analyze complex issues step-by-step
   - Auto-completion support for cli commands through tab completion
-  - Interactive shell-like experience with command history navigation (up/down arrows)
 
 - **Security:**
   - **Secret Protection:** Automatically filters sensitive data from output sent to LLMs
@@ -35,6 +34,11 @@ Built with flexibility in mind, QuackOps works seamlessly with various LLM provi
 
 - **DevOps Workflow Integration:**
   - Works in CI/CD pipelines for automated diagnostics in non interactive mode
+
+- **History**:
+  - Interactive shell-like experience with command history navigation (up/down arrows)
+  - Persistent history storage in a configurable file (default: ~/.quackops_history)
+  - Easily recall previous prompts and commands across sessions
 
 ## 🔍 Use Cases
 
@@ -281,6 +285,31 @@ QuackOps is highly configurable through environment variables or command-line fl
 | `-c, --disable-secrets-filter` | Disable filtering sensitive data in secrets from being sent to LLMs | `false` |
 | `-d, --disable-markdown` | Disable Markdown formatting and colorization of LLM outputs | `false` |
 | `-a, --disable-animation` | Disable typewriter animation effect for LLM outputs | `false` |
+| `--disable-history` | Disable storing prompt history in a file | `false` |
+| `--history-file` | Path to the history file | `~/.quackops_history` |
+
+## 📜 Prompt History
+
+QuackOps automatically stores your prompt history to enable easy access to previous queries:
+
+- **Persistent History:** Your previous prompts are saved to a history file (default: `~/.quackops_history`) and will be available across sessions.
+- **History Navigation:** Use up and down arrow keys to navigate through your command history.
+- **Customizable:** Control the history file location with `--history-file` option or disable history completely with `--disable-history`.
+
+This feature helps you:
+- Quickly recall complex queries without retyping
+- Build on previous troubleshooting sessions
+- Maintain a record of your cluster diagnostics
+
+### Examples
+
+```sh
+# Specify a custom history file location
+kubectl quackops --history-file ~/.my_custom_history
+
+# Disable history storage entirely
+kubectl quackops --disable-history
+```
 
 ## 🔄 Shell Completions
 

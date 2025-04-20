@@ -220,9 +220,9 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 		// Color only the bullet and process the rest of the line for other formatting
 		if bulletPos < len(line) {
 			var result bytes.Buffer
-			result.Write(line[:prefixLen])                                                                 // Write leading whitespace
-			result.Write([]byte(color.New(color.FgMagenta).Sprint(string(line[prefixLen : prefixLen+1])))) // Color the bullet
-			result.Write([]byte(" "))                                                                      // Add a space after the bullet
+			result.Write(line[:prefixLen])                                                                // Write leading whitespace
+			result.Write([]byte(color.New(color.FgHiBlue).Sprint(string(line[prefixLen : prefixLen+1])))) // Color the bullet
+			result.Write([]byte(" "))                                                                     // Add a space after the bullet
 
 			// Process the rest of the line for inline elements
 			restOfLine := line[bulletPos:]
@@ -247,8 +247,8 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 
 		if numEnd+1 < len(line) && line[numEnd] == '.' && line[numEnd+1] == ' ' {
 			var result bytes.Buffer
-			result.Write(line[:prefixLen])                                                              // Write leading whitespace
-			result.Write([]byte(color.New(color.FgMagenta).Sprint(string(line[prefixLen : numEnd+1])))) // Color the number and dot
+			result.Write(line[:prefixLen])                                                             // Write leading whitespace
+			result.Write([]byte(color.New(color.FgHiBlue).Sprint(string(line[prefixLen : numEnd+1])))) // Color the number and dot
 
 			// Process the rest of the line for inline elements
 			restOfLine := line[numEnd+2:] // +2 to skip the dot and space

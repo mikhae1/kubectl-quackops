@@ -7,4 +7,5 @@ TODO*
 *.log
 *.bak
 kubectl-quackops
-.envrc
+quackops
+.env*

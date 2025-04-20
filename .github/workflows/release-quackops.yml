@@ -1,72 +1,247 @@
-name: Release Quackops
-env:
-  BIN_NAME: kubectl-quackops
-  GO_VERSION: 1.22
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+name: Release QuackOps
+
 on:
   push:
-    branches:
-      - master
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+      release_notes:
+        description: 'Manual release notes (optional)'
+        required: false
+      skip_tests:
+        description: 'Skip tests (use with caution)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
 
 jobs:
-  build:
-    name: Build kubectl-quackops
+  validate:
+    name: Validate Release
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, darwin]
-        goarch: [amd64, arm64]
-
+    if: github.event_name == 'workflow_dispatch'
     steps:
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: ^${{ env.GO_VERSION }}
-
-
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Build and create tar.gz
+      - name: Validate version format
         run: |
-          target=${{ env.BIN_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          if [[ ! "${{ github.event.inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Version must be in format vX.Y.Z (e.g., v0.1.0)"
+            exit 1
+          fi
 
-          make build GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} BIN_NAME=${{ env.BIN_NAME }}
-          tar --sort=name --owner=root:0 --group=root:0 \
-            -czf ${target}.tar.gz \
-            ${{ env.BIN_NAME }} LICENSE
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          name: ${{ env.BIN_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
-          path: ${{ env.BIN_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          fetch-depth: 0
 
-  release:
-    name: Release
-    needs: build
+      - name: Create tag if not exists
+        run: |
+          if ! git ls-remote --tags origin | grep -q "${{ github.event.inputs.version }}"; then
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git tag -a ${{ github.event.inputs.version }} -m "Release ${{ github.event.inputs.version }}"
+            git push origin ${{ github.event.inputs.version }}
+            echo "Created and pushed tag ${{ github.event.inputs.version }}"
+          else
+            echo "Tag ${{ github.event.inputs.version }} already exists"
+          fi
+
+  tests:
+    name: Run Tests
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [validate]
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_tests != 'true'
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Run linting
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+
+  goreleaser:
+    runs-on: ubuntu-latest
+    needs: [tests]
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_tests != 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set custom ref for manual release
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "GITHUB_REF=refs/tags/${{ github.event.inputs.version }}" >> $GITHUB_ENV
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  goreleaser-skip-tests:
+    runs-on: ubuntu-latest
+    needs: [validate]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.skip_tests == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set custom ref for manual release
+        run: |
+          echo "GITHUB_REF=refs/tags/${{ github.event.inputs.version }}" >> $GITHUB_ENV
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  generate-changelog:
+    needs: [goreleaser, goreleaser-skip-tests]
+    if: always() && (needs.goreleaser.result == 'success' || needs.goreleaser-skip-tests.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set version for manual release
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+
+      - name: Generate Changelog
+        id: changelog
+        if: github.event.inputs.release_notes == ''
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          configurationJson: |
+            {
+              "categories": [
+                {
+                  "title": "## 🚀 Features",
+                  "labels": ["feature", "enhancement"]
+                },
+                {
+                  "title": "## 🐛 Bug Fixes",
+                  "labels": ["fix", "bug"]
+                },
+                {
+                  "title": "## 📦 Dependencies",
+                  "labels": ["dependencies"]
+                },
+                {
+                  "title": "## 📚 Documentation",
+                  "labels": ["documentation"]
+                }
+              ],
+              "template": "#{{CHANGELOG}}\n\n<details>\n<summary>All Changes</summary>\n\n#{{UNCATEGORIZED}}\n</details>",
+              "pr_template": "- #{{TITLE}} (#{{NUMBER}})"
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set release notes
+        id: release_notes
+        run: |
+          if [ -n "${{ github.event.inputs.release_notes }}" ]; then
+            echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.inputs.release_notes }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          else
+            echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+            echo "${{ steps.changelog.outputs.changelog }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          fi
+
+      - name: Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+          body: ${{ env.RELEASE_NOTES }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload binaries to the release
-        uses: csexton/release-asset-action@v2
+  krew-template:
+    needs: [goreleaser, goreleaser-skip-tests]
+    if: always() && (needs.goreleaser.result == 'success' || needs.goreleaser-skip-tests.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          pattern: "${{ env.BIN_NAME }}-*-*.tar.gz/${{ env.BIN_NAME }}-*-*.tar.gz"
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          release-url: ${{ steps.create_release.outputs.upload_url }}
+          fetch-depth: 0
+
+      - name: Set custom ref for manual release
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "TAG=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+
+      - name: Set tag from git for automatic release
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Download Krew template tools
+        run: |
+          go install github.com/rajatjindal/krew-release-bot@latest
+
+      - name: Process Krew YAML Template
+        id: krew-template
+        run: |
+          krew-release-bot template --tag $TAG --template-file .krew.yaml
+
+      - name: Upload Krew Manifest
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: quackops.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}

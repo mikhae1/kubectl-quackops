@@ -1,6 +1,7 @@
 BIN_NAME := kubectl-quackops
 GOOS := $(shell go env GOOS)
 GOARCH := $(shell go env GOARCH)
+INSTALL_DIR := /usr/local/bin
 
 CHECK_ARGS := -v
 export DEBUG := 1
@@ -12,6 +13,13 @@ build:
 
 run: build
 	./$(BIN_NAME)
+
+test:
+	go test -v ./...
+
+install: build
+	install -m 755 $(BIN_NAME) $(INSTALL_DIR)/$(BIN_NAME)
+	@echo "Installed $(BIN_NAME) to $(INSTALL_DIR)"
 
 check-logs: build
 	{ echo 'analyze pods logs'; cat; } | kubectl quackops $(CHECK_ARGS)
