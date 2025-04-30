@@ -1,16 +1,12 @@
 # Kubectl-QuackOps
 
-<img src=".github/quackops-logo.png" alt="QuackOps Logo" width="180" align="left" hspace="20">
+<img src=".github/quackops-logo.png" alt="QuackOps Logo" width="200" align="left" hspace="20">
 
-**QuackOps** is a powerful `kubectl` s a powerful kubectl AI-agent `kubectl` plugin designed to enhance your Kubernetes troubleshooting experience with advanced AI assistance. It acts as an intelligent agent, translating natural language queries into actionable insights by analyzing diagnostics directly from your current Kubernetes context.
+**QuackOps** is a powerful kubectl AI-agent plugin designed to enhance your Kubernetes troubleshooting experience with advanced AI assistance. It acts as an intelligent agent, translating natural language queries into actionable insights by analyzing diagnostics directly from your current Kubernetes context.
 
-Built with flexibility in mind, QuackOps works seamlessly with various LLM providers to suit your needs. Whether you prioritize privacy with local models like [llama3](https://ollama.com/library/llama3.1) or seek advanced capabilities with cloud-based LLMs, QuackOps has you covered.
+Beyond simple question-answering, QuackOps provides a rich, interactive experience that enhances the standard command-line workflow. It maintains context throughout a session, allowing for follow-up questions and iterative troubleshooting. Need to inspect a specific resource mentioned in the AI's analysis? You can execute arbitrary kubectl commands directly within the QuackOps session by prefixing them with a `$` symbol (e.g., `$ kubectl describe deployment my-app`). This interactive shell includes familiar features like command history navigation using arrow keys and persistent history storage, making it easy to recall and reuse previous commands or prompts. Furthermore, built-in auto-completion aids in quickly formulating shell commands, streamlining the entire interaction.
 
 ## 🚀 Key Features
-
-- **Natural Language Interface:** Interact with your cluster using plain English. Ask complex questions like "Why is my StatefulSet not scaling?" or "Find pods using too much CPU" and receive context-aware assistance.
-
-- **AI-Powered Analysis:** Automatically analyzes your cluster state by running relevant `kubectl` commands and leverages AI to interpret results, identify issues, and suggest solutions.
 
 - **Multi-Model Support:** Choose the LLM that fits your requirements:
   - **[Ollama](https://ollama.com/)** - Run models locally for complete data privacy and air-gapped environments
@@ -32,12 +28,9 @@ Built with flexibility in mind, QuackOps works seamlessly with various LLM provi
 - **Syntax highlighting:**
   - Markdown-based output formatting with color-coded elements for better readability
 
-- **DevOps Workflow Integration:**
-  - Works in CI/CD pipelines for automated diagnostics in non interactive mode
-
 - **History**:
   - Interactive shell-like experience with command history navigation (up/down arrows)
-  - Persistent history storage in a configurable file (default: ~/.quackops_history)
+  - Persistent history storage in a configurable file (default: `~/.quackops_history`)
   - Easily recall previous prompts and commands across sessions
 
 ## 🔍 Use Cases
@@ -145,6 +138,47 @@ You can install it by moving the executable file to any directory included in yo
    ```sh
    kubectl quackops
    ```
+
+## 📜 Prompt History
+
+QuackOps automatically stores your prompt history to enable easy access to previous queries:
+
+- **Persistent History:** Your previous prompts are saved to a history file (default: `~/.quackops_history`) and will be available across sessions.
+- **History Navigation:** Use up and down arrow keys to navigate through your command history.
+- **Customizable:** Control the history file location with `--history-file` option or disable history completely with `--disable-history`.
+
+This feature helps you:
+- Quickly recall complex queries without retyping
+- Build on previous troubleshooting sessions
+- Maintain a record of your cluster diagnostics
+
+### Examples
+
+```sh
+# Specify a custom history file location
+kubectl quackops --history-file ~/.my_custom_history
+
+# Disable history storage entirely
+kubectl quackops --disable-history
+```
+
+## 🔄 Shell Completions
+
+QuackOps provides intelligent tab completion for command execution mode (commands starting with `$`), leveraging bash-compatible shell completions:
+
+- **Command Completions:** When typing `$ `, type and press Tab to see available commands.
+- **Argument Completions:** QuackOps supports completions for cli tools like `kubectl`, `helm`, and other CLI tools that implement completion.
+- **File Path Completions:** Automatically complete file paths when navigating the filesystem.
+
+Note that completions rely on bash-compatible shell completion functions being available on your system. The feature works best in environments where bash completion is properly configured.
+
+### Example Usage
+
+```sh
+$ kubectl <tab>              # Shows kubectl subcommands
+$ kubectl get po<tab>        # Completes to 'pods'
+$ kubectl get pods -n <tab>  # Shows available namespaces
+```
 
 ## 🌟 Supported LLMs
 
@@ -287,47 +321,6 @@ QuackOps is highly configurable through environment variables or command-line fl
 | `-a, --disable-animation` | Disable typewriter animation effect for LLM outputs | `false` |
 | `--disable-history` | Disable storing prompt history in a file | `false` |
 | `--history-file` | Path to the history file | `~/.quackops_history` |
-
-## 📜 Prompt History
-
-QuackOps automatically stores your prompt history to enable easy access to previous queries:
-
-- **Persistent History:** Your previous prompts are saved to a history file (default: `~/.quackops_history`) and will be available across sessions.
-- **History Navigation:** Use up and down arrow keys to navigate through your command history.
-- **Customizable:** Control the history file location with `--history-file` option or disable history completely with `--disable-history`.
-
-This feature helps you:
-- Quickly recall complex queries without retyping
-- Build on previous troubleshooting sessions
-- Maintain a record of your cluster diagnostics
-
-### Examples
-
-```sh
-# Specify a custom history file location
-kubectl quackops --history-file ~/.my_custom_history
-
-# Disable history storage entirely
-kubectl quackops --disable-history
-```
-
-## 🔄 Shell Completions
-
-QuackOps provides intelligent tab completion for command execution mode (commands starting with `$`), leveraging bash-compatible shell completions:
-
-- **Command Completions:** When typing `$ `, type and press Tab to see available commands.
-- **Argument Completions:** QuackOps supports completions for cli tools like `kubectl`, `helm`, and other CLI tools that implement completion.
-- **File Path Completions:** Automatically complete file paths when navigating the filesystem.
-
-Note that completions rely on bash-compatible shell completion functions being available on your system. The feature works best in environments where bash completion is properly configured.
-
-### Example Usage
-
-```sh
-$ kubectl <tab>              # Shows kubectl subcommands
-$ kubectl get po<tab>        # Completes to 'pods'
-$ kubectl get pods -n <tab>  # Shows available namespaces
-```
 
 ## 🛡️ Security Considerations
 
