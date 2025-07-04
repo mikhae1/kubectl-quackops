@@ -3,11 +3,12 @@ package cmd
 import (
 	"encoding/base64"
 	"fmt"
-	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
@@ -20,6 +21,26 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
+
+// Global cleanup function for signal handling
+var globalCleanupFunc func()
+
+// setupGlobalSignalHandling sets up signal handling that can be used throughout the application
+func setupGlobalSignalHandling(cleanupFunc func()) {
+	globalCleanupFunc = cleanupFunc
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		if globalCleanupFunc != nil {
+			globalCleanupFunc()
+		}
+		// Explicitly restore cursor visibility
+		fmt.Print("\033[?25h") // ANSI escape sequence to show cursor
+		fmt.Println("\nExiting...")
+		os.Exit(0)
+	}()
+}
 
 func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cfg := config.LoadConfig()
@@ -192,9 +213,31 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 	rl, err := readline.NewEx(rlConfig)
 	if err != nil {
-		log.Fatalf("Failed to create interactive prompt instance: %v", err)
+		return fmt.Errorf("failed to create interactive prompt instance: %w", err)
 	}
-	defer rl.Close()
+
+	cleanupAndExit := func(message string, exitCode int) {
+		if message != "" {
+			fmt.Println(message)
+		}
+		if rl != nil {
+			rl.Close()
+		}
+		// Explicitly restore cursor visibility
+		// fmt.Print("\033[?25h") // ANSI escape sequence to show cursor
+		if exitCode >= 0 {
+			os.Exit(exitCode)
+		}
+	}
+
+	defer cleanupAndExit("", -1) // just cleanup
+
+	// Set up global signal handling for the entire application
+	setupGlobalSignalHandling(func() {
+		if rl != nil {
+			rl.Close()
+		}
+	})
 
 	var hello = "Tell me what you need! Use '$' prefix to run commands or type 'bye' to exit."
 	decodedArt, _ := base64.StdEncoding.DecodeString(cfg.DuckASCIIArt)
@@ -206,8 +249,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 	for {
 		userPrompt, err := rl.Readline()
 		if err != nil { // io.EOF is returned on Ctrl-C
-			fmt.Println("Exiting...")
-			break
+			cleanupAndExit("Exiting...", 0)
 		}
 
 		userPrompt = strings.TrimSpace(userPrompt)
@@ -217,8 +259,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 		switch strings.ToLower(userPrompt) {
 		case "bye", "exit", "quit":
-			fmt.Println("🦆" + "...quack!")
-			return nil
+			cleanupAndExit("🦆...quack!", 0)
 		}
 
 		if !strings.HasPrefix(userPrompt, "$") {
