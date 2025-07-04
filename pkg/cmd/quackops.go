@@ -232,7 +232,6 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 	defer cleanupAndExit("", -1) // just cleanup
 
-	// Set up global signal handling for the entire application
 	setupGlobalSignalHandling(func() {
 		if rl != nil {
 			rl.Close()
@@ -272,8 +271,6 @@ func startChatSession(cfg *config.Config, args []string) error {
 			return err
 		}
 	}
-
-	return nil
 }
 
 func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt string, userMsgCount int) error {
