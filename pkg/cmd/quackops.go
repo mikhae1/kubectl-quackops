@@ -175,7 +175,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 	}
 
 	rlConfig := &readline.Config{
-		Prompt:       color.New(color.Bold).Sprint("❯ "),
+		Prompt:       lib.FormatContextPrompt(cfg, false),
 		EOFPrompt:    "exit",
 		AutoComplete: completer.NewShellAutoCompleter(cfg), // Use the new completer
 	}
@@ -198,14 +198,14 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 		// Update prompt based on current state
 		if hasCommandPrefix {
-			rl.SetPrompt(color.New(color.FgHiRed, color.Bold).Sprint("$ ❯ "))
+			rl.SetPrompt(lib.FormatContextPrompt(cfg, true))
 		} else {
-			rl.SetPrompt(color.New(color.Bold).Sprint("❯ "))
+			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 		}
 
 		// Always reset on Enter or Interrupt
 		if key == readline.CharEnter || key == readline.CharInterrupt {
-			rl.SetPrompt(color.New(color.Bold).Sprint("❯ "))
+			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 		}
 
 		return line, pos, false
@@ -270,6 +270,9 @@ func startChatSession(cfg *config.Config, args []string) error {
 		if err != nil {
 			return err
 		}
+
+		// Update the prompt with new context percentage after processing
+		rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 	}
 }
 

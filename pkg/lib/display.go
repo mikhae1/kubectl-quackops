@@ -9,6 +9,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/tmc/langchaingo/llms"
 )
 
 // KubeCtxInfo shows the user which Kubernetes context is currently active
@@ -42,4 +43,69 @@ func KubeCtxInfo(cfg *config.Config) error {
 	}
 
 	return nil
+}
+
+// CountTokens counts the token usage for a given text string and/or chat messages
+// The function combines both tokens from text and the given messages
+func CountTokens(text string, messages []llms.ChatMessage) int {
+	tokenCount := 0
+
+	// Count tokens in the provided text if it's not empty
+	if text != "" {
+		tokenCount = len(Tokenize(text))
+	}
+
+	// Count tokens in the provided messages
+	if len(messages) > 0 {
+		for _, message := range messages {
+			tokenCount += len(Tokenize(message.GetContent()))
+		}
+	}
+
+	return tokenCount
+}
+
+// CalculateContextPercentage calculates the percentage of context window used
+func CalculateContextPercentage(cfg *config.Config) float64 {
+	if cfg.MaxTokens == 0 {
+		return 0.0
+	}
+
+	currentTokens := CountTokens("", cfg.ChatMessages)
+	percentage := (float64(currentTokens) / float64(cfg.MaxTokens)) * 100
+
+	// Cap at 100% to avoid display issues
+	if percentage > 100 {
+		percentage = 100
+	}
+
+	return percentage
+}
+
+// FormatContextPrompt formats the prompt with context percentage
+func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
+	percentage := CalculateContextPercentage(cfg)
+
+	// Choose color based on context usage
+	var contextColor *color.Color
+	if percentage < 50 {
+		contextColor = color.New(color.FgGreen)
+	} else if percentage < 80 {
+		contextColor = color.New(color.FgYellow)
+	} else {
+		contextColor = color.New(color.FgRed)
+	}
+
+	// Format the context indicator
+	contextStr := contextColor.Sprintf("[%.0f%%]", percentage)
+
+	// Format the main prompt
+	var promptStr string
+	if isCommand {
+		promptStr = color.New(color.FgHiRed, color.Bold).Sprint("$ ❯ ")
+	} else {
+		promptStr = color.New(color.Bold).Sprint("❯ ")
+	}
+
+	return contextStr + " " + promptStr
 }

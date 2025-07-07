@@ -12,6 +12,7 @@ import (
 	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
@@ -132,7 +133,7 @@ func HandleLLMRequest(cfg *config.Config, client llms.Model, prompt string, stre
 
 	// Create a spinner for feedback
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-	tokenCount := CountTokens(prompt, cfg.ChatMessages)
+	tokenCount := lib.CountTokens(prompt, cfg.ChatMessages)
 	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response... %s", cfg.Provider, cfg.Model, color.HiBlackString("%d tokens", tokenCount))
 	s.Color("green", "bold")
 	s.Start()

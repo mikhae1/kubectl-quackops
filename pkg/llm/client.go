@@ -30,7 +30,7 @@ var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, h
 	}
 
 	logger.Log("llmIn", "[%s/%s]: %s", cfg.Provider, cfg.Model, truncPrompt)
-	logger.Log("llmIn", "History: %v messages, %d tokens", len(cfg.ChatMessages), CountTokens("", cfg.ChatMessages))
+	logger.Log("llmIn", "History: %v messages, %d tokens", len(cfg.ChatMessages), lib.CountTokens("", cfg.ChatMessages))
 
 	// Create a spinner for LLM response
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
@@ -79,7 +79,7 @@ func ManageChatThreadContext(chatMessages []llms.ChatMessage, maxTokens int) {
 	}
 
 	// If the token length exceeds the context window, remove the oldest message in loop
-	threadLen := CountTokens("", chatMessages)
+	threadLen := lib.CountTokens("", chatMessages)
 	if threadLen > maxTokens {
 		logger.Log("warn", "Thread should be truncated: %d messages, %d tokens", len(chatMessages), threadLen)
 
@@ -91,7 +91,7 @@ func ManageChatThreadContext(chatMessages []llms.ChatMessage, maxTokens int) {
 		defer s.Stop()
 
 		// Truncate the thread if it exceeds the maximum token length
-		for CountTokens("", chatMessages) > maxTokens && len(chatMessages) > 0 {
+		for lib.CountTokens("", chatMessages) > maxTokens && len(chatMessages) > 0 {
 			// Remove the most irrelevant message: find oldest AI answer and remove it
 			foundAIMessage := false
 			for i, message := range chatMessages {
@@ -107,33 +107,13 @@ func ManageChatThreadContext(chatMessages []llms.ChatMessage, maxTokens int) {
 				chatMessages = chatMessages[1:]
 			}
 
-			logger.Log("info", "Thread after truncation: tokens: %d, messages: %v", CountTokens("", chatMessages), len(chatMessages))
+			logger.Log("info", "Thread after truncation: tokens: %d, messages: %v", lib.CountTokens("", chatMessages), len(chatMessages))
 			// Brief pause to show spinner movement
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
 
-	logger.Log("info", "\nThread: %d messages, %d tokens", len(chatMessages), CountTokens("", chatMessages))
-}
-
-// CountTokens counts the token usage for a given text string and/or chat messages
-// The function combines both tokens from text and the given messages
-func CountTokens(text string, messages []llms.ChatMessage) int {
-	tokenCount := 0
-
-	// Count tokens in the provided text if it's not empty
-	if text != "" {
-		tokenCount = len(lib.Tokenize(text))
-	}
-
-	// Count tokens in the provided messages
-	if len(messages) > 0 {
-		for _, message := range messages {
-			tokenCount += len(lib.Tokenize(message.GetContent()))
-		}
-	}
-
-	return tokenCount
+	logger.Log("info", "\nThread: %d messages, %d tokens", len(chatMessages), lib.CountTokens("", chatMessages))
 }
 
 // createStreamingCallback creates a callback function for streaming LLM responses with optional Markdown formatting
