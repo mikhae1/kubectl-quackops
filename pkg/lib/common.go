@@ -8,21 +8,16 @@ import (
 
 // Tokenize uses tiktoken-go to perform proper tokenization compatible with LLMs.
 func Tokenize(text string) []string {
-	encoding := "cl100k_base" // Default encoding used by many LLMs
-	tke, err := tiktoken.GetEncoding(encoding)
+	// Keep for backward compat; use cl100k_base
+	tke, err := tiktoken.GetEncoding("cl100k_base")
 	if err != nil {
-		// Fallback to simple split if there's an error
 		return []string{text}
 	}
-
 	tokens := tke.Encode(text, nil, nil)
-
-	// Convert the uint32 tokens to strings for backward compatibility
 	tokenStrs := make([]string, len(tokens))
 	for i, t := range tokens {
 		tokenStrs[i] = fmt.Sprintf("%d", t)
 	}
-
 	return tokenStrs
 }
 

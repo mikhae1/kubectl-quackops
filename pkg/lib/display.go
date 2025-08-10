@@ -71,7 +71,8 @@ func CalculateContextPercentage(cfg *config.Config) float64 {
 		return 0.0
 	}
 
-	currentTokens := CountTokens("", cfg.ChatMessages)
+	// Model-aware estimation
+	currentTokens := CountTokensWithConfig(cfg, "", cfg.ChatMessages)
 	percentage := (float64(currentTokens) / float64(cfg.MaxTokens)) * 100
 
 	// Cap at 100% to avoid display issues
@@ -96,8 +97,22 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 		contextColor = color.New(color.FgRed)
 	}
 
-	// Format the context indicator
-	contextStr := contextColor.Sprintf("[%.0f%%]", percentage)
+	// Build compact context indicator with colored arrows and compact numbers
+	// Example: [3%|↑2.9k|↓2.0k]
+	leftBracket := color.New(color.FgHiBlack).Sprint("[")
+	rightBracket := color.New(color.FgHiBlack).Sprint("]")
+	pctStr := contextColor.Sprintf("%.0f%%", percentage)
+	sep := color.New(color.FgHiBlack).Sprint("|")
+
+	tokenStr := ""
+	if cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0 {
+		up := color.New(color.FgHiYellow, color.Bold).Sprint("↑")
+		down := color.New(color.FgHiCyan, color.Bold).Sprint("↓")
+		outNum := color.New(color.FgHiYellow).Sprint(FormatCompactNumber(cfg.LastOutgoingTokens))
+		inNum := color.New(color.FgHiCyan).Sprint(FormatCompactNumber(cfg.LastIncomingTokens))
+		tokenStr = fmt.Sprintf("%s%s%s%s%s", sep, up, outNum, sep, down+inNum)
+	}
+	contextStr := fmt.Sprintf("%s%s%s%s", leftBracket, pctStr, tokenStr, rightBracket)
 
 	// Format the main prompt
 	var promptStr string

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
@@ -243,6 +244,12 @@ func startChatSession(cfg *config.Config, args []string) error {
 	fmt.Println(string(decodedArt) + hello)
 
 	// Chat loop
+	// Track the last displayed token counters in the prompt so we can animate to new values
+	lastDisplayedOutgoingTokens := cfg.LastOutgoingTokens
+	lastDisplayedIncomingTokens := cfg.LastIncomingTokens
+
+	// Allow cancelling any in-progress prompt counter animation before starting a new one
+	var promptAnimStop chan struct{}
 	var lastTextPrompt string
 	var userMsgCount int
 	for {
@@ -271,9 +278,84 @@ func startChatSession(cfg *config.Config, args []string) error {
 			return err
 		}
 
-		// Update the prompt with new context percentage after processing
-		rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+		// Animate the prompt counter to the latest token values
+		if promptAnimStop != nil {
+			close(promptAnimStop)
+		}
+		promptAnimStop = make(chan struct{})
+		animatePromptCounter(rl, cfg, lastDisplayedOutgoingTokens, lastDisplayedIncomingTokens, false, promptAnimStop)
+		// Update last-displayed snapshot to the current targets
+		lastDisplayedOutgoingTokens = cfg.LastOutgoingTokens
+		lastDisplayedIncomingTokens = cfg.LastIncomingTokens
 	}
+}
+
+// animatePromptCounter gradually updates the prompt token counters from previous values
+// to the current cfg.LastOutgoingTokens/LastIncomingTokens, similar to a spinner animation.
+// It runs asynchronously and can be cancelled via stopCh.
+func animatePromptCounter(rl *readline.Instance, cfg *config.Config, fromOutgoing int, fromIncoming int, isCommand bool, stopCh chan struct{}) {
+	targetOutgoing := cfg.LastOutgoingTokens
+	targetIncoming := cfg.LastIncomingTokens
+
+	// Only animate increases; for decreases or no change, update once
+	if targetOutgoing <= fromOutgoing && targetIncoming <= fromIncoming {
+		rl.SetPrompt(lib.FormatContextPrompt(cfg, isCommand))
+		rl.Refresh()
+		return
+	}
+
+	// Derive animation timing from spinner timeout so users can tune via env/flags
+	baseMs := cfg.SpinnerTimeout
+	if baseMs <= 0 {
+		baseMs = 300
+	}
+	// Target overall duration at ~2x spinner tick
+	totalDuration := time.Duration(baseMs) * time.Millisecond * 2
+	steps := 24 // keep smoothness constant; tick scales with spinner timeout
+	if steps < 1 {
+		steps = 1
+	}
+	tick := totalDuration / time.Duration(steps)
+
+	outgoingDelta := targetOutgoing - fromOutgoing
+	incomingDelta := targetIncoming - fromIncoming
+	if outgoingDelta < 0 {
+		outgoingDelta = 0
+	}
+	if incomingDelta < 0 {
+		incomingDelta = 0
+	}
+
+	go func() {
+		cancelled := false
+		defer func() {
+			if cancelled {
+				return
+			}
+			// Ensure final values are shown
+			cfg.LastOutgoingTokens = targetOutgoing
+			cfg.LastIncomingTokens = targetIncoming
+			rl.SetPrompt(lib.FormatContextPrompt(cfg, isCommand))
+			rl.Refresh()
+		}()
+
+		for i := 1; i <= steps; i++ {
+			select {
+			case <-stopCh:
+				cancelled = true
+				return
+			default:
+			}
+
+			curOutgoing := fromOutgoing + (outgoingDelta*i)/steps
+			curIncoming := fromIncoming + (incomingDelta*i)/steps
+			cfg.LastOutgoingTokens = curOutgoing
+			cfg.LastIncomingTokens = curIncoming
+			rl.SetPrompt(lib.FormatContextPrompt(cfg, isCommand))
+			rl.Refresh()
+			time.Sleep(tick)
+		}
+	}()
 }
 
 func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt string, userMsgCount int) error {

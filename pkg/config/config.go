@@ -64,6 +64,10 @@ type Config struct {
 
 	KubectlPrompts       []KubectlPrompt
 	StoredUserCmdResults []CmdRes
+
+	// Token accounting for last LLM exchange (shown in prompt)
+	LastOutgoingTokens int
+	LastIncomingTokens int
 }
 
 // LoadConfig initializes the application configuration

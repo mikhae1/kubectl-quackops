@@ -3,6 +3,7 @@ package lib
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // CosineSimilarity computes cosine similarity between two embedding vectors.
@@ -56,4 +57,43 @@ func CosineSimilarityMatrix(X, Y [][]float32) ([]float32, error) {
 	}
 
 	return result, nil
+}
+
+// FormatCompactNumber returns a compact human-readable string for integers
+// using letter suffixes: k (thousands), M (millions), B (billions), T (trillions).
+// Examples: 950 -> "950", 2910 -> "2.9k", 1200000 -> "1.2M".
+func FormatCompactNumber(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	sign := ""
+	n := value
+	if n < 0 {
+		sign = "-"
+		n = -n
+	}
+
+	var scaled float64
+	var suffix string
+	switch {
+	case n >= 1_000_000_000_000:
+		scaled = float64(n) / 1_000_000_000_000.0
+		suffix = "T"
+	case n >= 1_000_000_000:
+		scaled = float64(n) / 1_000_000_000.0
+		suffix = "B"
+	case n >= 1_000_000:
+		scaled = float64(n) / 1_000_000.0
+		suffix = "M"
+	case n >= 1_000:
+		scaled = float64(n) / 1_000.0
+		suffix = "k"
+	default:
+		return fmt.Sprintf("%s%d", sign, n)
+	}
+
+	// Use one decimal place, then trim trailing .0
+	s := fmt.Sprintf("%.1f", scaled)
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	return sign + s + suffix
 }

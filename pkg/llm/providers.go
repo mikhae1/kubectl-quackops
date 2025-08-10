@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/briandowns/spinner"
@@ -131,22 +132,60 @@ func HandleLLMRequest(cfg *config.Config, client llms.Model, prompt string, stre
 		generateOptions = append(generateOptions, llms.WithMaxTokens(cfg.MaxTokens))
 	}
 
-	// Create a spinner for feedback
+	// Compute outgoing tokens and start spinner with dynamic token display
+	outgoingTokens := lib.CountTokensWithConfig(cfg, prompt, cfg.ChatMessages)
+	cfg.LastOutgoingTokens = outgoingTokens
+	cfg.LastIncomingTokens = 0
+
+	// Initialize real-time token meter to track incoming tokens too
+	tokenMeter := lib.NewTokenMeter(cfg, outgoingTokens)
+
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-	tokenCount := lib.CountTokens(prompt, cfg.ChatMessages)
-	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response... %s", cfg.Provider, cfg.Model, color.HiBlackString("%d tokens", tokenCount))
 	s.Color("green", "bold")
-	s.Start()
-	defer s.Stop()
+	s.Writer = os.Stderr
+	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...",
+		cfg.Provider, cfg.Model)
+
+	// Start spinner also for streaming; we'll stop it on the first chunk to avoid
+	// interfering with streamed stdout output
+	var stopOnce sync.Once
+	if stream {
+		s.Start()
+	} else {
+		s.Start()
+		defer s.Stop()
+	}
+
+	// If streaming, refresh spinner suffix periodically to show live incoming tokens while waiting
+	// We avoid printing the separate meter during the wait to keep UI compact.
+	// No spinner updates during streaming to prevent overlap with stdout
 
 	// Callback function for streaming
 	var callbackFn func(ctx context.Context, chunk []byte) error
 	var cleanupFn func()
 
 	if stream {
-		// Create streaming callback with markdown formatting support
-		callbackFn, cleanupFn = createStreamingCallback(cfg, s)
+		// Define action to perform on the very first streamed chunk: stop spinner and clear the line
+		onFirstChunk := func() {
+			stopOnce.Do(func() {
+				s.Stop()
+				// Clear spinner line from stderr and move output to a fresh stdout line
+				fmt.Fprint(os.Stderr, "\r\033[2K")
+				fmt.Fprint(os.Stdout, "\n")
+			})
+		}
+
+		// Create streaming callback without live token meter rendering to avoid overlap
+		callbackFn, cleanupFn = createStreamingCallback(cfg, s, nil, onFirstChunk)
 		defer cleanupFn()
+
+		// Ensure spinner is stopped even if we error before receiving any chunks
+		defer func() {
+			stopOnce.Do(func() {
+				s.Stop()
+				fmt.Fprint(os.Stderr, "\r\033[2K")
+			})
+		}()
 
 		// Add streaming option
 		generateOptions = append(generateOptions, llms.WithStreamingFunc(callbackFn))
@@ -158,7 +197,6 @@ func HandleLLMRequest(cfg *config.Config, client llms.Model, prompt string, stre
 	initialBackoff := 10.0 // seconds
 	originalSuffix := s.Suffix
 	var responseContent string
-	var resp *llms.ChatMessage
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			backoffTime := initialBackoff * math.Pow(backoffFactor, float64(attempt-1))
@@ -213,18 +251,25 @@ func HandleLLMRequest(cfg *config.Config, client llms.Model, prompt string, stre
 		// Extract text from the response
 		if resp != nil && len(resp.Choices) > 0 {
 			responseContent = resp.Choices[0].Content
+			// Update last incoming tokens to show in prompt after completion
+			cfg.LastIncomingTokens = lib.EstimateTokens(cfg, responseContent)
 		}
 		break
 	}
 
 	// Add the response to the chat history only if history is enabled
-	if history && resp != nil {
-		cfg.ChatMessages = append(cfg.ChatMessages, *resp)
+	if history && responseContent != "" {
+		cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: responseContent})
 	}
 
 	// Extract response content
 	if responseContent == "" {
 		return "", fmt.Errorf("no content generated from %s", cfg.Provider)
+	}
+
+	// For non-streaming flows, update incoming tokens once at the end
+	if !stream {
+		tokenMeter.AddIncoming(lib.EstimateTokens(cfg, responseContent))
 	}
 
 	return responseContent, nil

@@ -117,8 +117,10 @@ func ManageChatThreadContext(chatMessages []llms.ChatMessage, maxTokens int) {
 }
 
 // createStreamingCallback creates a callback function for streaming LLM responses with optional Markdown formatting
-func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner) (func(ctx context.Context, chunk []byte) error, func()) {
-	var spinnerStopped sync.Once
+func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner, meter *lib.TokenMeter, onFirstChunk func()) (func(ctx context.Context, chunk []byte) error, func()) {
+	var meterStarted sync.Once
+	var meterTicker *time.Ticker
+	var meterDone chan struct{}
 	var mdWriter *formatter.StreamingWriter
 	var animWriter *animator.TypewriterWriter
 
@@ -139,6 +141,13 @@ func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner) (func
 
 	// Create cleanup function for the writers
 	cleanup := func() {
+		if meterTicker != nil {
+			close(meterDone)
+			meterTicker.Stop()
+		}
+		if meter != nil {
+			meter.Clear()
+		}
 		if mdWriter != nil {
 			if err := mdWriter.Flush(); err != nil {
 				logger.Log("err", "Error flushing markdown writer: %v", err)
@@ -162,11 +171,35 @@ func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner) (func
 
 	// Callback function for processing chunks
 	callback := func(ctx context.Context, chunk []byte) error {
-		// Stop spinner on first chunk
-		spinnerStopped.Do(func() {
-			spinner.Stop()
-			fmt.Print("\r") // Clear the line
+		// For streaming mode we do not use a spinner at all
+		if onFirstChunk != nil {
+			onFirstChunk()
+		}
+		// Start a background meter renderer on stderr to show live ↓ tokens
+		meterStarted.Do(func() {
+			if meter != nil {
+				meterTicker = time.NewTicker(200 * time.Millisecond)
+				meterDone = make(chan struct{})
+				go func() {
+					for {
+						select {
+						case <-meterDone:
+							return
+						case <-meterTicker.C:
+							meter.Render()
+						}
+					}
+				}()
+			}
 		})
+
+		// Accumulate incoming tokens silently; if chunk is code block or markdown fence, still count
+		if meter != nil && len(chunk) > 0 {
+			delta := lib.EstimateTokens(cfg, string(chunk))
+			meter.AddIncomingSilent(delta)
+			// Keep prompt's last incoming tokens updated live
+			cfg.LastIncomingTokens += delta
+		}
 
 		// Process the chunk with Markdown formatting if enabled
 		if !cfg.DisableMarkdownFormat && mdWriter != nil {

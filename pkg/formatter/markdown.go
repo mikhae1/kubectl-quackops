@@ -372,6 +372,7 @@ type StreamingWriter struct {
 	outWriter  io.Writer
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+	lineStart  bool
 }
 
 // NewStreamingWriter creates a new writer for streaming markdown formatting
@@ -383,11 +384,14 @@ func NewStreamingWriter(outWriter io.Writer, options ...FormatterOption) *Stream
 		outWriter:  outWriter,
 		ctx:        ctx,
 		cancelFunc: cancel,
+		lineStart:  true,
 	}
 }
 
 // Write implements io.Writer interface for streaming processing
 func (w *StreamingWriter) Write(p []byte) (n int, err error) {
+	// We no longer need to trim suspected stderr fragments because spinner writes to stderr only.
+
 	// Process the chunk
 	formatted := w.formatter.ProcessChunk(p)
 
@@ -397,6 +401,13 @@ func (w *StreamingWriter) Write(p []byte) (n int, err error) {
 		if err != nil {
 			return 0, err
 		}
+	}
+
+	// Track if the next write is at a new line boundary
+	if len(p) > 0 && p[len(p)-1] == '\n' {
+		w.lineStart = true
+	} else {
+		w.lineStart = false
 	}
 
 	// Return the original length to indicate we processed all bytes
