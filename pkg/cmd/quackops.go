@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 	"os/signal"
@@ -368,20 +367,8 @@ func printWelcomeBanner(cfg *config.Config) {
 	}
 	_ = rainbow
 
-	// Decode duck ASCII art and split to lines (left column, uncolored; color later with mono palette)
+	// Duck ASCII art disabled: keep left column empty to left-align banner text
 	leftLines := []string{}
-	if cfg.DuckASCIIArt != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(cfg.DuckASCIIArt); err == nil {
-			raw := strings.ReplaceAll(string(decoded), "\r\n", "\n")
-			for _, ln := range strings.Split(raw, "\n") {
-				if strings.TrimSpace(ln) == "" {
-					leftLines = append(leftLines, "")
-				} else {
-					leftLines = append(leftLines, ln)
-				}
-			}
-		}
-	}
 	// Compute left column width for alignment using uncolored version
 	maxLeft := 0
 	if len(leftLines) > 0 {
@@ -517,84 +504,48 @@ func printWelcomeBanner(cfg *config.Config) {
 
 	// Gather Kubernetes context details and render directly under banner
 	ctxName, _, ctxErr := lib.GetKubeContextInfo(cfg)
+	indent := ""
 	if maxLeft > 0 {
-		indent := strings.Repeat(" ", maxLeft) + gap
-		if ctxErr != nil {
-			fmt.Println(indent + dim.Sprint("Using Kubernetes context:") + " " + warn.Sprintf("unavailable (%v)", ctxErr))
-		} else if ctxName != "" {
-			fmt.Println(indent + dim.Sprint("Using Kubernetes context:") + " " + info.Sprintf("%s", ctxName))
-		}
-	} else {
-		if ctxErr != nil {
-			fmt.Println(dim.Sprint("Using Kubernetes context:") + " " + warn.Sprintf("unavailable (%v)", ctxErr))
-		} else if ctxName != "" {
-			fmt.Println(dim.Sprint("Using Kubernetes context:") + " " + info.Sprintf("%s", ctxName))
-		}
+		indent = strings.Repeat(" ", maxLeft) + gap
+	}
+	if ctxErr != nil {
+		fmt.Println(indent + dim.Sprint("Using Kubernetes context:") + " " + warn.Sprintf("unavailable (%v)", ctxErr))
+	} else if ctxName != "" {
+		fmt.Println(indent + dim.Sprint("Using Kubernetes context:") + " " + info.Sprintf("%s", ctxName))
 	}
 
 	// Horizontal gradient line under the ASCII art (aligned under right column)
 	if maxRight > 0 {
 		line := strings.Repeat("─", maxRight)
 		colored := gradientizeMono(line, 0)
-		if maxLeft > 0 {
-			fmt.Println(strings.Repeat(" ", maxLeft) + gap + colored)
-		} else {
-			fmt.Println(colored)
-		}
+		fmt.Println(indent + colored)
 	}
 
-	// Non-rainbow info lines (useful details)
+	// Non-rainbow info lines (useful details) - keep original text, but left-aligned
 	llmStyled := dim.Sprint("LLM:") + " " + accent.Sprintf("%s", provider) + dim.Sprint(" · ") + magenta.Sprintf("%s", model)
-	if maxLeft > 0 {
-		indent := strings.Repeat(" ", maxLeft) + gap
-		fmt.Println(indent + llmStyled)
-		if apiPlain != "" {
-			fmt.Println(indent + dim.Sprint("API:") + " " + info.Sprintf("%s", cfg.ApiURL))
-		}
-		fmt.Println(indent + dim.Sprint("Safe mode:") + " " + func() string {
-			if cfg.SafeMode {
-				return ok.Sprint("On")
-			}
-			return warn.Sprint("Off")
-		}())
-		fmt.Println(indent + dim.Sprint("History:") + " " + func() string {
-			if !cfg.DisableHistory && cfg.HistoryFile != "" {
-				return info.Sprintf("%s", cfg.HistoryFile)
-			}
-			return dim.Sprint("disabled")
-		}())
-
-		// Tips for getting started
-		fmt.Println()
-		fmt.Println(indent + accent.Sprint("Getting started:"))
-		fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Ask questions:") + " " + info.Sprint("find issues with pods in nginx namespace"))
-		fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Run commands:") + " " + info.Sprint("$ kubectl get events -A"))
-		fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Type: ") + ok.Sprint("/help") + " " + info.Sprint("for more information."))
-	} else {
-		fmt.Println(llmStyled)
-		if apiPlain != "" {
-			fmt.Println(dim.Sprint("K8s API:") + " " + info.Sprintf("%s", cfg.ApiURL))
-		}
-		fmt.Println(dim.Sprint("Safe mode:") + " " + func() string {
-			if cfg.SafeMode {
-				return ok.Sprint("On")
-			}
-			return warn.Sprint("Off")
-		}())
-		fmt.Println(dim.Sprint("History:") + " " + func() string {
-			if !cfg.DisableHistory && cfg.HistoryFile != "" {
-				return info.Sprintf("%s", cfg.HistoryFile)
-			}
-			return dim.Sprint("disabled")
-		}())
-
-		// Tips for getting started
-		fmt.Println()
-		fmt.Println(accent.Sprint("Tips for getting started:"))
-		fmt.Println(info.Sprint("- Ask questions, or run commands with \"$\"."))
-		fmt.Println(info.Sprint("- Example: $ kubectl get events -A"))
-		fmt.Println(info.Sprint("- /help for more information."))
+	fmt.Println(indent + llmStyled)
+	if apiPlain != "" {
+		fmt.Println(indent + dim.Sprint("API:") + " " + info.Sprintf("%s", cfg.ApiURL))
 	}
+	fmt.Println(indent + dim.Sprint("Safe mode:") + " " + func() string {
+		if cfg.SafeMode {
+			return ok.Sprint("On")
+		}
+		return warn.Sprint("Off")
+	}())
+	fmt.Println(indent + dim.Sprint("History:") + " " + func() string {
+		if !cfg.DisableHistory && cfg.HistoryFile != "" {
+			return info.Sprintf("%s", cfg.HistoryFile)
+		}
+		return dim.Sprint("disabled")
+	}())
+
+	// Tips for getting started
+	fmt.Println()
+	fmt.Println(indent + accent.Sprint("Getting started:"))
+	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Ask questions:") + " " + info.Sprint("find pod issues in nginx namespace"))
+	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Run commands:") + " " + info.Sprint("$ kubectl get events -A"))
+	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Type: ") + ok.Sprint("/help") + " " + info.Sprint("for more information"))
 	fmt.Println()
 }
 
