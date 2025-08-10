@@ -28,7 +28,7 @@ type cmdStatus struct {
 
 // ExecDiagCmds executes diagnostic commands and returns their results
 func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error) {
-	logger.Log("info", "Executing diagnostic commands: %v", commands)
+	logger.Log("info", "ExecDiagCmds: %d command(s)", len(commands))
 
 	// Initialize tracking variables
 	startTime := time.Now()
@@ -143,6 +143,9 @@ func executeCommandsSequentially(
 
 		// Print command result
 		printCommandResult(command, results[i].Err, cmdDuration, firstCommandCompleted, firstCommandCompletedMutex)
+		if results[i].Err != nil {
+			logger.Log("warn", "Command failed: %s", command)
+		}
 	}
 }
 
@@ -195,6 +198,9 @@ func executeCommandsParallel(
 
 			// Print command result
 			printCommandResult(cmd, results[idx].Err, cmdDuration, firstCommandCompleted, firstCommandCompletedMutex)
+			if results[idx].Err != nil {
+				logger.Log("warn", "Command failed: %s", cmd)
+			}
 		}(i, command)
 	}
 
@@ -403,9 +409,9 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 		}
 	}
 
-    // Print command output for interactive commands (those with $ prefix),
-    // always in edit mode, or when verbose mode is enabled
-    if cfg.Verbose || cfg.EditMode || strings.HasPrefix(result.Cmd, "$") {
+	// Print command output for interactive commands (those with $ prefix),
+	// always in edit mode, or when verbose mode is enabled
+	if cfg.Verbose || cfg.EditMode || strings.HasPrefix(result.Cmd, "$") {
 		dim := color.New(color.Faint).SprintFunc()
 		bold := color.New(color.Bold).SprintFunc()
 

@@ -71,6 +71,13 @@ type Config struct {
 
 	// EditMode indicates the persistent shell edit mode toggled by '$'
 	EditMode bool
+
+	// Diagnostics toggles and knobs
+	EnableBaseline      bool
+	EventsWindowMinutes int
+	EventsWarningsOnly  bool
+	LogsTail            int
+	LogsAllContainers   bool
 }
 
 // LoadConfig initializes the application configuration
@@ -131,6 +138,12 @@ func LoadConfig() *Config {
 		KubectlBinaryPath:     getEnvArg("QU_KUBECTL_BINARY", "kubectl").(string),
 		SpinnerTimeout:        300,
 		StoredUserCmdResults:  []CmdRes{},
+		// Diagnostics toggles
+		EnableBaseline:      getEnvArg("QU_ENABLE_BASELINE", true).(bool),
+		EventsWindowMinutes: getEnvArg("QU_EVENTS_WINDOW_MINUTES", 60).(int),
+		EventsWarningsOnly:  getEnvArg("QU_EVENTS_WARN_ONLY", true).(bool),
+		LogsTail:            getEnvArg("QU_LOGS_TAIL", 200).(int),
+		LogsAllContainers:   getEnvArg("QU_LOGS_ALL_CONTAINERS", false).(bool),
 
 		// Embedding model configuration
 		EmbeddingModel:        getEnvArg("QU_EMBEDDING_MODEL", defaultEmbeddingModel).(string),
@@ -303,6 +316,21 @@ func getEnvArg(key string, fallback interface{}) interface{} {
 				os.Exit(1)
 			}
 			return intVal
+		case bool:
+			// Accept true/false/1/0
+			boolVal, err := strconv.ParseBool(value)
+			if err != nil {
+				fmt.Printf("Error: Value '%s' must be a boolean, but got '%s'\n", key, value)
+				os.Exit(1)
+			}
+			return boolVal
+		case float64:
+			floatVal, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				fmt.Printf("Error: Value '%s' must be a float, but got '%s'\n", key, value)
+				os.Exit(1)
+			}
+			return floatVal
 		case []string:
 			return strings.Split(value, ",")
 		default:

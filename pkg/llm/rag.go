@@ -8,6 +8,7 @@ import (
 
 	"github.com/briandowns/spinner"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/diag"
 	"github.com/mikhae1/kubectl-quackops/pkg/exec"
 	"github.com/mikhae1/kubectl-quackops/pkg/filter"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
@@ -35,6 +36,21 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 		return "", fmt.Errorf("no valid kubectl commands found")
 	}
 
+	// Prepend baseline commands if enabled
+	if cfg.EnableBaseline {
+		base := diag.BaselineCommands(cfg)
+		if len(base) > 0 {
+			logger.Log("info", "Baseline enabled: running %d command(s)", len(base))
+			// Run baseline first and append to results so they can be reused without re-running
+			baseRes, _ := exec.ExecDiagCmds(cfg, base)
+			if len(baseRes) > 0 {
+				// merge baseline results into stored results for prompt assembly below
+				cmdResults = append(cmdResults, baseRes...)
+				logger.Log("info", "Baseline collected %d result(s)", len(baseRes))
+			}
+		}
+	}
+
 	// Create a spinner for diagnostic information gathering only if we're not in safe mode
 	// In safe mode, the spinner will be managed by execDiagCmds for each command
 	var s *spinner.Spinner
@@ -47,9 +63,14 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 	}
 
 	// Execute the diagnostic commands (no need for slices.Compact as cmds is already filtered)
-	cmdResults, err = exec.ExecDiagCmds(cfg, cmds)
+	logger.Log("info", "Executing diagnostic command set: %d command(s)", len(cmds))
+	userRes, err := exec.ExecDiagCmds(cfg, cmds)
 	if err != nil {
 		logger.Log("warn", "Error executing diagnostic commands: %v", err)
+	}
+	if len(userRes) > 0 {
+		cmdResults = append(cmdResults, userRes...)
+		logger.Log("info", "Collected %d diagnostic result(s)", len(userRes))
 	}
 
 	// Check if we have valid results
@@ -119,6 +140,98 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 	}
 
 	contextData := contextBuilder.String()
+
+	// Run light-weight analyzers over collected JSON outputs to produce high-signal findings
+	// Extract relevant JSON blobs by command for analyzers
+	var podsJSON, svcsJSON, epsJSON, esJSON, eventsJSON, nodesJSON, hpaJSON, readyz, livez string
+	var depJSON, ingJSON, pvcJSON, pvJSON string
+	for _, cmd := range cmdResults {
+		c := strings.TrimSpace(cmd.Cmd)
+		if strings.HasPrefix(c, "kubectl get pods ") {
+			podsJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get services ") {
+			svcsJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get deployments ") {
+			depJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get endpointslices ") {
+			esJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get endpoints ") {
+			epsJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get events ") {
+			eventsJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get ingress ") {
+			ingJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get nodes ") {
+			nodesJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get hpa ") {
+			hpaJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get pvc ") {
+			pvcJSON = cmd.Out
+		} else if strings.HasPrefix(c, "kubectl get pv ") {
+			pvJSON = cmd.Out
+		} else if strings.Contains(c, "/readyz?verbose") {
+			readyz = cmd.Out
+		} else if strings.Contains(c, "/livez?verbose") {
+			livez = cmd.Out
+		}
+	}
+
+	findings := make([]diag.Finding, 0, 8)
+	logger.Log("info", "Analyzer inputs: pods=%t svcs=%t eps=%t es=%t nodes=%t hpa=%t events=%t dep=%t ing=%t pvc=%t pv=%t readyz=%t livez=%t",
+		podsJSON != "", svcsJSON != "", epsJSON != "", esJSON != "", nodesJSON != "", hpaJSON != "",
+		eventsJSON != "", depJSON != "", ingJSON != "", pvcJSON != "", pvJSON != "", readyz != "", livez != "")
+	if podsJSON != "" {
+		findings = append(findings, diag.AnalyzePods(podsJSON)...)
+	}
+	if svcsJSON != "" || epsJSON != "" || esJSON != "" {
+		findings = append(findings, diag.AnalyzeServices(svcsJSON, epsJSON, esJSON)...)
+	}
+	if depJSON != "" {
+		findings = append(findings, diag.AnalyzeDeployments(depJSON)...)
+	}
+	if ingJSON != "" && svcsJSON != "" {
+		findings = append(findings, diag.AnalyzeIngress(ingJSON, svcsJSON)...)
+	}
+	if nodesJSON != "" {
+		findings = append(findings, diag.AnalyzeNodes(nodesJSON)...)
+	}
+	if hpaJSON != "" {
+		findings = append(findings, diag.AnalyzeHPAs(hpaJSON)...)
+	}
+	if pvcJSON != "" && pvJSON != "" {
+		findings = append(findings, diag.AnalyzePVCsPVs(pvcJSON, pvJSON)...)
+	}
+	findings = append(findings, diag.AnalyzeAPIServerHealth(readyz, "readyz")...)
+	findings = append(findings, diag.AnalyzeAPIServerHealth(livez, "livez")...)
+
+	if len(findings) > 0 {
+		logger.Log("info", "Analyzers produced %d finding(s)", len(findings))
+		// Log up to first 10 findings for debug visibility
+		maxLog := 10
+		if len(findings) < maxLog {
+			maxLog = len(findings)
+		}
+		for i := 0; i < maxLog; i++ {
+			f := findings[i]
+			logger.Log("info", "Finding[%d]: kind=%s id=%s severity=%s summary=%s", i, f.Kind, f.ID, f.Severity, f.Summary)
+		}
+	} else {
+		logger.Log("info", "Analyzers produced no findings")
+	}
+	if eventsJSON != "" && cfg.EventsWindowMinutes > 0 {
+		// Attach a compact event summary as a pseudo-finding block
+		summary := diag.SummarizeEvents(eventsJSON, cfg.EventsWarningsOnly, time.Duration(cfg.EventsWindowMinutes)*time.Minute, 20)
+		if summary != "" {
+			findings = append(findings, diag.Finding{Kind: "Events", ID: "-A", Severity: "info", Summary: strings.ReplaceAll(summary, "\n", " | ")})
+		}
+	}
+
+	if len(findings) > 0 {
+		contextBuilder.WriteString("Findings Summary:\n")
+		contextBuilder.WriteString(diag.FormatFindings(findings))
+		contextBuilder.WriteString("\n\n---\n\n")
+		contextData = contextBuilder.String()
+	}
 
 	// If the context is too large, use semantic trimming via embeddings
 	if len(lib.Tokenize(contextData)) > int(float64(cfg.MaxTokens)/5) {

@@ -37,6 +37,7 @@ func GenKubectlCmds(cfg *config.Config, prompt string, userMsgCount int) ([]stri
 	defer s.Stop()
 
 	// Execute request without updating the conversation history
+	// Preference: ask for commands as plain lines (current behavior). Future: instruct JSON and parse.
 	response, err := Request(cfg, augPrompt, false, false)
 
 	if err != nil {
