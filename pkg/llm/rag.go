@@ -36,8 +36,8 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 		return "", fmt.Errorf("no valid kubectl commands found")
 	}
 
-	// Prepend baseline commands if enabled
-	if cfg.EnableBaseline {
+	// Prepend baseline commands only for the first user query when enabled
+	if cfg.EnableBaseline && userMsgCount == 1 {
 		base := diag.BaselineCommands(cfg)
 		if len(base) > 0 {
 			logger.Log("info", "Baseline enabled: running %d command(s)", len(base))
@@ -94,14 +94,26 @@ func CreateAugPromptFromCmdResults(cfg *config.Config, prompt string, cmdResults
 
 // formatCommandResultsForRAG formats command results for RAG
 func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []config.CmdRes) string {
-	// Process command outputs
-	var contextBuilder strings.Builder
-	var validCommandCount int
+	// Build a set of baseline commands to exclude their raw outputs from the LLM context
+	baselineSet := map[string]bool{}
+	if cfg.EnableBaseline {
+		for _, b := range diag.BaselineCommands(cfg) {
+			key := strings.TrimSpace(b)
+			if key != "" {
+				baselineSet[key] = true
+			}
+		}
+	}
 
-	// Format each command result for context
+	// Collect raw outputs for non-baseline commands only
+	var rawBuilder strings.Builder
 	for _, cmd := range cmdResults {
-		// Skip commands with empty command strings or empty outputs
-		if strings.TrimSpace(cmd.Cmd) == "" || strings.TrimSpace(cmd.Out) == "" {
+		c := strings.TrimSpace(cmd.Cmd)
+		if c == "" || strings.TrimSpace(cmd.Out) == "" {
+			continue
+		}
+		// Skip baseline raw outputs entirely; we'll rely on analyzer findings instead
+		if baselineSet[c] {
 			continue
 		}
 
@@ -111,35 +123,29 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 			output = filter.SensitiveData(output)
 		}
 
-		// Format the command and its output
-		contextBuilder.WriteString("Command: ")
-		contextBuilder.WriteString(cmd.Cmd)
-		contextBuilder.WriteString("\n\nOutput:\n")
-
-		// Include error information for timeout errors or append normal output
+		// Include only successful outputs or timeouts; skip other errors
+		wroteSection := false
+		rawBuilder.WriteString("Command: ")
+		rawBuilder.WriteString(cmd.Cmd)
+		rawBuilder.WriteString("\n\nOutput:\n")
 		if cmd.Err != nil {
 			if strings.Contains(cmd.Err.Error(), "timed out") {
-				// If it's a timeout error, use both the output and error message
-				contextBuilder.WriteString(output)
-				validCommandCount++
+				rawBuilder.WriteString(output)
+				wroteSection = true
+			} else {
+				// Skip this section entirely for non-timeout errors
+				// Reset the header we just wrote by trimming back to last section boundary if needed
+				// Simpler: overwrite the last header by not appending a separator
+				continue
 			}
-			// Skip other types of errors
-			continue
 		} else {
-			// Normal output for successful commands
-			contextBuilder.WriteString(output)
-			validCommandCount++
+			rawBuilder.WriteString(output)
+			wroteSection = true
 		}
-
-		contextBuilder.WriteString("\n\n---\n\n")
+		if wroteSection {
+			rawBuilder.WriteString("\n\n---\n\n")
+		}
 	}
-
-	// If no valid commands were processed, return an empty string
-	if validCommandCount == 0 {
-		return ""
-	}
-
-	contextData := contextBuilder.String()
 
 	// Run light-weight analyzers over collected JSON outputs to produce high-signal findings
 	// Extract relevant JSON blobs by command for analyzers
@@ -226,12 +232,22 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 		}
 	}
 
+	// Construct context data prioritizing analyzer findings and excluding baseline raw outputs
+	var sections []string
+
 	if len(findings) > 0 {
-		contextBuilder.WriteString("Findings Summary:\n")
-		contextBuilder.WriteString(diag.FormatFindings(findings))
-		contextBuilder.WriteString("\n\n---\n\n")
-		contextData = contextBuilder.String()
+		var fb strings.Builder
+		fb.WriteString("## Potential cluster issues found\n")
+		fb.WriteString(diag.FormatFindings(findings))
+		sections = append(sections, fb.String())
 	}
+	rawContent := strings.TrimSpace(rawBuilder.String())
+	if rawContent != "" {
+		// Trim trailing section separator if present
+		rawContent = strings.TrimSuffix(rawContent, "\n\n---\n\n")
+		sections = append(sections, "## Command Outputs\n\n"+rawContent)
+	}
+	contextData := strings.Join(sections, "\n\n---\n\n")
 
 	// If the context is too large, use semantic trimming via embeddings
 	if len(lib.Tokenize(contextData)) > int(float64(cfg.MaxTokens)/5) {

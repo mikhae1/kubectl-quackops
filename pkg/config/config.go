@@ -432,7 +432,6 @@ var defaultKubectlFormatPrompt = `
 
 var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
 
-## Command Outputs
 %s
 
 ## Task
@@ -440,7 +439,7 @@ var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
 
 ## Guidelines
 - You are an experienced Kubernetes administrator with deep expertise in diagnostics
-- Analyze the command outputs above and provide insights on the issue
+- Analyze the context above and provide insights on the issue
 - Identify potential problems or anomalies in the cluster state
 - Suggest next steps or additional commands if needed
 - %s

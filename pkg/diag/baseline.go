@@ -7,8 +7,8 @@ import (
 )
 
 // BaselineCommands returns a curated set of safe, read-only diagnostic commands
-// to quickly capture high-signal cluster state. All commands are read-only.
-// The list intentionally favors JSON output for machine analysis.
+// to quickly capture high-signal cluster state.
+// The list will be analyzed by Analyzers to trim it for the first prompt context.
 func BaselineCommands(cfg *config.Config) []string {
 	// honor a simple toggle; default is enabled in config layer
 	if cfg == nil || !cfg.EnableBaseline {
@@ -17,26 +17,32 @@ func BaselineCommands(cfg *config.Config) []string {
 
 	c := []string{
 		// API server basic health (raw endpoints)
-		"kubectl get --raw /readyz?verbose",
-		"kubectl get --raw /livez?verbose",
-		// Core inventory (JSON for analyzers)
+		"kubectl get --raw='/readyz?verbose'",
+		"kubectl get --raw='/livez?verbose'",
+
+		// Core inventory
 		"kubectl get nodes -o json",
 		"kubectl get pods -A -o json",
 		"kubectl get deployments -A -o json",
 		"kubectl get services -A -o json",
 		"kubectl get ingress -A -o json",
+
 		// Endpoints/EndpointSlices to correlate Service→Pod connectivity
 		"kubectl get endpoints -A -o json",
 		"kubectl get endpointslices -A -o json",
-		// Events for recent warnings (windowing applied in analyzer)
+
+		// Events for recent warnings
 		"kubectl get events -A -o json",
+
 		// HPAs for autoscaling diagnostics
 		"kubectl get hpa -A -o json",
+
 		// Storage diagnostics
 		"kubectl get pvc -A -o json",
 		"kubectl get pv -A -o json",
+
 		// Try metrics-server if available (non-fatal if missing)
-		"kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes",
+		"kubectl get --raw '/apis/metrics.k8s.io/v1beta1/nodes'",
 	}
 
 	// Filter defensively against accidental duplicates if callers append us repeatedly
