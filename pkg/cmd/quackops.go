@@ -223,7 +223,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 		return r, true
 	}
 
-	// Add listener to maintain prompt consistency
+	// Add listener; avoid recomputing prompt on every keystroke to prevent latency
 	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
 		// Backup ESC handling if it reaches listener
 		if cfg.EditMode && key == readline.CharEsc {
@@ -233,20 +233,14 @@ func startChatSession(cfg *config.Config, args []string) error {
 			return line, pos, true
 		}
 
-		// Keep prompt consistent with current mode
-		if cfg.EditMode {
-			rl.SetPrompt(lib.FormatEditPrompt())
-		} else {
-			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
-		}
-
-		// On Enter or Interrupt, maintain current mode
+		// Only update prompt on ENTER or INTERRUPT; other keys are ignored to keep input responsive
 		if key == readline.CharEnter || key == readline.CharInterrupt {
 			if cfg.EditMode {
 				rl.SetPrompt(lib.FormatEditPrompt())
 			} else {
 				rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 			}
+			rl.Refresh()
 		}
 
 		return line, pos, false

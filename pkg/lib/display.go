@@ -108,7 +108,8 @@ func CalculateContextPercentage(cfg *config.Config) float64 {
 	// Prefer the most recent outgoing tokens for the last request; fall back to
 	// history-only estimate when not available (e.g., initial prompt render).
 	currentTokens := cfg.LastOutgoingTokens
-	if currentTokens <= 0 {
+	if currentTokens <= 0 && len(cfg.ChatMessages) > 0 {
+		// Avoid a potentially heavy initial token count on the first render
 		currentTokens = CountTokensWithConfig(cfg, "", cfg.ChatMessages)
 	}
 
