@@ -114,7 +114,7 @@ func LoadConfig() *Config {
 	}
 	defaultHistoryFile := ""
 	if homeDir != "" {
-		defaultHistoryFile = fmt.Sprintf("%s/.quackops_history", homeDir)
+		defaultHistoryFile = fmt.Sprintf("%s/.quackops/history", homeDir)
 	}
 
 	return &Config{
@@ -532,7 +532,7 @@ func GetEnvVarsInfo() map[string]EnvVarInfo {
 			Description:  "Maximum number of completions to display",
 		},
 		"QU_HISTORY_FILE": {
-			DefaultValue: "~/.quackops_history",
+			DefaultValue: "~/.quackops/history",
 			Type:         "string",
 			Description:  "Path to the history file",
 		},

@@ -30,7 +30,7 @@ Beyond simple question-answering, QuackOps provides a rich, interactive experien
 
 - **History**:
   - Interactive shell-like experience with command history navigation (up/down arrows)
-  - Persistent history storage in a configurable file (default: `~/.quackops_history`)
+  - Persistent history storage in a configurable file (default: `~/.quackops/history`)
   - Easily recall previous prompts and commands across sessions
 
 ## 🔍 Use Cases
@@ -143,7 +143,7 @@ You can install it by moving the executable file to any directory included in yo
 
 QuackOps automatically stores your prompt history to enable easy access to previous queries:
 
-- **Persistent History:** Your previous prompts are saved to a history file (default: `~/.quackops_history`) and will be available across sessions.
+- **Persistent History:** Your previous prompts are saved to a history file (default: `~/.quackops/history`) and will be available across sessions.
 - **History Navigation:** Use up and down arrow keys to navigate through your command history.
 - **Customizable:** Control the history file location with `--history-file` option or disable history completely with `--disable-history`.
 
@@ -320,7 +320,7 @@ QuackOps is highly configurable through environment variables or command-line fl
 | `-d, --disable-markdown` | Disable Markdown formatting and colorization of LLM outputs | `false` |
 | `-a, --disable-animation` | Disable typewriter animation effect for LLM outputs | `false` |
 | `--disable-history` | Disable storing prompt history in a file | `false` |
-| `--history-file` | Path to the history file | `~/.quackops_history` |
+| `--history-file` | Path to the history file | `~/.quackops/history` |
 
 ## 🛡️ Security Considerations
 
