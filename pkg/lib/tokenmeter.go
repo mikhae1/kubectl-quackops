@@ -57,12 +57,15 @@ func (tm *TokenMeter) Render() {
 	sep := color.New(color.FgHiBlack).Sprint("|")
 	leftBracket := color.New(color.FgHiBlack).Sprint("[")
 	rightBracket := color.New(color.FgHiBlack).Sprint("]")
-	// Optional context usage percentage (messages only)
+	// Context usage percentage based on this request's outgoing tokens (prompt + history)
 	pct := 0.0
-	if tm.cfg != nil && tm.cfg.MaxTokens > 0 {
-		pct = (float64(CountTokensWithConfig(tm.cfg, "", tm.cfg.ChatMessages)) / float64(tm.cfg.MaxTokens)) * 100
-		if pct > 100 {
-			pct = 100
+	if tm.cfg != nil {
+		maxWindow := EffectiveMaxTokens(tm.cfg)
+		if maxWindow > 0 {
+			pct = (float64(tm.outgoing) / float64(maxWindow)) * 100
+			if pct > 100 {
+				pct = 100
+			}
 		}
 	}
 	// Color percent similarly to prompt: green <50, yellow <80, red otherwise

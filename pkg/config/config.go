@@ -68,6 +68,9 @@ type Config struct {
 	// Token accounting for last LLM exchange (shown in prompt)
 	LastOutgoingTokens int
 	LastIncomingTokens int
+
+	// EditMode indicates the persistent shell edit mode toggled by '$'
+	EditMode bool
 }
 
 // LoadConfig initializes the application configuration

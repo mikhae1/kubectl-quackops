@@ -40,7 +40,6 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 
 	// Status channel to collect execution updates
 	statusChan := make(chan cmdStatus, len(commands))
-	defer close(statusChan)
 
 	// Initialize spinner
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
@@ -49,8 +48,11 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 	s.Start()
 	defer s.Stop()
 
-	// Start status monitoring goroutine
+	// Start status monitoring goroutine and ensure we wait for it to finish
+	var statusWG sync.WaitGroup
+	statusWG.Add(1)
 	go func() {
+		defer statusWG.Done()
 		for status := range statusChan {
 			if status.done {
 				if status.skipped {
@@ -78,6 +80,10 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 	} else {
 		executeCommandsParallel(cfg, commands, results, statusChan, &firstCommandCompleted, firstCommandCompletedMutex)
 	}
+
+	// Close the status channel and wait for status updates to finish processing
+	close(statusChan)
+	statusWG.Wait()
 
 	// Print execution summary
 	statusData := struct {
@@ -250,7 +256,7 @@ func printExecutionSummary(commands []string, statusData *struct {
 
 	skippedInfo := ""
 	if statusData.skippedCount > 0 {
-		skippedInfo = fmt.Sprintf(", %d skipped", statusData.skippedCount+1)
+		skippedInfo = fmt.Sprintf(", %d skipped", statusData.skippedCount)
 	}
 
 	fmt.Printf("%s %s %s\n",
@@ -271,7 +277,7 @@ func processResults(cfg *config.Config, results []config.CmdRes) error {
 		if !cfg.Verbose {
 			logger.Log("in", "$ %s", res.Cmd)
 			if res.Out != "" && !strings.HasPrefix(res.Cmd, "$") {
-				logger.Log("out", res.Out)
+				logger.Log("out", "%s", res.Out)
 			}
 		}
 		if res.Err != nil {
@@ -397,9 +403,9 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 		}
 	}
 
-	// Print command output for interactive commands (those with $ prefix)
-	// or always when verbose mode is enabled
-	if cfg.Verbose || strings.HasPrefix(result.Cmd, "$") {
+    // Print command output for interactive commands (those with $ prefix),
+    // always in edit mode, or when verbose mode is enabled
+    if cfg.Verbose || cfg.EditMode || strings.HasPrefix(result.Cmd, "$") {
 		dim := color.New(color.Faint).SprintFunc()
 		bold := color.New(color.Bold).SprintFunc()
 

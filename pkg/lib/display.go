@@ -45,6 +45,40 @@ func KubeCtxInfo(cfg *config.Config) error {
 	return nil
 }
 
+// GetKubeContextInfo returns the current Kubernetes context name and cluster-info
+// lines without printing them. The trailing diagnostic hint line from
+// `kubectl cluster-info` is omitted to keep the output concise.
+func GetKubeContextInfo(cfg *config.Config) (string, []string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Timeout)*time.Second)
+	defer cancel()
+
+	// Get current context
+	contextCmd := exec.CommandContext(ctx, cfg.KubectlBinaryPath, "config", "current-context")
+	contextOutput, err := contextCmd.CombinedOutput()
+	if err != nil {
+		return "", nil, fmt.Errorf("error getting current context: %w", err)
+	}
+	ctxName := strings.TrimSpace(string(contextOutput))
+
+	// Get cluster info
+	clusterCmd := exec.CommandContext(ctx, cfg.KubectlBinaryPath, "cluster-info")
+	clusterOutput, err := clusterCmd.CombinedOutput()
+	if err != nil {
+		return ctxName, nil, fmt.Errorf("error getting cluster info: %w", err)
+	}
+
+	info := strings.TrimSpace(string(clusterOutput))
+	if info == "" {
+		return ctxName, nil, nil
+	}
+	lines := strings.Split(info, "\n")
+	if len(lines) > 0 {
+		// Drop the last line which usually contains the 'cluster-info dump' hint
+		lines = lines[:len(lines)-1]
+	}
+	return ctxName, lines, nil
+}
+
 // CountTokens counts the token usage for a given text string and/or chat messages
 // The function combines both tokens from text and the given messages
 func CountTokens(text string, messages []llms.ChatMessage) int {
@@ -67,13 +101,23 @@ func CountTokens(text string, messages []llms.ChatMessage) int {
 
 // CalculateContextPercentage calculates the percentage of context window used
 func CalculateContextPercentage(cfg *config.Config) float64 {
-	if cfg.MaxTokens == 0 {
+	if cfg == nil {
 		return 0.0
 	}
 
-	// Model-aware estimation
-	currentTokens := CountTokensWithConfig(cfg, "", cfg.ChatMessages)
-	percentage := (float64(currentTokens) / float64(cfg.MaxTokens)) * 100
+	// Prefer the most recent outgoing tokens for the last request; fall back to
+	// history-only estimate when not available (e.g., initial prompt render).
+	currentTokens := cfg.LastOutgoingTokens
+	if currentTokens <= 0 {
+		currentTokens = CountTokensWithConfig(cfg, "", cfg.ChatMessages)
+	}
+
+	maxWindow := EffectiveMaxTokens(cfg)
+	if maxWindow <= 0 {
+		return 0.0
+	}
+
+	percentage := (float64(currentTokens) / float64(maxWindow)) * 100
 
 	// Cap at 100% to avoid display issues
 	if percentage > 100 {
@@ -90,26 +134,26 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 	// Choose color based on context usage
 	var contextColor *color.Color
 	if percentage < 50 {
-		contextColor = color.New(color.FgGreen)
+		contextColor = color.New(color.FgHiCyan)
 	} else if percentage < 80 {
 		contextColor = color.New(color.FgYellow)
 	} else {
-		contextColor = color.New(color.FgRed)
+		contextColor = color.New(color.FgHiRed)
 	}
 
 	// Build compact context indicator with colored arrows and compact numbers
 	// Example: [3%|↑2.9k|↓2.0k]
 	leftBracket := color.New(color.FgHiBlack).Sprint("[")
 	rightBracket := color.New(color.FgHiBlack).Sprint("]")
-	pctStr := contextColor.Sprintf("%.0f%%", percentage)
+	pctStr := contextColor.Sprintf("%3.0f%%", percentage)
 	sep := color.New(color.FgHiBlack).Sprint("|")
 
 	tokenStr := ""
 	if cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0 {
-		up := color.New(color.FgHiYellow, color.Bold).Sprint("↑")
-		down := color.New(color.FgHiCyan, color.Bold).Sprint("↓")
-		outNum := color.New(color.FgHiYellow).Sprint(FormatCompactNumber(cfg.LastOutgoingTokens))
-		inNum := color.New(color.FgHiCyan).Sprint(FormatCompactNumber(cfg.LastIncomingTokens))
+		up := color.New(color.FgHiBlue, color.Bold).Sprint("↑")
+		down := color.New(color.FgHiGreen, color.Bold).Sprint("↓")
+		outNum := contextColor.Sprint(FormatCompactNumber(cfg.LastOutgoingTokens))
+		inNum := contextColor.Sprint(FormatCompactNumber(cfg.LastIncomingTokens))
 		tokenStr = fmt.Sprintf("%s%s%s%s%s", sep, up, outNum, sep, down+inNum)
 	}
 	contextStr := fmt.Sprintf("%s%s%s%s", leftBracket, pctStr, tokenStr, rightBracket)
@@ -123,4 +167,11 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 	}
 
 	return contextStr + " " + promptStr
+}
+
+// FormatEditPrompt returns the edit-mode prompt string without any token counter
+// or context indicator. This is used when the user toggles persistent edit mode
+// by pressing '$'.
+func FormatEditPrompt() string {
+	return color.New(color.FgHiRed, color.Bold).Sprint("$ ❯ ")
 }

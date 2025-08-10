@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -151,11 +152,6 @@ func runQuackOps(cfg *config.Config, args []string) func(cmd *cobra.Command, arg
 	return func(cmd *cobra.Command, args []string) error {
 		logger.InitLoggers(os.Stderr, 0)
 
-		// Display the current K8s context so user can confirm before proceeding
-		if err := lib.KubeCtxInfo(cfg); err != nil {
-			fmt.Printf("Warning: could not retrieve current Kubernetes context: %v\n", err)
-		}
-
 		if err := startChatSession(cfg, args); err != nil {
 			fmt.Printf("Error processing commands: %v\n", err)
 			return err
@@ -176,9 +172,10 @@ func startChatSession(cfg *config.Config, args []string) error {
 	}
 
 	rlConfig := &readline.Config{
-		Prompt:       lib.FormatContextPrompt(cfg, false),
-		EOFPrompt:    "exit",
-		AutoComplete: completer.NewShellAutoCompleter(cfg), // Use the new completer
+		Prompt:                 lib.FormatContextPrompt(cfg, false),
+		EOFPrompt:              "exit",
+		AutoComplete:           completer.NewShellAutoCompleter(cfg), // Use the new completer
+		DisableAutoSaveHistory: true,                                 // manage history manually
 	}
 
 	// Set history file if not disabled
@@ -192,21 +189,59 @@ func startChatSession(cfg *config.Config, args []string) error {
 	}
 
 	var rl *readline.Instance
-	// Add listener to handle $ at beginning of line
-	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
-		// Check if the line has $ after the current key event
-		hasCommandPrefix := len(line) > 0 && line[0] == '$'
+	// Use FuncFilterInputRune to capture ESC and $ for edit mode toggling
+	rlConfig.FuncFilterInputRune = func(r rune) (rune, bool) {
+		// Toggle edit mode with $ key press
+		if r == '$' {
+			cfg.EditMode = !cfg.EditMode
+			if rl != nil {
+				if cfg.EditMode {
+					rl.SetPrompt(lib.FormatEditPrompt())
+				} else {
+					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+				}
+				rl.Refresh()
+			}
+			return 0, false // swallow $
+		}
 
-		// Update prompt based on current state
-		if hasCommandPrefix {
-			rl.SetPrompt(lib.FormatContextPrompt(cfg, true))
+		// Exit edit mode with ESC
+		if r == readline.CharEsc && cfg.EditMode {
+			cfg.EditMode = false
+			if rl != nil {
+				rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+				rl.Refresh()
+			}
+			return 0, false // swallow ESC
+		}
+
+		return r, true
+	}
+
+	// Add listener to maintain prompt consistency
+	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
+		// Backup ESC handling if it reaches listener
+		if cfg.EditMode && key == readline.CharEsc {
+			cfg.EditMode = false
+			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+			rl.Refresh()
+			return line, pos, true
+		}
+
+		// Keep prompt consistent with current mode
+		if cfg.EditMode {
+			rl.SetPrompt(lib.FormatEditPrompt())
 		} else {
 			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 		}
 
-		// Always reset on Enter or Interrupt
+		// On Enter or Interrupt, maintain current mode
 		if key == readline.CharEnter || key == readline.CharInterrupt {
-			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+			if cfg.EditMode {
+				rl.SetPrompt(lib.FormatEditPrompt())
+			} else {
+				rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+			}
 		}
 
 		return line, pos, false
@@ -239,9 +274,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 		}
 	})
 
-	var hello = "Tell me what you need! Use '$' prefix to run commands or type 'bye' to exit."
-	decodedArt, _ := base64.StdEncoding.DecodeString(cfg.DuckASCIIArt)
-	fmt.Println(string(decodedArt) + hello)
+	printWelcomeBanner(cfg)
 
 	// Chat loop
 	// Track the last displayed token counters in the prompt so we can animate to new values
@@ -268,6 +301,11 @@ func startChatSession(cfg *config.Config, args []string) error {
 			cleanupAndExit("🦆...quack!", 0)
 		}
 
+		// Save history manually for non-slash inputs (skip "/" commands)
+		if !cfg.DisableHistory && cfg.HistoryFile != "" && !strings.HasPrefix(userPrompt, "/") {
+			_ = rl.Operation.SaveHistory(userPrompt)
+		}
+
 		if !strings.HasPrefix(userPrompt, "$") {
 			lastTextPrompt = userPrompt
 			userMsgCount++
@@ -278,16 +316,286 @@ func startChatSession(cfg *config.Config, args []string) error {
 			return err
 		}
 
-		// Animate the prompt counter to the latest token values
-		if promptAnimStop != nil {
-			close(promptAnimStop)
+		// Update prompt after processing
+		if cfg.EditMode {
+			// In edit mode, disable token-counter animation and show simple edit prompt
+			if promptAnimStop != nil {
+				close(promptAnimStop)
+				// Prevent double-close on subsequent iterations
+				promptAnimStop = nil
+			}
+			rl.SetPrompt(lib.FormatEditPrompt())
+			rl.Refresh()
+		} else {
+			// Animate the prompt counter to the latest token values
+			if promptAnimStop != nil {
+				close(promptAnimStop)
+				// Prevent double-close on subsequent iterations
+				promptAnimStop = nil
+			}
+			promptAnimStop = make(chan struct{})
+			animatePromptCounter(rl, cfg, lastDisplayedOutgoingTokens, lastDisplayedIncomingTokens, false, promptAnimStop)
+			// Update last-displayed snapshot to the current targets
+			lastDisplayedOutgoingTokens = cfg.LastOutgoingTokens
+			lastDisplayedIncomingTokens = cfg.LastIncomingTokens
 		}
-		promptAnimStop = make(chan struct{})
-		animatePromptCounter(rl, cfg, lastDisplayedOutgoingTokens, lastDisplayedIncomingTokens, false, promptAnimStop)
-		// Update last-displayed snapshot to the current targets
-		lastDisplayedOutgoingTokens = cfg.LastOutgoingTokens
-		lastDisplayedIncomingTokens = cfg.LastIncomingTokens
 	}
+}
+
+// printWelcomeBanner renders a styled welcome message inspired by modern AI CLIs
+// with a branded header, active configuration summary, and quick tips.
+func printWelcomeBanner(cfg *config.Config) {
+	// Helpers for formatting
+	ansiRe := regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
+	stripANSI := func(s string) string { return ansiRe.ReplaceAllString(s, "") }
+	visibleWidth := func(s string) int { return len([]rune(stripANSI(s))) }
+	padRight := func(s string, width int) string {
+		diff := width - visibleWidth(s)
+		if diff > 0 {
+			return s + strings.Repeat(" ", diff)
+		}
+		return s
+	}
+
+	// Rainbow sequence reserved (not used in mono mode)
+	rainbow := []*color.Color{
+		color.New(color.FgHiRed),
+		color.New(color.FgHiYellow),
+		color.New(color.FgHiGreen),
+		color.New(color.FgHiCyan),
+		color.New(color.FgHiBlue),
+		color.New(color.FgHiMagenta),
+	}
+	_ = rainbow
+
+	// Decode duck ASCII art and split to lines (left column, uncolored; color later with mono palette)
+	leftLines := []string{}
+	if cfg.DuckASCIIArt != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(cfg.DuckASCIIArt); err == nil {
+			raw := strings.ReplaceAll(string(decoded), "\r\n", "\n")
+			for _, ln := range strings.Split(raw, "\n") {
+				if strings.TrimSpace(ln) == "" {
+					leftLines = append(leftLines, "")
+				} else {
+					leftLines = append(leftLines, ln)
+				}
+			}
+		}
+	}
+	// Compute left column width for alignment using uncolored version
+	maxLeft := 0
+	if len(leftLines) > 0 {
+		// Compute max width with ANSI stripped
+		for _, ln := range leftLines {
+			if w := visibleWidth(ln); w > maxLeft {
+				maxLeft = w
+			}
+		}
+	}
+
+	// Build hero banner (right column)
+	// brand coloring not used for mono gradient mode
+	// brand := color.New(color.FgHiYellow, color.Bold)
+	dim := color.New(color.FgHiBlack)
+	shadow := color.New(color.FgHiBlack, color.Faint)
+	info := color.New(color.FgHiWhite)
+	ok := color.New(color.FgHiGreen, color.Bold)
+	warn := color.New(color.FgHiRed, color.Bold)
+	magenta := color.New(color.FgHiMagenta)
+	accent := color.New(color.FgHiCyan, color.Bold)
+
+	// (plain title kept for reference but not used)
+
+	provider := strings.ToUpper(strings.TrimSpace(cfg.Provider))
+	if provider == "" {
+		provider = "DEFAULT"
+	}
+	model := strings.TrimSpace(cfg.Model)
+	if model == "" {
+		model = "auto"
+	}
+	// Plain strings are used for computing rainbow offsets; we will use the live cfg values directly
+	apiPlain := ""
+	if cfg.ApiURL != "" {
+		apiPlain = fmt.Sprintf("K8s API: %s", cfg.ApiURL)
+	}
+	// Safe/history plain strings are not needed directly here
+
+	// QUACKOPS ASCII art (right column)
+	quackopsArt := []string{
+		" ██████╗██╗   ██╗█████╗ ████████╗  ██╗██████╗██████╗███████╗    ",
+		"██╔═══████║   ████╔══████╔════██║ ██╔██╔═══████╔══████╔════╝    ",
+		"██║   ████║   ███████████║    █████╔╝██║   ████████╔███████╗    ",
+		"██║▄▄ ████║   ████╔══████║    ██╔═██╗██║   ████╔═══╝╚════██║    ",
+		"╚██████╔╚██████╔██║  ██╚████████║  ██╚██████╔██║    ███████║    ",
+		" ╚══▀▀═╝ ╚═════╝╚═╝  ╚═╝╚═════╚═╝  ╚═╝╚═════╝╚═╝    ╚══════╝    ",
+	}
+
+	// Single-palette gradient (cyan family) for ASCII art (duck + QUACKOPS) & horizontal line
+	monoPalette := []*color.Color{
+		color.New(color.FgHiCyan),
+		color.New(color.FgCyan),
+	}
+	gradientizeMono := func(text string, start int) string {
+		if text == "" {
+			return text
+		}
+		var b strings.Builder
+		idx := start
+		for _, r := range text {
+			c := monoPalette[idx%len(monoPalette)]
+			b.WriteString(c.Sprint(string(r)))
+			idx++
+		}
+		return b.String()
+	}
+
+	// Checkerboard (chess) pattern colorizer for hero text
+	// Corner/line characters like ╔ ╗ ╚ ╝ are rendered with a dim shadow color
+	// and excluded from the chess alternation (do not advance the chess column).
+	chessColorize := func(text string, row int) string {
+		if text == "" {
+			return text
+		}
+
+		isShadowRune := func(r rune) bool {
+			switch r {
+			case '\u2554', '\u2557', '\u255A', '\u255D', '═', '║':
+				return true
+			default:
+				return false
+			}
+		}
+
+		var b strings.Builder
+		col := 0
+		for _, r := range text {
+			if isShadowRune(r) {
+				b.WriteString(shadow.Sprint(string(r)))
+				// do not advance col; excluded from chess pattern
+				continue
+			}
+			c := monoPalette[(row+col)%len(monoPalette)]
+			b.WriteString(c.Sprint(string(r)))
+			col++
+		}
+		return b.String()
+	}
+
+	// Side-by-side render: left duck, right QUACKOPS art
+	gap := "   "
+	lines := len(leftLines)
+	if len(quackopsArt) > lines {
+		lines = len(quackopsArt)
+	}
+	// Determine right width for later horizontal line
+	maxRight := 0
+	for _, ln := range quackopsArt {
+		if w := visibleWidth(ln); w > maxRight {
+			maxRight = w
+		}
+	}
+	for i := 0; i < lines; i++ {
+		left := ""
+		if i < len(leftLines) {
+			left = padRight(leftLines[i], maxLeft)
+		} else if maxLeft > 0 {
+			left = strings.Repeat(" ", maxLeft)
+		}
+		right := ""
+		if i < len(quackopsArt) {
+			// Apply chess (checkerboard) pattern instead of stripes
+			right = chessColorize(quackopsArt[i], i)
+		}
+		if maxLeft > 0 {
+			// Colorize duck (left) with mono palette for consistency
+			fmt.Println(gradientizeMono(left, 0) + gap + right)
+		} else {
+			fmt.Println(right)
+		}
+	}
+
+	// Gather Kubernetes context details and render directly under banner
+	ctxName, _, ctxErr := lib.GetKubeContextInfo(cfg)
+	if maxLeft > 0 {
+		indent := strings.Repeat(" ", maxLeft) + gap
+		if ctxErr != nil {
+			fmt.Println(indent + dim.Sprint("Using Kubernetes context:") + " " + warn.Sprintf("unavailable (%v)", ctxErr))
+		} else if ctxName != "" {
+			fmt.Println(indent + dim.Sprint("Using Kubernetes context:") + " " + info.Sprintf("%s", ctxName))
+		}
+	} else {
+		if ctxErr != nil {
+			fmt.Println(dim.Sprint("Using Kubernetes context:") + " " + warn.Sprintf("unavailable (%v)", ctxErr))
+		} else if ctxName != "" {
+			fmt.Println(dim.Sprint("Using Kubernetes context:") + " " + info.Sprintf("%s", ctxName))
+		}
+	}
+
+	// Horizontal gradient line under the ASCII art (aligned under right column)
+	if maxRight > 0 {
+		line := strings.Repeat("─", maxRight)
+		colored := gradientizeMono(line, 0)
+		if maxLeft > 0 {
+			fmt.Println(strings.Repeat(" ", maxLeft) + gap + colored)
+		} else {
+			fmt.Println(colored)
+		}
+	}
+
+	// Non-rainbow info lines (useful details)
+	llmStyled := dim.Sprint("LLM:") + " " + accent.Sprintf("%s", provider) + dim.Sprint(" · ") + magenta.Sprintf("%s", model)
+	if maxLeft > 0 {
+		indent := strings.Repeat(" ", maxLeft) + gap
+		fmt.Println(indent + llmStyled)
+		if apiPlain != "" {
+			fmt.Println(indent + dim.Sprint("API:") + " " + info.Sprintf("%s", cfg.ApiURL))
+		}
+		fmt.Println(indent + dim.Sprint("Safe mode:") + " " + func() string {
+			if cfg.SafeMode {
+				return ok.Sprint("On")
+			}
+			return warn.Sprint("Off")
+		}())
+		fmt.Println(indent + dim.Sprint("History:") + " " + func() string {
+			if !cfg.DisableHistory && cfg.HistoryFile != "" {
+				return info.Sprintf("%s", cfg.HistoryFile)
+			}
+			return dim.Sprint("disabled")
+		}())
+
+		// Tips for getting started
+		fmt.Println()
+		fmt.Println(indent + accent.Sprint("Getting started:"))
+		fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Ask questions:") + " " + info.Sprint("find issues with pods in nginx namespace"))
+		fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Run commands:") + " " + info.Sprint("$ kubectl get events -A"))
+		fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Type: ") + ok.Sprint("/help") + " " + info.Sprint("for more information."))
+	} else {
+		fmt.Println(llmStyled)
+		if apiPlain != "" {
+			fmt.Println(dim.Sprint("K8s API:") + " " + info.Sprintf("%s", cfg.ApiURL))
+		}
+		fmt.Println(dim.Sprint("Safe mode:") + " " + func() string {
+			if cfg.SafeMode {
+				return ok.Sprint("On")
+			}
+			return warn.Sprint("Off")
+		}())
+		fmt.Println(dim.Sprint("History:") + " " + func() string {
+			if !cfg.DisableHistory && cfg.HistoryFile != "" {
+				return info.Sprintf("%s", cfg.HistoryFile)
+			}
+			return dim.Sprint("disabled")
+		}())
+
+		// Tips for getting started
+		fmt.Println()
+		fmt.Println(accent.Sprint("Tips for getting started:"))
+		fmt.Println(info.Sprint("- Ask questions, or run commands with \"$\"."))
+		fmt.Println(info.Sprint("- Example: $ kubectl get events -A"))
+		fmt.Println(info.Sprint("- /help for more information."))
+	}
+	fmt.Println()
 }
 
 // animatePromptCounter gradually updates the prompt token counters from previous values
@@ -362,15 +670,32 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	var augPrompt string
 	var err error
 
-	// If the prompt starts with $, execute the command and store the result
-	// We don't run LLM query after command execution
-	if strings.HasPrefix(userPrompt, "$") {
-		// Execute the command
-		cmdResults, err := exec.ExecDiagCmds(cfg, []string{userPrompt})
+	// Handle slash commands (e.g., /help) before any other processing
+	lowered := strings.ToLower(strings.TrimSpace(userPrompt))
+	if strings.HasPrefix(lowered, "/") {
+		switch lowered {
+		case "/help", "/h", "/?":
+			printInlineHelp()
+			return nil
+		default:
+			fmt.Printf("Unknown command: %s\n", userPrompt)
+			fmt.Println("Type /help for available commands.")
+			return nil
+		}
+	}
+
+	// Edit mode: treat input as command without requiring '$' prefix
+	if cfg.EditMode || strings.HasPrefix(userPrompt, "$") {
+		effectiveCmd := userPrompt
+		if cfg.EditMode && !strings.HasPrefix(userPrompt, "$") {
+			// In edit mode, normalize to "$ <cmd>" so it is stored with $ in history
+			effectiveCmd = "$ " + userPrompt
+		}
+		// Execute the command and store the result; do not run LLM
+		cmdResults, err := exec.ExecDiagCmds(cfg, []string{effectiveCmd})
 		if err != nil {
 			fmt.Println(color.HiRedString(err.Error()))
 		}
-		// Store the command results for the next user prompt
 		if len(cmdResults) > 0 {
 			cfg.StoredUserCmdResults = append(cfg.StoredUserCmdResults, cmdResults...)
 		}
@@ -405,4 +730,31 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 	llm.ManageChatThreadContext(cfg.ChatMessages, cfg.MaxTokens)
 	return nil
+}
+
+// printInlineHelp prints quick usage information for interactive mode
+func printInlineHelp() {
+	title := color.New(color.FgHiYellow, color.Bold)
+	body := color.New(color.FgHiWhite)
+
+	fmt.Println()
+	title.Println("Tips for getting started:")
+	fmt.Println(body.Sprint("- Ask questions, or run commands with \"$\"."))
+	fmt.Println(body.Sprint("- Example: $ kubectl get events -A"))
+	fmt.Println(body.Sprint("- Type 'exit', 'quit', or 'bye' to leave"))
+	fmt.Println()
+	title.Println("Commands:")
+	fmt.Println(body.Sprint("- Press $ to toggle command mode; type $ again to exit command mode"))
+	fmt.Println(body.Sprint("- Press tab for shell auto-completion"))
+	fmt.Println()
+	title.Println("Examples (cluster diagnostics):")
+	fmt.Println(body.Sprint("- Pods: 'find any issues with pods'"))
+	fmt.Println(body.Sprint("- Ingress: 'why is my ingress not routing traffic properly to backend services?'"))
+	fmt.Println(body.Sprint("- Performance: 'identify pods consuming excessive CPU or memory in the production namespace'"))
+	fmt.Println(body.Sprint("- Security: 'check for overly permissive RBAC settings in my cluster'"))
+	fmt.Println(body.Sprint("- Dependencies: 'analyze the connection between my failing deployments and their dependent configmaps'"))
+	fmt.Println(body.Sprint("- Events: 'summarize recent Warning events in kube-system and suggest next steps'"))
+	fmt.Println(body.Sprint("- Networking: 'debug DNS resolution problems inside pods in staging'"))
+	fmt.Println(body.Sprint("- Rollouts: 'find deployments stuck due to failed rollouts and why'"))
+	fmt.Println()
 }

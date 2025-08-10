@@ -1,19 +1,31 @@
 package lib
 
 import (
+	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	gl "cloud.google.com/go/ai/generativelanguage/apiv1beta"
+	glpb "cloud.google.com/go/ai/generativelanguage/apiv1beta/generativelanguagepb"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/pkoukk/tiktoken-go"
 	"github.com/tmc/langchaingo/llms"
+	"google.golang.org/api/option"
 )
 
 // tokenEncodingCache caches encoders by name to avoid repeated construction
 var tokenEncodingCache sync.Map // map[string]*tiktoken.Tiktoken
+// Cache for Google model token limits to avoid repeated API calls
+var googleModelLimitsCache sync.Map // map[string]modelLimits
+
+type modelLimits struct {
+	inputTokens  int
+	outputTokens int
+}
 
 // GetEncodingForModel returns a best-effort token encoding name for a provider/model.
 // Note: This is an approximation. For non-OpenAI providers we fall back to cl100k_base.
@@ -107,6 +119,7 @@ func EstimateTokens(cfg *config.Config, text string) int {
 	chars := float64(len([]rune(text)))
 	cpt := charPerTokenHeuristic(cfg.Provider, cfg.Model)
 	charTokens := int(math.Ceil(chars / cpt))
+	// Prefer the larger of encoding-based and char-heuristic to avoid underestimates
 	if charTokens > encTokens {
 		return charTokens
 	}
@@ -115,8 +128,30 @@ func EstimateTokens(cfg *config.Config, text string) int {
 
 // CountTokensWithConfig estimates token count for text and messages based on cfg.
 func CountTokensWithConfig(cfg *config.Config, text string, messages []llms.ChatMessage) int {
+	if cfg == nil {
+		return 0
+	}
+
+	// Avoid double-counting when the last message equals the provided text
+	includeText := text != ""
+	if includeText && len(messages) > 0 {
+		last := strings.TrimSpace(messages[len(messages)-1].GetContent())
+		if strings.TrimSpace(text) == last {
+			includeText = false
+		}
+	}
+
+	// Prefer Google's exact CountTokens when using Gemini and API key is available
+	p := strings.ToLower(cfg.Provider)
+	if (p == "google" || strings.Contains(strings.ToLower(cfg.Model), "gemini")) && os.Getenv("GOOGLE_API_KEY") != "" {
+		if total, err := googleCountTokens(cfg, text, messages, includeText); err == nil && total > 0 {
+			return total
+		}
+		// fall back to heuristic below on error
+	}
+
 	tokenCount := 0
-	if text != "" {
+	if includeText {
 		tokenCount += EstimateTokens(cfg, text)
 	}
 	if len(messages) > 0 {
@@ -179,4 +214,160 @@ func EstimateExpectedIncomingTokens(cfg *config.Config, outgoing int) int {
 		predicted = 128
 	}
 	return predicted
+}
+
+// EffectiveMaxTokens returns the effective maximum input token window for the
+// current provider/model, falling back to cfg.MaxTokens when unknown.
+// For Google Gemini models, we align to commonly published context sizes.
+// This is used for display and budgeting heuristics only and does not change
+// provider API limits.
+func EffectiveMaxTokens(cfg *config.Config) int {
+	if cfg == nil {
+		return 0
+	}
+	configured := cfg.MaxTokens
+	provider := strings.ToLower(cfg.Provider)
+	model := strings.ToLower(cfg.Model)
+
+	// Google Gemini: Prefer querying model info for accurate token limits when possible
+	if (provider == "google" || strings.Contains(model, "gemini")) && os.Getenv("GOOGLE_API_KEY") != "" {
+		if inLimit, _, err := googleGetModelTokenLimits(cfg); err == nil && inLimit > 0 {
+			if configured <= 0 || configured > inLimit {
+				return inLimit
+			}
+			return configured
+		}
+		// If API not available, fall back to default heuristic for Gemini
+		if strings.Contains(model, "1.5") {
+			switch {
+			case strings.Contains(model, "pro"):
+				if configured <= 0 || configured > 2097152 {
+					return 2097152
+				}
+			case strings.Contains(model, "flash"):
+				if configured <= 0 || configured > 1048576 {
+					return 1048576
+				}
+			}
+		}
+		if configured <= 0 {
+			return 128000
+		}
+	}
+
+	if configured <= 0 {
+		return 4096
+	}
+	return configured
+}
+
+// googleGetModelTokenLimits fetches model InputTokenLimit and OutputTokenLimit from the
+// Google Generative Language API and caches the result.
+func googleGetModelTokenLimits(cfg *config.Config) (int, int, error) {
+	if cfg == nil {
+		return 0, 0, fmt.Errorf("nil cfg")
+	}
+	apiKey := os.Getenv("GOOGLE_API_KEY")
+	if apiKey == "" {
+		return 0, 0, fmt.Errorf("missing GOOGLE_API_KEY")
+	}
+
+	modelName := cfg.Model
+	if !strings.Contains(modelName, "/") {
+		modelName = "models/" + modelName
+	}
+	cacheKey := strings.ToLower(modelName)
+	if v, ok := googleModelLimitsCache.Load(cacheKey); ok {
+		ml := v.(modelLimits)
+		return ml.inputTokens, ml.outputTokens, nil
+	}
+
+	ctx := context.Background()
+	mc, err := gl.NewModelRESTClient(ctx, option.WithAPIKey(apiKey))
+	if err != nil {
+		return 0, 0, err
+	}
+	defer mc.Close()
+
+	resp, err := mc.GetModel(ctx, &glpb.GetModelRequest{Name: modelName})
+	if err != nil || resp == nil {
+		if err == nil {
+			err = fmt.Errorf("nil GetModel response")
+		}
+		return 0, 0, err
+	}
+	in := int(resp.InputTokenLimit)
+	out := int(resp.OutputTokenLimit)
+	googleModelLimitsCache.Store(cacheKey, modelLimits{inputTokens: in, outputTokens: out})
+	return in, out, nil
+}
+
+// googleCountTokens tries to use the Gemini CountTokens API to get exact token
+// counts for a combination of messages and optional extra text. If includeText
+// is false, the text argument is ignored. On any error, an error is returned so
+// callers can gracefully fall back to heuristics.
+func googleCountTokens(cfg *config.Config, text string, messages []llms.ChatMessage, includeText bool) (int, error) {
+	apiKey := os.Getenv("GOOGLE_API_KEY")
+	if apiKey == "" {
+		return 0, fmt.Errorf("missing GOOGLE_API_KEY")
+	}
+
+	ctx := context.Background()
+	client, err := gl.NewGenerativeRESTClient(ctx, option.WithAPIKey(apiKey))
+	if err != nil {
+		return 0, err
+	}
+	defer client.Close()
+
+	modelName := cfg.Model
+	if !strings.Contains(modelName, "/") {
+		modelName = "models/" + modelName
+	}
+
+	// Build the content list in the same order we send messages to LLM
+	var contents []*glpb.Content
+	for _, msg := range messages {
+		var role string
+		switch msg.GetType() {
+		case llms.ChatMessageTypeSystem:
+			// The API accepts arbitrary role strings; use "system" for clarity
+			role = "system"
+		case llms.ChatMessageTypeAI:
+			role = "model"
+		default:
+			role = "user"
+		}
+		contents = append(contents, &glpb.Content{
+			Role: role,
+			Parts: []*glpb.Part{
+				{Data: &glpb.Part_Text{Text: msg.GetContent()}},
+			},
+		})
+	}
+
+	if includeText && strings.TrimSpace(text) != "" {
+		contents = append(contents, &glpb.Content{
+			Role: "user",
+			Parts: []*glpb.Part{
+				{Data: &glpb.Part_Text{Text: text}},
+			},
+		})
+	}
+
+	req := &glpb.CountTokensRequest{
+		Model: modelName,
+		GenerateContentRequest: &glpb.GenerateContentRequest{
+			Model:    modelName,
+			Contents: contents,
+		},
+	}
+
+	resp, err := client.CountTokens(ctx, req)
+	if err != nil || resp == nil {
+		if err == nil {
+			err = fmt.Errorf("nil count tokens response")
+		}
+		return 0, err
+	}
+	return int(resp.TotalTokens), nil
 }

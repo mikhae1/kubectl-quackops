@@ -127,9 +127,14 @@ func HandleLLMRequest(cfg *config.Config, client llms.Model, prompt string, stre
 		generateOptions = append(generateOptions, llms.WithTemperature(cfg.Temperature))
 	}
 
-	// Add max tokens if configured
+	// Add max tokens using effective window to be friendly with providers like Gemini
 	if cfg.MaxTokens > 0 {
-		generateOptions = append(generateOptions, llms.WithMaxTokens(cfg.MaxTokens))
+		effective := lib.EffectiveMaxTokens(cfg)
+		limit := cfg.MaxTokens
+		if effective > 0 && cfg.MaxTokens > effective {
+			limit = effective
+		}
+		generateOptions = append(generateOptions, llms.WithMaxTokens(limit))
 	}
 
 	// Compute outgoing tokens and start spinner with dynamic token display
