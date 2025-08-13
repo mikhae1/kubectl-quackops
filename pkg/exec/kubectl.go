@@ -30,18 +30,22 @@ type cmdStatus struct {
 func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error) {
 	logger.Log("info", "ExecDiagCmds: %d command(s)", len(commands))
 
-	filtered := make([]string, 0, len(commands))
-	skippedCount := 0
-	for _, c := range commands {
-		cTrim := strings.TrimSpace(c)
-		prefix := "$"
-		if strings.TrimSpace(cfg.CommandPrefix) != "" {
-			prefix = cfg.CommandPrefix
-		}
-		if strings.HasPrefix(cTrim, prefix) {
-			filtered = append(filtered, c)
-		} else {
-			skippedCount++
+	// In strict MCP mode, only allow explicit user commands (those starting with the prefix).
+	// Otherwise, accept the provided command list as-is (includes LLM-generated kubectl).
+	if cfg.MCPClientEnabled && cfg.MCPStrict {
+		filtered := make([]string, 0, len(commands))
+		skippedCount := 0
+		for _, c := range commands {
+			cTrim := strings.TrimSpace(c)
+			prefix := "$"
+			if strings.TrimSpace(cfg.CommandPrefix) != "" {
+				prefix = cfg.CommandPrefix
+			}
+			if strings.HasPrefix(cTrim, prefix) {
+				filtered = append(filtered, c)
+			} else {
+				skippedCount++
+			}
 		}
 		if skippedCount > 0 {
 			logger.Log("warn", "Strict MCP mode: skipping %d non-$ command(s)", skippedCount)
