@@ -3,11 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -24,25 +22,6 @@ import (
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
-// Global cleanup function for signal handling
-var globalCleanupFunc func()
-
-// setupGlobalSignalHandling sets up signal handling that can be used throughout the application
-func setupGlobalSignalHandling(cleanupFunc func()) {
-	globalCleanupFunc = cleanupFunc
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		if globalCleanupFunc != nil {
-			globalCleanupFunc()
-		}
-		// Explicitly restore cursor visibility
-		fmt.Print("\033[?25h") // ANSI escape sequence to show cursor
-		fmt.Println("\nExiting...")
-		os.Exit(0)
-	}()
-}
 
 func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cfg := config.LoadConfig()
@@ -319,11 +298,6 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 	defer cleanupAndExit("", -1) // just cleanup
 
-	setupGlobalSignalHandling(func() {
-		if rl != nil {
-			rl.Close()
-		}
-	})
 
 	printWelcomeBanner(cfg)
 	if cfg.MCPClientEnabled {
@@ -356,6 +330,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 		userPrompt, err := rl.Readline()
 		if err != nil { // io.EOF is returned on Ctrl-C
 			cleanupAndExit("Exiting...", 0)
+			return nil // Ensure we exit immediately
 		}
 
 		userPrompt = strings.TrimSpace(userPrompt)

@@ -275,9 +275,14 @@ DoStream:
 	return convertCandidates([]*genai.Candidate{candidate}, mresp.UsageMetadata)
 }
 
-// convertTools converts llms.Tools to genai.Tools, preserving array Items and nested schemas.
+// convertTools converts llms.Tools to a single genai.Tool with all function declarations.
+// Gemini expects tools as an array, but best-practice is to include all function_declarations
+// in one Tool object. This ensures all MCP functions are exposed.
 func convertTools(tools []llms.Tool) ([]*genai.Tool, error) {
-	genaiTools := make([]*genai.Tool, 0, len(tools))
+	if len(tools) == 0 {
+		return nil, nil
+	}
+	funcDecls := make([]*genai.FunctionDeclaration, 0, len(tools))
 	for i, tool := range tools {
 		if tool.Type != "function" {
 			return nil, fmt.Errorf("tool [%d]: unsupported type %q, want 'function'", i, tool.Type)
@@ -292,9 +297,9 @@ func convertTools(tools []llms.Tool) ([]*genai.Tool, error) {
 			return nil, fmt.Errorf("tool [%d]: %w", i, err)
 		}
 		genaiFuncDecl.Parameters = schema
-		genaiTools = append(genaiTools, &genai.Tool{FunctionDeclarations: []*genai.FunctionDeclaration{genaiFuncDecl}})
+		funcDecls = append(funcDecls, genaiFuncDecl)
 	}
-	return genaiTools, nil
+	return []*genai.Tool{{FunctionDeclarations: funcDecls}}, nil
 }
 
 func buildSchema(m map[string]any) (*genai.Schema, error) {
