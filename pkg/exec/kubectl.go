@@ -76,6 +76,33 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 	s.Start()
 	defer s.Stop()
 
+	// Briefly show the kubectl diagnostics plan as a bullet list (left bullets)
+	// to make execution trace transparent. Only list kubectl commands.
+	s.Stop()
+	printKubectlDiagnosticsList(cfg, commands)
+	s.Start()
+
+	// In safe mode, ask once for all commands using single-key confirmation (ESC=no)
+	var proceedAll bool = true
+	if cfg.SafeMode {
+		s.Stop()
+		key := lib.ReadSingleKey(fmt.Sprintf("Proceed with executing %d command(s) (y/N/edit)? ", len(commands)))
+		switch key {
+		case 'y':
+			proceedAll = true
+		case 'e':
+			// Allow the user to quickly toggle which commands will run
+			commands = editCommandSelection(cfg, commands)
+			if len(commands) == 0 {
+				proceedAll = false
+			}
+		default:
+			// includes 'n', Enter, ESC, anything else
+			proceedAll = false
+		}
+		s.Start()
+	}
+
 	// Start status monitoring goroutine and ensure we wait for it to finish
 	var statusWG sync.WaitGroup
 	statusWG.Add(1)
@@ -104,7 +131,15 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 	firstCommandCompleted := false
 
 	if cfg.SafeMode {
-		executeCommandsSequentially(cfg, commands, results, statusChan, &firstCommandCompleted, firstCommandCompletedMutex, s)
+		// In safe mode, we already asked once; execute sequentially without per-command prompts
+		if !proceedAll {
+			// Mark all as skipped and return early
+			for i := range commands {
+				statusChan <- cmdStatus{i, true, nil, true}
+			}
+		} else {
+			executeCommandsSequentially(cfg, commands, results, statusChan, &firstCommandCompleted, firstCommandCompletedMutex, s, false)
+		}
 	} else {
 		executeCommandsParallel(cfg, commands, results, statusChan, &firstCommandCompleted, firstCommandCompletedMutex)
 	}
@@ -142,12 +177,15 @@ func executeCommandsSequentially(
 	firstCommandCompleted *bool,
 	firstCommandCompletedMutex *sync.Mutex,
 	s *spinner.Spinner,
+	askPerCommand bool,
 ) {
 	for i, command := range commands {
-		// In safe mode, always ask for confirmation, including for "$" commands.
-		if !promptForCommandConfirmation(command, i, statusChan, s) {
-			// Skip this command if not confirmed
-			continue
+		// In safe mode, optionally ask for per-command confirmation
+		if askPerCommand {
+			if !promptForCommandConfirmation(command, i, statusChan, s) {
+				// Skip this command if not confirmed
+				continue
+			}
 		}
 
 		// Execute the command
@@ -175,7 +213,12 @@ func promptForCommandConfirmation(command string, index int, statusChan chan<- c
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 
-	if strings.ToLower(input) != "y" {
+	lower := strings.ToLower(input)
+	// Treat ESC anywhere in the input as a "no" (requires Enter in canonical mode)
+	escPressed := strings.Contains(lower, "\x1b")
+	isYes := lower == "y" || lower == "yes"
+
+	if !isYes || escPressed {
 		fmt.Println("Skipping...")
 		statusChan <- cmdStatus{index, true, nil, true}
 
@@ -189,6 +232,171 @@ func promptForCommandConfirmation(command string, index int, statusChan chan<- c
 	// Restart spinner for command execution
 	s.Start()
 	return true
+}
+
+// printKubectlDiagnosticsList prints a bullet list of kubectl commands
+// so the user can see exactly what diagnostic steps will run.
+func printKubectlDiagnosticsList(cfg *config.Config, commands []string) {
+	if len(commands) == 0 {
+		return
+	}
+
+	// Determine command prefix used for shell commands
+	prefix := cfg.CommandPrefix
+	if strings.TrimSpace(prefix) == "" {
+		prefix = "$"
+	}
+
+	// Collect kubectl-only commands (strip shell prefix first)
+	var kubectlCmds []string
+	for _, c := range commands {
+		cTrim := strings.TrimSpace(c)
+		if strings.HasPrefix(cTrim, prefix) {
+			cTrim = strings.TrimSpace(strings.TrimPrefix(cTrim, prefix))
+		}
+		if strings.HasPrefix(cTrim, "kubectl") {
+			kubectlCmds = append(kubectlCmds, cTrim)
+		}
+	}
+
+	if len(kubectlCmds) == 0 {
+		return
+	}
+
+	// Render using simple Markdown bullets to leverage left-bullet styling downstream
+	fmt.Println()
+	fmt.Println(color.New(color.Bold).Sprint("Diagnostic kubectl commands:"))
+	for _, kc := range kubectlCmds {
+		fmt.Printf("- %s\n", kc)
+	}
+}
+
+// editCommandSelection lets the user select a subset of commands to run.
+// Minimal multi-select: prints each command with an index and [x]/[ ] checkbox.
+// Keys: j/k to move, space to toggle, a to toggle all, enter to accept, ESC to cancel.
+func editCommandSelection(cfg *config.Config, commands []string) []string {
+	if len(commands) == 0 {
+		return commands
+	}
+
+	// Prepare display list by stripping shell prefix and keeping only kubectl and prefixed shell commands
+	prefix := cfg.CommandPrefix
+	if strings.TrimSpace(prefix) == "" {
+		prefix = "$"
+	}
+
+	// Items to display, and mapping back to original indices
+	type item struct {
+		idx int
+		cmd string
+	}
+	var items []item
+	for i, c := range commands {
+		cTrim := strings.TrimSpace(c)
+		if strings.HasPrefix(cTrim, prefix) {
+			// Keep user shell commands as-is (after prefix) for selection too
+			show := strings.TrimSpace(strings.TrimPrefix(cTrim, prefix))
+			items = append(items, item{idx: i, cmd: show})
+			continue
+		}
+		if strings.HasPrefix(cTrim, "kubectl") {
+			items = append(items, item{idx: i, cmd: cTrim})
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	selected := make([]bool, len(items))
+	for i := range selected {
+		selected[i] = true
+	}
+
+	cursor := 0
+
+	printedLines := 0
+	redraw := func() {
+		// Build lines to render
+		header := color.New(color.Bold).Sprint("Select commands to run (j/k to move, space to toggle, a all, Enter accept, ESC cancel):")
+		lines := make([]string, 0, len(items)+1)
+		lines = append(lines, header)
+		for i, it := range items {
+			box := "[ ]"
+			if selected[i] {
+				box = "[x]"
+			}
+			pointer := "  "
+			if i == cursor {
+				pointer = color.New(color.FgHiBlue).Sprint("➤ ")
+			}
+			lines = append(lines, fmt.Sprintf("%s- %s %s", pointer, box, it.cmd))
+		}
+
+		// On subsequent redraws, move cursor up and clear existing lines
+		if printedLines == 0 {
+			fmt.Println()
+		} else {
+			for i := 0; i < printedLines; i++ {
+				// Move up one line
+				fmt.Print("\033[1A")
+			}
+		}
+		// Print lines, clearing each line before writing
+		for _, ln := range lines {
+			fmt.Print("\r\033[2K")
+			fmt.Println(ln)
+		}
+		printedLines = len(lines)
+	}
+
+	redraw()
+
+	// Raw key loop using ReadKey (supports arrows)
+	for {
+		key := lib.ReadKey("")
+		switch key {
+		case "esc":
+			return nil
+		case "enter":
+			// Accept
+			var out []string
+			// Build final command list preserving original strings
+			for i, it := range items {
+				if selected[i] {
+					out = append(out, commands[it.idx])
+				}
+			}
+			return out
+		case "down", "j":
+			if cursor < len(items)-1 {
+				cursor++
+				redraw()
+			}
+		case "up", "k":
+			if cursor > 0 {
+				cursor--
+				redraw()
+			}
+		case "a":
+			// Toggle all
+			all := true
+			for _, s := range selected {
+				if !s {
+					all = false
+					break
+				}
+			}
+			for i := range selected {
+				selected[i] = !all
+			}
+			redraw()
+		case "space":
+			selected[cursor] = !selected[cursor]
+			redraw()
+		default:
+			// ignore other keys
+		}
+	}
 }
 
 // executeCommandsParallel runs commands concurrently in non-safe mode

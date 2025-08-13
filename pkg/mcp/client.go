@@ -885,6 +885,10 @@ func ensureToolAllowed(cfg *config.Config, tool string) error {
 		reader := bufio.NewReader(os.Stdin)
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(strings.ToLower(input))
+		// Treat ESC as an explicit no (ESC appears as \x1b when read via stdin)
+		if strings.Contains(input, "\x1b") {
+			return fmt.Errorf("tool '%s' not allowed by user", tool)
+		}
 		if input != "y" && input != "yes" {
 			return fmt.Errorf("tool '%s' not allowed by user", tool)
 		}
