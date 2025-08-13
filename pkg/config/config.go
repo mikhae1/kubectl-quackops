@@ -74,10 +74,6 @@ type Config struct {
 	EditMode      bool
 	CommandPrefix string
 
-	// In-memory history for edit mode successful commands (not persisted separately)
-	EditModeHistory      []string
-	EditModeHistoryIndex int
-
 	// Diagnostics toggles and knobs
 	EnableBaseline      bool
 	EventsWindowMinutes int

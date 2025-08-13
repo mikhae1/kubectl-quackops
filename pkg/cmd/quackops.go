@@ -195,17 +195,77 @@ func startChatSession(cfg *config.Config, args []string) error {
 		DisableAutoSaveHistory: true,                                 // manage history manually
 	}
 
-	// Set history file if not disabled
+	// Set up history directory but don't set HistoryFile in readline config
+	// We'll manage history manually to avoid conflicts
 	if !cfg.DisableHistory && cfg.HistoryFile != "" {
 		// Ensure the history file directory exists
 		historyDir := filepath.Dir(cfg.HistoryFile)
 		if err := os.MkdirAll(historyDir, 0755); err != nil {
 			fmt.Printf("Warning: could not create history file directory: %v\n", err)
 		}
-		rlConfig.HistoryFile = cfg.HistoryFile
+		// Don't set rlConfig.HistoryFile - we manage it manually
 	}
 
 	var rl *readline.Instance
+	
+	// Helper function to switch to edit mode history
+	switchToEditMode := func() {
+		if cfg.DisableHistory || cfg.HistoryFile == "" || rl == nil {
+			return
+		}
+		
+		// Read main history file
+		data, err := os.ReadFile(cfg.HistoryFile)
+		if err != nil {
+			return // main history doesn't exist yet
+		}
+		
+		// Reset current history completely
+		rl.Operation.ResetHistory()
+		
+		// Load only prefixed commands without prefixes
+		lines := strings.Split(string(data), "\n")
+		prefix := cfg.CommandPrefix
+		if strings.TrimSpace(prefix) == "" {
+			prefix = "$"
+		}
+		
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && (strings.HasPrefix(line, prefix+" ") || strings.HasPrefix(line, prefix)) {
+				// Remove prefix for display in edit mode
+				clean := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+				if clean != "" {
+					_ = rl.Operation.SaveHistory(clean)
+				}
+			}
+		}
+	}
+
+	// Helper function to switch to normal mode history  
+	switchToNormalMode := func() {
+		if cfg.DisableHistory || cfg.HistoryFile == "" || rl == nil {
+			return
+		}
+		
+		// Read main history file
+		data, err := os.ReadFile(cfg.HistoryFile)
+		if err != nil {
+			return // main history doesn't exist yet
+		}
+		
+		// Reset current history completely
+		rl.Operation.ResetHistory()
+		
+		// Load all history entries
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				_ = rl.Operation.SaveHistory(line)
+			}
+		}
+	}
 	// Capture ESC and $ for edit mode toggle
 	rlConfig.FuncFilterInputRune = func(r rune) (rune, bool) {
 		// Toggle edit mode with $ key press
@@ -213,13 +273,13 @@ func startChatSession(cfg *config.Config, args []string) error {
 			cfg.EditMode = !cfg.EditMode
 			if rl != nil {
 				if cfg.EditMode {
+					// Switch to edit mode: load filtered history
 					rl.SetPrompt(lib.FormatEditPromptWith(cfg))
-					// Reset edit-mode history cursor on entry
-					cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
+					switchToEditMode()
 				} else {
+					// Switch to normal mode: load full history  
 					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
-					// Reset history index when leaving
-					cfg.EditModeHistoryIndex = 0
+					switchToNormalMode()
 				}
 				rl.Refresh()
 			}
@@ -231,6 +291,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 			cfg.EditMode = false
 			if rl != nil {
 				rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+				switchToNormalMode()
 				rl.Refresh()
 			}
 			return 0, false // swallow ESC
@@ -239,39 +300,9 @@ func startChatSession(cfg *config.Config, args []string) error {
 		return r, true
 	}
 
+
 	// Avoid recomputing prompt on every keystroke to prevent latency
 	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
-		// Intercept history navigation in edit mode to show successful commands without `$` prefix
-		if cfg.EditMode {
-			// Up/down arrows
-			if key == readline.CharPrev || key == readline.CharNext {
-				// Initialize history index lazily
-				if cfg.EditModeHistoryIndex == 0 {
-					cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
-				}
-
-				if key == readline.CharPrev {
-					if cfg.EditModeHistoryIndex > 0 {
-						cfg.EditModeHistoryIndex--
-					}
-				} else if key == readline.CharNext {
-					if cfg.EditModeHistoryIndex < len(cfg.EditModeHistory) {
-						cfg.EditModeHistoryIndex++
-					}
-				}
-
-				// Determine replacement line
-				var replacement string
-				if cfg.EditModeHistoryIndex >= 0 && cfg.EditModeHistoryIndex < len(cfg.EditModeHistory) {
-					replacement = cfg.EditModeHistory[cfg.EditModeHistoryIndex]
-				} else {
-					// Past newest entry: show empty line
-					replacement = ""
-				}
-				// Replace current buffer with replacement
-				return []rune(replacement), len([]rune(replacement)), true
-			}
-		}
 		// Backup ESC handling
 		if cfg.EditMode && key == readline.CharEsc {
 			cfg.EditMode = false
@@ -297,6 +328,9 @@ func startChatSession(cfg *config.Config, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create interactive prompt instance: %w", err)
 	}
+	
+	// Initialize history on startup - load in normal mode
+	switchToNormalMode()
 
 	cleanupAndExit := func(message string, exitCode int) {
 		if message != "" {
@@ -453,50 +487,43 @@ func startChatSession(cfg *config.Config, args []string) error {
 			return err
 		}
 
-		// Save history according to rules
-		if !strings.HasPrefix(originalUserPrompt, "/") {
-			if wasEditMode {
-				// In edit mode, save only successful commands (persist with prefix),
-				// and store in-memory without the prefix for navigation.
+		// Unified history saving: store all prompts and commands with prefixes in main history file
+		if !strings.HasPrefix(originalUserPrompt, "/") && !cfg.DisableHistory && cfg.HistoryFile != "" {
+			var entryToSave string
+			
+			if wasCommand {
+				// For commands, check if successful before saving
 				success := false
 				if len(cfg.StoredUserCmdResults) > 0 {
 					last := cfg.StoredUserCmdResults[len(cfg.StoredUserCmdResults)-1]
 					success = (last.Err == nil) && (strings.TrimSpace(last.Cmd) != "")
 				}
 				if success {
-					entry := originalUserPrompt
-					if !strings.HasPrefix(entry, prefix) {
-						entry = prefix + " " + entry
+					// Save command with prefix to main history file
+					entryToSave = originalUserPrompt
+					if !strings.HasPrefix(entryToSave, prefix) {
+						entryToSave = prefix + " " + entryToSave
 					}
-					// Persist to file if enabled
-					if !cfg.DisableHistory && cfg.HistoryFile != "" {
-						_ = rl.Operation.SaveHistory(entry)
-					}
-					// Track in-memory history for edit mode navigation
-					clean := strings.TrimSpace(strings.TrimPrefix(entry, prefix))
-					cfg.EditModeHistory = append(cfg.EditModeHistory, clean)
-					cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
 				}
 			} else {
-				// Non-edit entries: persist as-is as prompts if enabled
-				if !cfg.DisableHistory && cfg.HistoryFile != "" {
-					_ = rl.Operation.SaveHistory(originalUserPrompt)
-				}
-				// If this was a prefixed command executed outside edit mode, include in edit-mode
-				// history (in-memory) when successful so it can be recalled while editing.
-				if wasCommand {
-					success := false
-					if len(cfg.StoredUserCmdResults) > 0 {
-						last := cfg.StoredUserCmdResults[len(cfg.StoredUserCmdResults)-1]
-						success = (last.Err == nil) && (strings.TrimSpace(last.Cmd) != "")
-					}
-					if success {
-						clean := originalUserPrompt
-						if strings.HasPrefix(clean, prefix) {
-							clean = strings.TrimSpace(strings.TrimPrefix(clean, prefix))
-						}
-						cfg.EditModeHistory = append(cfg.EditModeHistory, clean)
-						cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
+				// Save non-command prompts as-is
+				entryToSave = originalUserPrompt
+			}
+			
+			if entryToSave != "" {
+				// Only save to main history file - don't save to readline session to avoid duplicates
+				f, err := os.OpenFile(cfg.HistoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				if err == nil {
+					_, _ = f.WriteString(entryToSave + "\n")
+					_ = f.Close()
+					
+					// Reload the appropriate history to include the new entry
+					// Note: If we're in edit mode, we still reload edit mode to show the new command
+					// When user switches to normal mode later, they'll see the prefixed version
+					if cfg.EditMode {
+						switchToEditMode()
+					} else {
+						switchToNormalMode()  
 					}
 				}
 			}
