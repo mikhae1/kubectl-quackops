@@ -6,7 +6,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -104,58 +103,29 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 
 // printEnvVarsHelp prints information about environment variables used by the application
 func printEnvVarsHelp() {
-	envVars := config.GetEnvVarsInfo()
-
 	// Colors for readability
 	titleColor := color.New(color.FgHiYellow, color.Bold)
-	keyColor := color.New(color.FgHiCyan, color.Bold)
-	typeColor := color.New(color.FgHiMagenta)
-	defaultColor := color.New(color.FgHiGreen)
-	currentColor := color.New(color.FgHiWhite, color.Bold)
+	bodyColor := color.New(color.FgHiWhite)
+	hintColor := color.New(color.FgHiCyan)
 
 	fmt.Println()
 	titleColor.Println("ENVIRONMENT VARIABLES:")
+	fmt.Println(bodyColor.Sprint("See the Environment Variables section in README.md for the full list, defaults, and descriptions."))
+
+	// Show currently set env vars as a convenience
 	fmt.Println()
-
-	// Sort keys for consistent output
-	keys := make([]string, 0, len(envVars))
-	for k := range envVars {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	// Track currently set environment variables
-	var setVars []string
-
-	// Print each environment variable
-	for _, key := range keys {
-		info := envVars[key]
-		keyColor.Printf("  %s\n", key)
-		fmt.Printf("    Description: %s\n", info.Description)
-		typeColor.Printf("    Type: %s\n", info.Type)
-		defaultColor.Printf("    Default: %v\n", info.DefaultValue)
-
-		// If environment variable is set, show it
-		if val, exists := os.LookupEnv(key); exists {
-			currentColor.Printf("    Current: %s\n", val)
-			setVars = append(setVars, key)
-		}
-
-		fmt.Println()
-	}
-
-	fmt.Println("These environment variables can be set before running the command or passed as arguments with the format KEY=VALUE.")
-
-	// Summary of currently set environment variables
-	if len(setVars) > 0 {
-		fmt.Println()
-		titleColor.Println("CURRENTLY SET ENVIRONMENT VARIABLES:")
-		for _, key := range setVars {
-			val, _ := os.LookupEnv(key)
-			keyColor.Printf("  %s=%s\n", key, val)
+	titleColor.Println("CURRENTLY SET (detected in environment):")
+	var any bool
+	for _, e := range os.Environ() {
+		// Only show variables from this project's QU_* or provider API keys
+		if strings.HasPrefix(e, "QU_") {
+			fmt.Printf("  %s\n", e)
+			any = true
 		}
 	}
-
+	if !any {
+		fmt.Println("  (none)")
+	}
 	fmt.Println()
 }
 
@@ -207,29 +177,29 @@ func startChatSession(cfg *config.Config, args []string) error {
 	}
 
 	var rl *readline.Instance
-	
+
 	// Helper function to switch to edit mode history
 	switchToEditMode := func() {
 		if cfg.DisableHistory || cfg.HistoryFile == "" || rl == nil {
 			return
 		}
-		
+
 		// Read main history file
 		data, err := os.ReadFile(cfg.HistoryFile)
 		if err != nil {
 			return // main history doesn't exist yet
 		}
-		
+
 		// Reset current history completely
 		rl.Operation.ResetHistory()
-		
+
 		// Load only prefixed commands without prefixes
 		lines := strings.Split(string(data), "\n")
 		prefix := cfg.CommandPrefix
 		if strings.TrimSpace(prefix) == "" {
 			prefix = "$"
 		}
-		
+
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line != "" && (strings.HasPrefix(line, prefix+" ") || strings.HasPrefix(line, prefix)) {
@@ -242,21 +212,21 @@ func startChatSession(cfg *config.Config, args []string) error {
 		}
 	}
 
-	// Helper function to switch to normal mode history  
+	// Helper function to switch to normal mode history
 	switchToNormalMode := func() {
 		if cfg.DisableHistory || cfg.HistoryFile == "" || rl == nil {
 			return
 		}
-		
+
 		// Read main history file
 		data, err := os.ReadFile(cfg.HistoryFile)
 		if err != nil {
 			return // main history doesn't exist yet
 		}
-		
+
 		// Reset current history completely
 		rl.Operation.ResetHistory()
-		
+
 		// Load all history entries
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
@@ -277,7 +247,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 					rl.SetPrompt(lib.FormatEditPromptWith(cfg))
 					switchToEditMode()
 				} else {
-					// Switch to normal mode: load full history  
+					// Switch to normal mode: load full history
 					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 					switchToNormalMode()
 				}
@@ -299,7 +269,6 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 		return r, true
 	}
-
 
 	// Avoid recomputing prompt on every keystroke to prevent latency
 	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
@@ -328,7 +297,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create interactive prompt instance: %w", err)
 	}
-	
+
 	// Initialize history on startup - load in normal mode
 	switchToNormalMode()
 
@@ -490,7 +459,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 		// Unified history saving: store all prompts and commands with prefixes in main history file
 		if !strings.HasPrefix(originalUserPrompt, "/") && !cfg.DisableHistory && cfg.HistoryFile != "" {
 			var entryToSave string
-			
+
 			if wasCommand {
 				// For commands, check if successful before saving
 				success := false
@@ -509,21 +478,21 @@ func startChatSession(cfg *config.Config, args []string) error {
 				// Save non-command prompts as-is
 				entryToSave = originalUserPrompt
 			}
-			
+
 			if entryToSave != "" {
 				// Only save to main history file - don't save to readline session to avoid duplicates
 				f, err := os.OpenFile(cfg.HistoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 				if err == nil {
 					_, _ = f.WriteString(entryToSave + "\n")
 					_ = f.Close()
-					
+
 					// Reload the appropriate history to include the new entry
 					// Note: If we're in edit mode, we still reload edit mode to show the new command
 					// When user switches to normal mode later, they'll see the prefixed version
 					if cfg.EditMode {
 						switchToEditMode()
 					} else {
-						switchToNormalMode()  
+						switchToNormalMode()
 					}
 				}
 			}
