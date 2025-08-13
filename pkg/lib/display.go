@@ -162,7 +162,11 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 	// Format the main prompt
 	var promptStr string
 	if isCommand {
-		promptStr = color.New(color.FgHiRed, color.Bold).Sprint("$ ❯ ")
+		prefix := "$"
+		if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
+			prefix = cfg.CommandPrefix
+		}
+		promptStr = color.New(color.FgHiRed, color.Bold).Sprint(prefix + " ❯ ")
 	} else {
 		promptStr = color.New(color.Bold).Sprint("❯ ")
 	}
@@ -173,6 +177,10 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 // FormatEditPrompt returns the edit-mode prompt string without any token counter
 // or context indicator. This is used when the user toggles persistent edit mode
 // by pressing '$'.
-func FormatEditPrompt() string {
-	return color.New(color.FgHiRed, color.Bold).Sprint("$ ❯ ")
+func FormatEditPromptWith(cfg *config.Config) string {
+	prefix := "$"
+	if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
+		prefix = cfg.CommandPrefix
+	}
+	return color.New(color.FgHiRed, color.Bold).Sprint(prefix + " ❯ ")
 }

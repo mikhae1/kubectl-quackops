@@ -35,19 +35,29 @@ func (c *shellAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, length 
 
 	lineStr := string(line[:pos])
 
-	// Only enable completion for $ mode or persistent edit mode
+	// Only enable completion for command prefix mode or persistent edit mode
 	if len(lineStr) == 0 {
 		if !c.Cfg.EditMode {
 			return [][]rune{}, 0
 		}
-	} else if lineStr[0] != '$' && !c.Cfg.EditMode {
-		return [][]rune{}, 0
+	} else {
+		prefix := c.Cfg.CommandPrefix
+		if strings.TrimSpace(prefix) == "" {
+			prefix = "$"
+		}
+		if string(lineStr[0]) != prefix && !c.Cfg.EditMode {
+			return [][]rune{}, 0
+		}
 	}
 
-	// Remove the $ prefix for completion processing when present
-	// In edit mode, commands are typed without '$'
+	// Remove the command prefix for completion processing when present
+	// In edit mode, commands are typed without a prefix
 	if !c.Cfg.EditMode {
-		lineStr = strings.TrimPrefix(lineStr, "$")
+		prefix := c.Cfg.CommandPrefix
+		if strings.TrimSpace(prefix) == "" {
+			prefix = "$"
+		}
+		lineStr = strings.TrimPrefix(lineStr, prefix)
 	}
 	lineStr = strings.TrimLeft(lineStr, " ")
 

@@ -4,7 +4,7 @@
 
 **QuackOps** is a powerful kubectl AI-agent plugin designed to enhance your Kubernetes troubleshooting experience with advanced AI assistance. It acts as an intelligent agent, translating natural language queries into actionable insights by analyzing diagnostics directly from your current Kubernetes context.
 
-Beyond simple question-answering, QuackOps provides a rich, interactive experience that enhances the standard command-line workflow. It maintains context throughout a session, allowing for follow-up questions and iterative troubleshooting. Need to inspect a specific resource mentioned in the AI's analysis? You can execute arbitrary kubectl commands directly within the QuackOps session by prefixing them with a `$` symbol (e.g., `$ kubectl describe deployment my-app`). This interactive shell includes familiar features like command history navigation using arrow keys and persistent history storage, making it easy to recall and reuse previous commands or prompts. Furthermore, built-in auto-completion aids in quickly formulating shell commands, streamlining the entire interaction.
+Beyond simple question-answering, QuackOps provides a rich, interactive experience that enhances the standard command-line workflow. It maintains context throughout a session, allowing for follow-up questions and iterative troubleshooting. Need to inspect a specific resource mentioned in the AI's analysis? You can execute arbitrary kubectl commands directly within the QuackOps session by prefixing them with a command marker (default `$`, e.g., `$ kubectl describe deployment my-app`). This interactive shell includes familiar features like command history navigation using arrow keys and persistent history storage, making it easy to recall and reuse previous commands or prompts. Furthermore, built-in auto-completion aids in quickly formulating shell commands, streamlining the entire interaction.
 
 ## 🚀 Key Features
 
@@ -29,6 +29,11 @@ Beyond simple question-answering, QuackOps provides a rich, interactive experien
   - Markdown-based output formatting with color-coded elements for better readability
 
 - **History**:
+- **MCP Client Mode (optional):**
+  - Prefer external Model Context Protocol (MCP) tools for diagnostics (kubectl/bash and more)
+  - Configurable via flags/env and `~/.config/quackops/mcp.yaml`
+  - Strict mode to disable local fallback
+
   - Interactive shell-like experience with command history navigation (up/down arrows)
   - Persistent history storage in a configurable file (default: `~/.quackops/history`)
   - Easily recall previous prompts and commands across sessions
@@ -303,6 +308,12 @@ QuackOps is highly configurable through environment variables or command-line fl
 | `QU_OLLAMA_HOST` | Address of the Ollama server | `http://localhost:11434` |
 | `QU_KUBECTL_BLOCKED_CMDS_EXTRA` | Additional commands to block | - |
 | `DEBUG` | Enable debug logging | `false` |
+| `QU_MCP_CLIENT` | Enable MCP client mode | `false` |
+| `QU_MCP_CONFIG` | Path to MCP YAML config | `~/.config/quackops/mcp.yaml` |
+| `QU_MCP_TOOL_TIMEOUT` | Timeout for MCP tool calls (seconds) | `30` |
+| `QU_MCP_STRICT` | Strict MCP mode (no fallback) | `false` |
+| `QU_ALLOWED_TOOLS` | Allowlist of MCP tool names | `kubectl,bash` |
+| `QU_DENIED_TOOLS` | Denylist of MCP tool names | `` |
 
 ### Command-Line Flags
 
@@ -321,6 +332,29 @@ QuackOps is highly configurable through environment variables or command-line fl
 | `-a, --disable-animation` | Disable typewriter animation effect for LLM outputs | `false` |
 | `--disable-history` | Disable storing prompt history in a file | `false` |
 | `--history-file` | Path to the history file | `~/.quackops/history` |
+| `--mcp-client` | Enable MCP client mode | `false` |
+| `--mcp-config` | Path to MCP client YAML | `~/.config/quackops/mcp.yaml` |
+| `--mcp-tool-timeout` | Timeout for MCP tools (seconds) | `30` |
+| `--mcp-strict` | Strict MCP mode (no fallback) | `false` |
+
+### MCP Configuration (YAML)
+
+Create `~/.config/quackops/mcp.yaml`:
+
+```yaml
+servers:
+  - name: sequential-thinking
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+  # Example HTTP server:
+  - name: example-remote
+    url: https://api.example.com/mcp
+    auth:
+      type: bearer
+      token: ${MCP_TOKEN}
+```
+
+In MCP mode, QuackOps prefers MCP tools for `$ ...` and `kubectl ...` diagnostics, with optional strict mode to avoid local fallback. Tools can be restricted using `QU_ALLOWED_TOOLS`/`QU_DENIED_TOOLS`.
 
 ## 🛡️ Security Considerations
 

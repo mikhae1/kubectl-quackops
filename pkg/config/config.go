@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fatih/color"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -70,7 +71,12 @@ type Config struct {
 	LastIncomingTokens int
 
 	// EditMode indicates the persistent shell edit mode toggled by '$'
-	EditMode bool
+	EditMode      bool
+	CommandPrefix string
+
+	// In-memory history for edit mode successful commands (not persisted separately)
+	EditModeHistory      []string
+	EditModeHistoryIndex int
 
 	// Diagnostics toggles and knobs
 	EnableBaseline      bool
@@ -78,6 +84,71 @@ type Config struct {
 	EventsWarningsOnly  bool
 	LogsTail            int
 	LogsAllContainers   bool
+
+	// MCP client mode
+	MCPClientEnabled bool
+	MCPConfigPath    string
+	MCPToolTimeout   int
+	MCPStrict        bool
+	// Maximum number of iterative MCP tool calls per LLM response
+	MCPMaxToolCalls int
+
+	// Tool policy
+	AllowedTools []string
+	DeniedTools  []string
+
+	// Presentation
+	ToolOutputMaxLines   int
+	ToolOutputMaxLineLen int
+}
+
+// UIColorRoles defines terminal color roles and gradient palette for consistent UI styling.
+// These are constants (no env overrides) to keep branding and readability consistent.
+type UIColorRoles struct {
+	// Role colors
+	Accent  *color.Color
+	Info    *color.Color
+	Dim     *color.Color
+	Shadow  *color.Color
+	Ok      *color.Color
+	Warn    *color.Color
+	Error   *color.Color
+	Magenta *color.Color
+
+	// MCP/header specific
+	Header *color.Color
+	Border *color.Color
+	Label  *color.Color
+	Output *color.Color
+
+	// Gradient palette used for banners and left-border accents
+	Gradient []*color.Color
+}
+
+// Colors is the globally shared UI palette.
+var Colors = initUIColorRoles()
+
+func initUIColorRoles() *UIColorRoles {
+	return &UIColorRoles{
+		Accent:  color.New(color.FgHiCyan, color.Bold),
+		Info:    color.New(color.FgHiWhite),
+		Dim:     color.New(color.FgHiBlack),
+		Shadow:  color.New(color.FgHiBlack, color.Faint),
+		Ok:      color.New(color.FgHiGreen, color.Bold),
+		Warn:    color.New(color.FgHiRed, color.Bold),
+		Error:   color.New(color.FgHiRed, color.Bold),
+		Magenta: color.New(color.FgHiMagenta),
+
+		Header: color.New(color.FgHiMagenta, color.Bold),
+		Border: color.New(color.FgHiBlack),
+		Label:  color.New(color.FgBlue),
+		Output: color.New(color.FgHiBlue),
+
+		Gradient: []*color.Color{
+			color.New(color.FgHiCyan),
+			color.New(color.FgCyan),
+		},
+	}
 }
 
 // LoadConfig initializes the application configuration
@@ -137,17 +208,36 @@ func LoadConfig() *Config {
 		DisableHistory:        getEnvArg("QU_DISABLE_HISTORY", false).(bool),
 		KubectlBinaryPath:     getEnvArg("QU_KUBECTL_BINARY", "kubectl").(string),
 		SpinnerTimeout:        300,
+		CommandPrefix:         getEnvArg("QU_COMMAND_PREFIX", "$").(string),
 		StoredUserCmdResults:  []CmdRes{},
 		// Diagnostics toggles
-		EnableBaseline:      getEnvArg("QU_ENABLE_BASELINE", true).(bool),
-		EventsWindowMinutes: getEnvArg("QU_EVENTS_WINDOW_MINUTES", 60).(int),
-		EventsWarningsOnly:  getEnvArg("QU_EVENTS_WARN_ONLY", true).(bool),
-		LogsTail:            getEnvArg("QU_LOGS_TAIL", 200).(int),
-		LogsAllContainers:   getEnvArg("QU_LOGS_ALL_CONTAINERS", false).(bool),
+		EnableBaseline:       getEnvArg("QU_ENABLE_BASELINE", true).(bool),
+		EventsWindowMinutes:  getEnvArg("QU_EVENTS_WINDOW_MINUTES", 60).(int),
+		EventsWarningsOnly:   getEnvArg("QU_EVENTS_WARN_ONLY", true).(bool),
+		LogsTail:             getEnvArg("QU_LOGS_TAIL", 200).(int),
+		LogsAllContainers:    getEnvArg("QU_LOGS_ALL_CONTAINERS", false).(bool),
+		ToolOutputMaxLines:   getEnvArg("QU_TOOL_OUTPUT_MAX_LINES", 40).(int),
+		ToolOutputMaxLineLen: getEnvArg("QU_TOOL_OUTPUT_MAX_LINE_LEN", 140).(int),
+
+		// MCP client mode
+		MCPClientEnabled: getEnvArg("QU_MCP_CLIENT", true).(bool),
+		MCPConfigPath: func() string {
+			if homeDir != "" {
+				return fmt.Sprintf("%s/.config/quackops/mcp.yaml", homeDir)
+			}
+			return ""
+		}(),
+		MCPToolTimeout:  getEnvArg("QU_MCP_TOOL_TIMEOUT", 30).(int),
+		MCPStrict:       getEnvArg("QU_MCP_STRICT", false).(bool),
+		MCPMaxToolCalls: getEnvArg("QU_MCP_MAX_TOOL_CALLS", 10).(int),
 
 		// Embedding model configuration
 		EmbeddingModel:        getEnvArg("QU_EMBEDDING_MODEL", defaultEmbeddingModel).(string),
 		OllamaEmbeddingModels: getEnvArg("QU_OLLAMA_EMBEDDING_MODELS", "nomic-embed-text,mxbai-embed-large,all-minilm-l6-v2").(string),
+
+		// Tool policy
+		AllowedTools: getEnvArg("QU_ALLOWED_TOOLS", defaultAllowedTools).([]string),
+		DeniedTools:  getEnvArg("QU_DENIED_TOOLS", defaultDeniedTools).([]string),
 
 		// Prompt templates
 		KubectlStartPrompt:       getEnvArg("QU_KUBECTL_SYSTEM_PROMPT", defaultKubectlStartPrompt).(string),
@@ -406,6 +496,10 @@ var defaultBlockedKubectlCmds = []string{
 	"mv",
 }
 
+var defaultAllowedTools = []string{"*"}
+
+var defaultDeniedTools = []string{}
+
 var defaultDuckASCIIArt = `4qCA4qCA4qCA4qKA4qOE4qKA4qO04qC/4qCf4qCb4qCb4qCb4qCb4qCb4qC34qK24qOE4qGA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKiv+Khv+Kgg+KggOKggOKggOKggOKggOKggOKggOKggOKhgOKiqeKjt+KhhOKggOKggOKggOKggOKggOKggOKggArioIDioIDioIDiorDiopbiob/ioIHioIDioIDioIDioIDiooLio6bio4TioIDioIBv4qGH4qK44qO34qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKjvOKgg+KggOKggOKggOKggOKggOKggG/ioZvioIDioIDioJDioJDioJLiorvioYbioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qO/4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qKA4qO04qG+4qC/4qC/4qK/4qG/4qK34qOk4qOA4qGA4qCA4qCA4qCACuKggOKggOKggOKggOKjv+KhgOKggOKggOKggOKggOKggOKggOKisOKjv+KgieKggOKguuKgh+KgmOKgg+KggOKgieKgmeKgm+Kit+KjhOKggArioIDioIDioIDioIDioLjioJ/ioIPioIDioIDiorjioYfioIDioIDiorjio4fio6Dio4TioIDioIDioIDioIDioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qOg4qO/4qO34qG24qCA4qCY4qC74qC/4qCb4qCB4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKggOKggOKggOKgieKggeKgieKgieKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggAo=`
 
 // Default prompt templates
@@ -456,6 +550,11 @@ type EnvVarInfo struct {
 // GetEnvVarsInfo returns information about all environment variables used by the application
 func GetEnvVarsInfo() map[string]EnvVarInfo {
 	envVars := map[string]EnvVarInfo{
+		"QU_COMMAND_PREFIX": {
+			DefaultValue: "$",
+			Type:         "string",
+			Description:  "Single-character prefix to enter command mode and mark shell commands",
+		},
 		"QU_LLM_PROVIDER": {
 			DefaultValue: "ollama",
 			Type:         "string",
@@ -585,6 +684,51 @@ func GetEnvVarsInfo() map[string]EnvVarInfo {
 			DefaultValue: "Provide a clear, concise analysis that is easy to read in a terminal environment.",
 			Type:         "string",
 			Description:  "Prompt for plain text formatting",
+		},
+		"QU_MCP_CLIENT": {
+			DefaultValue: true,
+			Type:         "bool",
+			Description:  "Enable MCP client mode to use external MCP servers for tools",
+		},
+		"QU_MCP_CONFIG": {
+			DefaultValue: "~/.config/quackops/mcp.yaml",
+			Type:         "string",
+			Description:  "Path to MCP client configuration file",
+		},
+		"QU_MCP_TOOL_TIMEOUT": {
+			DefaultValue: 30,
+			Type:         "int",
+			Description:  "Timeout in seconds for MCP tool calls",
+		},
+		"QU_MCP_MAX_TOOL_CALLS": {
+			DefaultValue: 10,
+			Type:         "int",
+			Description:  "Maximum number of iterative MCP tool calls allowed per model response to prevent infinite tool loops",
+		},
+		"QU_MCP_STRICT": {
+			DefaultValue: false,
+			Type:         "bool",
+			Description:  "Strict MCP mode: do not fall back to local execution when MCP fails",
+		},
+		"QU_ALLOWED_TOOLS": {
+			DefaultValue: "kubectl,bash",
+			Type:         "[]string",
+			Description:  "Comma-separated allowlist of tool names when invoking via MCP",
+		},
+		"QU_DENIED_TOOLS": {
+			DefaultValue: "",
+			Type:         "[]string",
+			Description:  "Comma-separated denylist of tool names when invoking via MCP",
+		},
+		"QU_TOOL_OUTPUT_MAX_LINES": {
+			DefaultValue: 40,
+			Type:         "int",
+			Description:  "Maximum number of lines to show in MCP tool output blocks (split head/tail)",
+		},
+		"QU_TOOL_OUTPUT_MAX_LINE_LEN": {
+			DefaultValue: 140,
+			Type:         "int",
+			Description:  "Maximum line length to show in MCP tool output blocks",
 		},
 		"OPENAI_API_KEY": {
 			DefaultValue: "",

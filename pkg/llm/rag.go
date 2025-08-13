@@ -20,20 +20,23 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 	var cmdResults []config.CmdRes
 	var cmds []string
 
-	// First get the kubectl commands without showing the spinner
-	for i := 0; i < cfg.Retries; i++ {
-		cmds, err = GenKubectlCmds(cfg, prompt, userMsgCount)
-		if err != nil {
-			logger.Log("warn", "Error retrieving kubectl commands: %v", err)
-			continue
+	// In strict MCP mode (only when MCP client is enabled), skip generating and executing
+	// LLM-suggested kubectl commands. We'll rely on baseline (if enabled) and MCP tools only.
+	if !(cfg.MCPClientEnabled && cfg.MCPStrict) {
+		// First get the kubectl commands without showing the spinner
+		for i := 0; i < cfg.Retries; i++ {
+			cmds, err = GenKubectlCmds(cfg, prompt, userMsgCount)
+			if err != nil {
+				logger.Log("warn", "Error retrieving kubectl commands: %v", err)
+				continue
+			}
+			if len(cmds) > 0 {
+				break
+			}
 		}
-		if len(cmds) > 0 {
-			break
+		if len(cmds) == 0 {
+			logger.Log("info", "No kubectl diagnostics generated; continuing without user diagnostics")
 		}
-	}
-
-	if len(cmds) == 0 {
-		return "", fmt.Errorf("no valid kubectl commands found")
 	}
 
 	// Prepend baseline commands only for the first user query when enabled
@@ -51,30 +54,35 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 		}
 	}
 
-	// Create a spinner for diagnostic information gathering only if we're not in safe mode
-	// In safe mode, the spinner will be managed by execDiagCmds for each command
-	var s *spinner.Spinner
-	if !cfg.SafeMode {
-		s = spinner.New(spinner.CharSets[11], 10*time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-		s.Suffix = " Gathering diagnostic information..."
-		s.Color("cyan", "bold")
-		s.Start()
-		defer s.Stop()
+	if !(cfg.MCPClientEnabled && cfg.MCPStrict) && len(cmds) > 0 {
+		// Create a spinner for diagnostic information gathering only if we're not in safe mode
+		// In safe mode, the spinner will be managed by execDiagCmds for each command
+		var s *spinner.Spinner
+		if !cfg.SafeMode {
+			s = spinner.New(spinner.CharSets[11], 10*time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
+			s.Suffix = " Gathering diagnostic information..."
+			s.Color("cyan", "bold")
+			s.Start()
+			defer s.Stop()
+		}
+
+		// Execute the diagnostic commands (no need for slices.Compact as cmds is already filtered)
+		logger.Log("info", "Executing diagnostic command set: %d command(s)", len(cmds))
+		userRes, err := exec.ExecDiagCmds(cfg, cmds)
+		if err != nil {
+			logger.Log("warn", "Error executing diagnostic commands: %v", err)
+		}
+		if len(userRes) > 0 {
+			cmdResults = append(cmdResults, userRes...)
+			logger.Log("info", "Collected %d diagnostic result(s)", len(userRes))
+		}
 	}
 
-	// Execute the diagnostic commands (no need for slices.Compact as cmds is already filtered)
-	logger.Log("info", "Executing diagnostic command set: %d command(s)", len(cmds))
-	userRes, err := exec.ExecDiagCmds(cfg, cmds)
-	if err != nil {
-		logger.Log("warn", "Error executing diagnostic commands: %v", err)
-	}
-	if len(userRes) > 0 {
-		cmdResults = append(cmdResults, userRes...)
-		logger.Log("info", "Collected %d diagnostic result(s)", len(userRes))
-	}
-
-	// Check if we have valid results
+	// Check if we have valid results. In strict mode, absence of results is acceptable.
 	if len(cmdResults) == 0 {
+		if cfg.MCPClientEnabled && cfg.MCPStrict {
+			return "", nil
+		}
 		return "", fmt.Errorf("no valid command results found")
 	}
 

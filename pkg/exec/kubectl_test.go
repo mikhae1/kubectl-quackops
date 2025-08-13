@@ -142,7 +142,7 @@ func TestShellCommandsSkippedInSafeMode(t *testing.T) {
 	// This simulates all kubectl commands being skipped by user
 	// and $ commands being automatically skipped in safe mode
 	for i, cmd := range commands {
-		if strings.HasPrefix(cmd, "$") {
+		if strings.HasPrefix(cmd, cfg.CommandPrefix) {
 			// For $ commands, they should be automatically marked as skipped
 			result := config.CmdRes{
 				Cmd: cmd,

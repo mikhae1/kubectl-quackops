@@ -19,6 +19,8 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
+	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
+	"github.com/mikhae1/kubectl-quackops/pkg/version"
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
@@ -74,6 +76,11 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().BoolVarP(&cfg.DisableHistory, "disable-history", "", cfg.DisableHistory, "Disable storing prompt history in a file")
 	cmd.Flags().StringVarP(&cfg.HistoryFile, "history-file", "", cfg.HistoryFile, "Path to the history file (default: ~/.quackops/history)")
 	cmd.Flags().StringVarP(&cfg.KubectlBinaryPath, "kubectl-path", "k", cfg.KubectlBinaryPath, "Path to kubectl binary")
+	// MCP flags
+	cmd.Flags().BoolVarP(&cfg.MCPClientEnabled, "mcp-client", "", cfg.MCPClientEnabled, "Enable MCP client mode to use external MCP servers for tools")
+	cmd.Flags().StringVarP(&cfg.MCPConfigPath, "mcp-config", "", cfg.MCPConfigPath, "Path to MCP client configuration file (default: ~/.config/quackops/mcp.yaml)")
+	cmd.Flags().IntVarP(&cfg.MCPToolTimeout, "mcp-tool-timeout", "", cfg.MCPToolTimeout, "Timeout in seconds for MCP tool calls")
+	cmd.Flags().BoolVarP(&cfg.MCPStrict, "mcp-strict", "", cfg.MCPStrict, "Strict MCP mode: do not fall back to local execution when MCP fails")
 	// Diagnostics flags
 	cmd.Flags().BoolVarP(&cfg.EnableBaseline, "enable-baseline", "", cfg.EnableBaseline, "Enable baseline diagnostic pack before LLM")
 	cmd.Flags().IntVarP(&cfg.EventsWindowMinutes, "events-window-minutes", "", cfg.EventsWindowMinutes, "Events time window in minutes for summarization")
@@ -156,6 +163,11 @@ func printEnvVarsHelp() {
 func runQuackOps(cfg *config.Config, args []string) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		logger.InitLoggers(os.Stderr, 0)
+		// Start MCP client mode if enabled
+		if cfg.MCPClientEnabled {
+			_ = mcp.Start(cfg)
+			defer mcp.Stop()
+		}
 
 		if err := startChatSession(cfg, args); err != nil {
 			fmt.Printf("Error processing commands: %v\n", err)
@@ -201,13 +213,17 @@ func startChatSession(cfg *config.Config, args []string) error {
 			cfg.EditMode = !cfg.EditMode
 			if rl != nil {
 				if cfg.EditMode {
-					rl.SetPrompt(lib.FormatEditPrompt())
+					rl.SetPrompt(lib.FormatEditPromptWith(cfg))
+					// Reset edit-mode history cursor to the end on entry
+					cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
 				} else {
 					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+					// Reset history index when leaving
+					cfg.EditModeHistoryIndex = 0
 				}
 				rl.Refresh()
 			}
-			return 0, false // swallow $
+			return 0, false // swallow prefix
 		}
 
 		// Exit edit mode with ESC
@@ -225,6 +241,37 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 	// Add listener; avoid recomputing prompt on every keystroke to prevent latency
 	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
+		// Intercept history navigation in edit mode to show only successfully executed commands without `$` prefix
+		if cfg.EditMode {
+			// Up/down arrows
+			if key == readline.CharPrev || key == readline.CharNext {
+				// Initialize history index lazily
+				if cfg.EditModeHistoryIndex == 0 {
+					cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
+				}
+
+				if key == readline.CharPrev {
+					if cfg.EditModeHistoryIndex > 0 {
+						cfg.EditModeHistoryIndex--
+					}
+				} else if key == readline.CharNext {
+					if cfg.EditModeHistoryIndex < len(cfg.EditModeHistory) {
+						cfg.EditModeHistoryIndex++
+					}
+				}
+
+				// Determine the replacement line
+				var replacement string
+				if cfg.EditModeHistoryIndex >= 0 && cfg.EditModeHistoryIndex < len(cfg.EditModeHistory) {
+					replacement = cfg.EditModeHistory[cfg.EditModeHistoryIndex]
+				} else {
+					// When past the newest entry, show empty line
+					replacement = ""
+				}
+				// Replace current buffer with replacement
+				return []rune(replacement), len([]rune(replacement)), true
+			}
+		}
 		// Backup ESC handling if it reaches listener
 		if cfg.EditMode && key == readline.CharEsc {
 			cfg.EditMode = false
@@ -236,7 +283,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 		// Only update prompt on ENTER or INTERRUPT; other keys are ignored to keep input responsive
 		if key == readline.CharEnter || key == readline.CharInterrupt {
 			if cfg.EditMode {
-				rl.SetPrompt(lib.FormatEditPrompt())
+				rl.SetPrompt(lib.FormatEditPromptWith(cfg))
 			} else {
 				rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 			}
@@ -274,6 +321,22 @@ func startChatSession(cfg *config.Config, args []string) error {
 	})
 
 	printWelcomeBanner(cfg)
+	if cfg.MCPClientEnabled {
+		info := color.New(color.FgHiWhite)
+		dim := color.New(color.FgHiBlack)
+		accent := color.New(color.FgHiCyan)
+		servers := mcp.Servers(cfg)
+		tools := mcp.Tools(cfg)
+		srvStr := "none"
+		if len(servers) > 0 {
+			srvStr = strings.Join(servers, ", ")
+		}
+		if srvStr != "none" {
+			srvStr = accent.Sprint(srvStr)
+		}
+		line := fmt.Sprintf("on · servers:[%s] · tools:%d · strict:%t", srvStr, len(tools), cfg.MCPStrict)
+		fmt.Println(dim.Sprint("MCP:") + " " + info.Sprint(line))
+	}
 
 	// Chat loop
 	// Track the last displayed token counters in the prompt so we can animate to new values
@@ -296,24 +359,147 @@ func startChatSession(cfg *config.Config, args []string) error {
 		}
 
 		switch strings.ToLower(userPrompt) {
-		case "bye", "exit", "quit":
+		case "bye", "exit", "quit", "/bye", "/exit", "/quit", "/q":
 			cleanupAndExit("🦆...quack!", 0)
+		case "/version":
+			fmt.Println(version.Version)
+			continue
+		case "/mcp":
+			if cfg.MCPClientEnabled {
+				printMCPDetails(cfg)
+			} else {
+				fmt.Println("MCP client: disabled")
+			}
+			continue
+		case "/model":
+			prov := strings.ToUpper(strings.TrimSpace(cfg.Provider))
+			if prov == "" {
+				prov = "DEFAULT"
+			}
+			m := strings.TrimSpace(cfg.Model)
+			if m == "" {
+				m = "auto"
+			}
+			fmt.Printf("%s/%s\n", prov, m)
+			continue
+		case "/reset":
+			cfg.ChatMessages = nil
+			cfg.StoredUserCmdResults = nil
+			fmt.Println("Context reset")
+			continue
+		case "/clear":
+			fmt.Print("\033[2J\033[H")
+			continue
+		case "/servers":
+			if cfg.MCPClientEnabled {
+				list := mcp.Servers(cfg)
+				if len(list) == 0 {
+					fmt.Println("No MCP servers configured")
+				} else {
+					fmt.Println("MCP servers:")
+					for _, s := range list {
+						fmt.Printf(" - %s\n", s)
+					}
+				}
+			} else {
+				fmt.Println("MCP client: disabled")
+			}
+			continue
+		case "/tools":
+			if cfg.MCPClientEnabled {
+				toolInfos := mcp.GetToolInfos(cfg)
+				if len(toolInfos) == 0 {
+					fmt.Println("No MCP tools discovered")
+				} else {
+					toolColor := color.New(color.FgHiCyan)
+					descColor := color.New(color.FgWhite)
+					fmt.Printf("MCP tools (%d):\n", len(toolInfos))
+					for _, tool := range toolInfos {
+						// Truncate description if too long
+						desc := tool.Description
+						maxLen := 320
+						if len(desc) > maxLen {
+							desc = desc[:maxLen] + "..."
+						}
+						fmt.Printf(" - %s: %s\n", toolColor.Sprint(tool.Name), descColor.Sprint(desc))
+					}
+				}
+			} else {
+				fmt.Println("MCP client: disabled")
+			}
+			continue
 		}
 
-		// Save history manually for non-slash inputs (skip "/" commands)
-		if !cfg.DisableHistory && cfg.HistoryFile != "" && !strings.HasPrefix(userPrompt, "/") {
-			_ = rl.Operation.SaveHistory(userPrompt)
-		}
+		// Do not save raw input here. History saving is handled after processing to apply rules.
 
-		if !strings.HasPrefix(userPrompt, "$") {
+		if !strings.HasPrefix(userPrompt, cfg.CommandPrefix) {
 			lastTextPrompt = userPrompt
 			userMsgCount++
 		}
 
 		logger.Log("info", "Processing prompt (editMode=%t, safeMode=%t, baseline=%t)", cfg.EditMode, cfg.SafeMode, cfg.EnableBaseline)
+		// Remember input characteristics and original text
+		wasEditMode := cfg.EditMode
+		originalUserPrompt := userPrompt
+		prefix := cfg.CommandPrefix
+		if strings.TrimSpace(prefix) == "" {
+			prefix = "$"
+		}
+		wasPrefixed := strings.HasPrefix(originalUserPrompt, prefix)
+		wasCommand := wasEditMode || wasPrefixed
+
 		err = processUserPrompt(cfg, userPrompt, lastTextPrompt, userMsgCount)
 		if err != nil {
 			return err
+		}
+
+		// Save history according to rules
+		if !strings.HasPrefix(originalUserPrompt, "/") {
+			if wasEditMode {
+				// In edit mode, save only successful commands (persist with prefix),
+				// and store in-memory without the prefix for navigation.
+				success := false
+				if len(cfg.StoredUserCmdResults) > 0 {
+					last := cfg.StoredUserCmdResults[len(cfg.StoredUserCmdResults)-1]
+					success = (last.Err == nil) && (strings.TrimSpace(last.Cmd) != "")
+				}
+				if success {
+					entry := originalUserPrompt
+					if !strings.HasPrefix(entry, prefix) {
+						entry = prefix + " " + entry
+					}
+					// Persist to file if enabled
+					if !cfg.DisableHistory && cfg.HistoryFile != "" {
+						_ = rl.Operation.SaveHistory(entry)
+					}
+					// Track in-memory history for edit mode navigation
+					clean := strings.TrimSpace(strings.TrimPrefix(entry, prefix))
+					cfg.EditModeHistory = append(cfg.EditModeHistory, clean)
+					cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
+				}
+			} else {
+				// Non-edit entries: persist as-is as prompts if enabled
+				if !cfg.DisableHistory && cfg.HistoryFile != "" {
+					_ = rl.Operation.SaveHistory(originalUserPrompt)
+				}
+				// If this was a prefixed command executed outside edit mode, include in edit-mode
+				// history (in-memory) when successful so it can be recalled while editing.
+				if wasCommand {
+					success := false
+					if len(cfg.StoredUserCmdResults) > 0 {
+						last := cfg.StoredUserCmdResults[len(cfg.StoredUserCmdResults)-1]
+						success = (last.Err == nil) && (strings.TrimSpace(last.Cmd) != "")
+					}
+					if success {
+						clean := originalUserPrompt
+						if strings.HasPrefix(clean, prefix) {
+							clean = strings.TrimSpace(strings.TrimPrefix(clean, prefix))
+						}
+						cfg.EditModeHistory = append(cfg.EditModeHistory, clean)
+						cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
+					}
+				}
+			}
 		}
 
 		// Update prompt after processing
@@ -324,7 +510,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 				// Prevent double-close on subsequent iterations
 				promptAnimStop = nil
 			}
-			rl.SetPrompt(lib.FormatEditPrompt())
+			rl.SetPrompt(lib.FormatEditPromptWith(cfg))
 			rl.Refresh()
 		} else {
 			// Animate the prompt counter to the latest token values
@@ -384,13 +570,13 @@ func printWelcomeBanner(cfg *config.Config) {
 	// Build hero banner (right column)
 	// brand coloring not used for mono gradient mode
 	// brand := color.New(color.FgHiYellow, color.Bold)
-	dim := color.New(color.FgHiBlack)
-	shadow := color.New(color.FgHiBlack, color.Faint)
-	info := color.New(color.FgHiWhite)
-	ok := color.New(color.FgHiGreen, color.Bold)
-	warn := color.New(color.FgHiRed, color.Bold)
-	magenta := color.New(color.FgHiMagenta)
-	accent := color.New(color.FgHiCyan, color.Bold)
+	dim := config.Colors.Dim
+	shadow := config.Colors.Shadow
+	info := config.Colors.Info
+	ok := config.Colors.Ok
+	warn := config.Colors.Warn
+	magenta := config.Colors.Magenta
+	accent := config.Colors.Accent
 
 	// (plain title kept for reference but not used)
 
@@ -420,10 +606,7 @@ func printWelcomeBanner(cfg *config.Config) {
 	}
 
 	// Single-palette gradient (cyan family) for ASCII art (duck + QUACKOPS) & horizontal line
-	monoPalette := []*color.Color{
-		color.New(color.FgHiCyan),
-		color.New(color.FgCyan),
-	}
+	monoPalette := config.Colors.Gradient
 	gradientizeMono := func(text string, start int) string {
 		if text == "" {
 			return text
@@ -545,7 +728,7 @@ func printWelcomeBanner(cfg *config.Config) {
 	fmt.Println()
 	fmt.Println(indent + accent.Sprint("Getting started:"))
 	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Ask questions:") + " " + info.Sprint("find pod issues in nginx namespace"))
-	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Run commands:") + " " + info.Sprint("$ kubectl get events -A"))
+	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Run commands:") + " " + info.Sprint(cfg.CommandPrefix+" kubectl get events -A"))
 	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Type: ") + ok.Sprint("/help") + " " + info.Sprint("for more information"))
 	fmt.Println()
 }
@@ -637,11 +820,11 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	}
 
 	// Edit mode: treat input as command without requiring '$' prefix
-	if cfg.EditMode || strings.HasPrefix(userPrompt, "$") {
+	if cfg.EditMode || strings.HasPrefix(userPrompt, cfg.CommandPrefix) {
 		effectiveCmd := userPrompt
-		if cfg.EditMode && !strings.HasPrefix(userPrompt, "$") {
-			// In edit mode, normalize to "$ <cmd>" so it is stored with $ in history
-			effectiveCmd = "$ " + userPrompt
+		if cfg.EditMode && !strings.HasPrefix(userPrompt, cfg.CommandPrefix) {
+			// In edit mode, normalize to "<prefix> <cmd>" so it is stored with prefix in history
+			effectiveCmd = cfg.CommandPrefix + " " + userPrompt
 		}
 		// Execute the command and store the result; do not run LLM
 		cmdResults, err := exec.ExecDiagCmds(cfg, []string{effectiveCmd})
@@ -675,6 +858,12 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		augPrompt = userPrompt
 	}
 
+	// Add MCP tool information to the prompt if MCP is enabled
+	if cfg.MCPClientEnabled {
+		augPrompt = addMCPToolsToPrompt(cfg, augPrompt)
+		logger.Log("info", "Enhanced prompt with MCP tool information for better diagnostics")
+	}
+
 	_, err = llm.Request(cfg, augPrompt, true, true)
 	if err != nil {
 		return fmt.Errorf("error requesting LLM: %w", err)
@@ -684,6 +873,92 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	return nil
 }
 
+// printMCPDetails displays detailed MCP information with proper formatting
+func printMCPDetails(cfg *config.Config) {
+	titleColor := color.New(color.FgHiYellow, color.Bold)
+	toolColor := color.New(color.FgHiCyan)
+	descColor := color.New(color.FgWhite)
+	serverColor := color.New(color.FgHiGreen)
+
+	fmt.Println()
+	titleColor.Println("MCP Details:")
+
+	// Show servers
+	srvs := mcp.Servers(cfg)
+	connectedSrvs := mcp.GetConnectedServerNames(cfg)
+	connectedMap := make(map[string]bool)
+	for _, srv := range connectedSrvs {
+		connectedMap[srv] = true
+	}
+
+	if len(srvs) == 0 {
+		fmt.Println("- servers: none")
+	} else {
+		fmt.Println("- servers:")
+		for _, s := range srvs {
+			if connectedMap[s] {
+				fmt.Printf("  · %s\n", serverColor.Sprint(s))
+			} else {
+				fmt.Printf("  · %s (disconnected)\n", color.HiBlackString(s))
+			}
+		}
+	}
+
+	// Show tools with descriptions
+	toolInfos := mcp.GetToolInfos(cfg)
+	if len(toolInfos) == 0 {
+		fmt.Println("- tools: none")
+	} else {
+		fmt.Printf("- tools (%d):\n", len(toolInfos))
+		for _, tool := range toolInfos {
+			// Truncate description if too long
+			desc := tool.Description
+			if len(desc) > 60 {
+				desc = desc[:57] + "..."
+			}
+			fmt.Printf("  · %s: %s\n", toolColor.Sprint(tool.Name), descColor.Sprint(desc))
+		}
+	}
+	fmt.Println()
+}
+
+// addMCPToolsToPrompt enriches the prompt with available MCP tools information for better RAG integration
+func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
+	toolInfos := mcp.GetToolInfos(cfg)
+	if len(toolInfos) == 0 {
+		logger.Log("info", "No MCP tools available for prompt enhancement")
+		return prompt
+	}
+
+	// Get server information
+	connectedServers := mcp.GetConnectedServerNames(cfg)
+
+	// Build enhanced MCP tools context for RAG
+	var mcpContext strings.Builder
+	mcpContext.WriteString("\n\n## Available MCP Tools for Diagnostics\n")
+	mcpContext.WriteString("You have access to the following MCP (Model Context Protocol) tools that can provide real-time Kubernetes cluster diagnostics:\n\n")
+
+	if len(connectedServers) > 0 {
+		mcpContext.WriteString(fmt.Sprintf("**Connected MCP Servers:** %s\n\n", strings.Join(connectedServers, ", ")))
+	}
+
+	mcpContext.WriteString("**Instructions for Tool Usage:**\n")
+	mcpContext.WriteString("- These tools can be called automatically to gather real-time diagnostics\n")
+	mcpContext.WriteString("- When analyzing cluster issues, use relevant MCP tools to get current state information\n")
+	mcpContext.WriteString("- Tool results will be automatically fed back into the analysis\n")
+	if cfg.MCPStrict {
+		mcpContext.WriteString("- Operating in strict MCP mode - no local fallbacks\n")
+	}
+	mcpContext.WriteString("\n")
+
+	mcpContext.WriteString("---\n\n")
+	mcpContext.WriteString("## User Query\n")
+	mcpContext.WriteString(prompt)
+
+	logger.Log("info", "Using MCP tools in prompt with %d tools", len(toolInfos))
+	return mcpContext.String()
+}
+
 // printInlineHelp prints quick usage information for interactive mode
 func printInlineHelp() {
 	title := color.New(color.FgHiYellow, color.Bold)
@@ -691,7 +966,7 @@ func printInlineHelp() {
 
 	fmt.Println()
 	title.Println("Tips for getting started:")
-	fmt.Println(body.Sprint("- Ask questions, or run commands with \"$\"."))
+	fmt.Println(body.Sprint("- Ask questions, or run commands with the configured prefix (default \"$\")."))
 	fmt.Println(body.Sprint("- Example: $ kubectl get events -A"))
 	fmt.Println(body.Sprint("- Type 'exit', 'quit', or 'bye' to leave"))
 	fmt.Println()

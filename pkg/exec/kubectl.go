@@ -30,6 +30,30 @@ type cmdStatus struct {
 func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error) {
 	logger.Log("info", "ExecDiagCmds: %d command(s)", len(commands))
 
+	filtered := make([]string, 0, len(commands))
+	skippedCount := 0
+	for _, c := range commands {
+		cTrim := strings.TrimSpace(c)
+		prefix := "$"
+		if strings.TrimSpace(cfg.CommandPrefix) != "" {
+			prefix = cfg.CommandPrefix
+		}
+		if strings.HasPrefix(cTrim, prefix) {
+			filtered = append(filtered, c)
+		} else {
+			skippedCount++
+		}
+		if skippedCount > 0 {
+			logger.Log("warn", "Strict MCP mode: skipping %d non-$ command(s)", skippedCount)
+		}
+		commands = filtered
+	}
+
+	// If no commands remain after filtering, return early.
+	if len(commands) == 0 {
+		return []config.CmdRes{}, nil
+	}
+
 	// Initialize tracking variables
 	startTime := time.Now()
 	results := make([]config.CmdRes, len(commands))
@@ -116,20 +140,9 @@ func executeCommandsSequentially(
 	s *spinner.Spinner,
 ) {
 	for i, command := range commands {
-		if !strings.HasPrefix(command, "$") {
-			if !promptForCommandConfirmation(command, i, statusChan, s) {
-				// Skip this command if not confirmed
-				continue
-			}
-		} else {
-			// For commands with $ prefix, mark them as skipped in safe mode
-			// These are shell commands which are not executed in safe mode
-			result := config.CmdRes{
-				Cmd: command,
-				Out: "Skipped shell command in safe mode",
-			}
-			results[i] = result
-			statusChan <- cmdStatus{i, true, nil, true}
+		// In safe mode, always ask for confirmation, including for "$" commands.
+		if !promptForCommandConfirmation(command, i, statusChan, s) {
+			// Skip this command if not confirmed
 			continue
 		}
 
@@ -281,13 +294,13 @@ func processResults(cfg *config.Config, results []config.CmdRes) error {
 	var err error
 	for _, res := range results {
 		if !cfg.Verbose {
-			logger.Log("in", "$ %s", res.Cmd)
-			if res.Out != "" && !strings.HasPrefix(res.Cmd, "$") {
+			logger.Log("in", cfg.CommandPrefix+" %s", res.Cmd)
+			if res.Out != "" && !strings.HasPrefix(res.Cmd, cfg.CommandPrefix) {
 				logger.Log("out", "%s", res.Out)
 			}
 		}
 		if res.Err != nil {
-			if !cfg.Verbose && !strings.HasPrefix(res.Cmd, "$") {
+			if !cfg.Verbose && !strings.HasPrefix(res.Cmd, cfg.CommandPrefix) {
 				logger.Log("err", "%v", res.Err)
 			}
 			if err == nil {
@@ -315,7 +328,11 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 
 	// Check if it's a kubectl command and replace with custom binary path if needed
 	isKubectlCmd := strings.HasPrefix(command, "kubectl")
-	isShellCmd := strings.HasPrefix(command, "$")
+	prefix := "$"
+	if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
+		prefix = cfg.CommandPrefix
+	}
+	isShellCmd := strings.HasPrefix(command, prefix)
 
 	if !isKubectlCmd && !isShellCmd {
 		result.Err = fmt.Errorf("invalid command: %s (must start with 'kubectl' or '$')", command)
@@ -331,7 +348,7 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 	blacklist := append(cfg.BlockedKubectlCmds, envBlockedList...)
 
 	if isShellCmd {
-		command = strings.TrimSpace(strings.TrimPrefix(command, "$"))
+		command = strings.TrimSpace(strings.TrimPrefix(command, prefix))
 	} else if isKubectlCmd {
 		// Check if command contains blocked kubectl operations
 		for _, cmd := range blacklist {
@@ -411,11 +428,15 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 
 	// Print command output for interactive commands (those with $ prefix),
 	// always in edit mode, or when verbose mode is enabled
-	if cfg.Verbose || cfg.EditMode || strings.HasPrefix(result.Cmd, "$") {
+	if cfg.Verbose || cfg.EditMode || (cfg != nil && strings.HasPrefix(result.Cmd, cfg.CommandPrefix)) {
 		dim := color.New(color.Faint).SprintFunc()
 		bold := color.New(color.Bold).SprintFunc()
 
-		fmt.Println(bold("\n$ " + result.Cmd))
+		prefix := "$"
+		if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
+			prefix = cfg.CommandPrefix
+		}
+		fmt.Println(bold("\n" + prefix + " " + result.Cmd))
 		for _, line := range strings.Split(result.Out, "\n") {
 			fmt.Println(dim("-- " + line))
 		}
