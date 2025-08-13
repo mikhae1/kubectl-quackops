@@ -89,6 +89,11 @@ type Config struct {
 	// Maximum number of iterative MCP tool calls per LLM response
 	MCPMaxToolCalls int
 
+	// MCP logging for debugging (raw server stdio)
+	MCPLogEnabled bool
+	MCPLogFile    string
+	MCPLogFormat  string
+
 	// Tool policy
 	AllowedTools []string
 	DeniedTools  []string
@@ -226,6 +231,14 @@ func LoadConfig() *Config {
 		MCPToolTimeout:  getEnvArg("QU_MCP_TOOL_TIMEOUT", 30).(int),
 		MCPStrict:       getEnvArg("QU_MCP_STRICT", false).(bool),
 		MCPMaxToolCalls: getEnvArg("QU_MCP_MAX_TOOL_CALLS", 10).(int),
+		MCPLogEnabled:   getEnvArg("QU_MCP_LOG", false).(bool),
+		MCPLogFile: func() string {
+			if homeDir != "" {
+				return fmt.Sprintf("%s/.quackops/mcp.log", homeDir)
+			}
+			return "mcp.log"
+		}(),
+		MCPLogFormat: getEnvArg("QU_MCP_LOG_FORMAT", "jsonl").(string),
 
 		// Embedding model configuration
 		EmbeddingModel:        getEnvArg("QU_EMBEDDING_MODEL", defaultEmbeddingModel).(string),

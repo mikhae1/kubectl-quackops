@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,11 @@ var (
 	cfgDoc   ConfigFile
 	started  bool
 	registry *ServerRegistry
+	// MCP stdio logging
+	mcpLogEnabled bool
+	mcpLogFile    *os.File
+	mcpLogMu      sync.Mutex
+	mcpLogFormat  string
 )
 
 func loadOnce(path string) {
@@ -142,6 +148,160 @@ func NewServerRegistry() *ServerRegistry {
 		toolToServer:    make(map[string]*ServerConnection),
 		sessionToServer: make(map[*sdkmcp.ClientSession]*ServerConnection),
 	}
+}
+
+// initMCPLogging prepares the per-run MCP stdio log file (overwrites on start)
+func initMCPLogging(cfg *config.Config) {
+	if mcpLogFile != nil || !cfg.MCPLogEnabled {
+		return
+	}
+	if cfg.MCPLogFile == "" {
+		return
+	}
+	dir := filepath.Dir(cfg.MCPLogFile)
+	if dir != "." && dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	f, err := os.OpenFile(cfg.MCPLogFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		logger.Log("warn", "[MCP] Failed to open MCP log file %s: %v", cfg.MCPLogFile, err)
+		return
+	}
+	mcpLogFile = f
+	mcpLogEnabled = true
+	mcpLogFormat = strings.ToLower(strings.TrimSpace(cfg.MCPLogFormat))
+	if mcpLogFormat == "" {
+		mcpLogFormat = "jsonl"
+	}
+	// Write start marker
+	writeMCPLog(map[string]any{
+		"ts":       time.Now().Format(time.RFC3339Nano),
+		"event":    "start",
+		"servers":  len(cfgDoc.Servers),
+		"log_file": cfg.MCPLogFile,
+	})
+}
+
+// writeMCPLog writes one JSON line entry to the MCP log, thread-safe
+func writeMCPLog(entry map[string]any) {
+	if !mcpLogEnabled || mcpLogFile == nil {
+		return
+	}
+	// Ensure timestamp
+	if _, ok := entry["ts"]; !ok {
+		entry["ts"] = time.Now().Format(time.RFC3339Nano)
+	}
+	// Strip ANSI from common fields
+	if v, ok := entry["line"].(string); ok {
+		entry["line"] = stripANSI(v)
+	}
+	if v, ok := entry["result"].(string); ok {
+		entry["result"] = stripANSI(v)
+	}
+
+	var out []byte
+	var err error
+	switch mcpLogFormat {
+	case "yaml", "yml":
+		if b, yerr := yaml.Marshal(entry); yerr == nil {
+			out = append([]byte("---\n"), b...)
+		} else {
+			// fallback to jsonl if yaml fails
+			out, err = json.Marshal(entry)
+			if err != nil {
+				return
+			}
+			out = append(out, '\n')
+		}
+	case "text", "pretty":
+		out = formatMCPLogText(entry)
+	default: // jsonl
+		out, err = json.Marshal(entry)
+		if err != nil {
+			return
+		}
+		out = append(out, '\n')
+	}
+	mcpLogMu.Lock()
+	defer mcpLogMu.Unlock()
+	_, _ = mcpLogFile.Write(out)
+}
+
+// formatMCPLogText renders entries as human-friendly text while preserving information
+func formatMCPLogText(entry map[string]any) []byte {
+	// Helper to fetch string fields
+	get := func(k string) string {
+		if v, ok := entry[k]; ok && v != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return ""
+	}
+
+	event := get("event")
+	ts := get("ts")
+	server := get("server")
+
+	var b strings.Builder
+	switch event {
+	case "server_stderr":
+		fmt.Fprintf(&b, "[%s] [%s] stderr: %s\n", ts, server, get("line"))
+	case "server_start":
+		fmt.Fprintf(&b, "[%s] mcp logging started (servers=%s, file=%s)\n", ts, get("servers"), get("log_file"))
+	case "server_connected":
+		fmt.Fprintf(&b, "[%s] [%s] connected (tools=%s)\n", ts, server, get("tool_cnt"))
+		if tools, ok := entry["tools"]; ok {
+			fmt.Fprintf(&b, "  tools: %v\n", tools)
+		}
+	case "server_connect_failed":
+		fmt.Fprintf(&b, "[%s] [%s] connect failed: %s\n", ts, server, get("error"))
+	case "server_reconnect":
+		fmt.Fprintf(&b, "[%s] [%s] reconnecting\n", ts, server)
+	case "server_reconnected":
+		fmt.Fprintf(&b, "[%s] [%s] reconnected (tools=%s)\n", ts, server, get("tool_cnt"))
+		if tools, ok := entry["tools"]; ok {
+			fmt.Fprintf(&b, "  tools: %v\n", tools)
+		}
+	case "tool_call_start":
+		fmt.Fprintf(&b, "[%s] [%s] tool call start: %s\n", ts, server, get("tool"))
+		if args, ok := entry["args"]; ok {
+			fmt.Fprintf(&b, "  args: %v\n", args)
+		}
+	case "tool_call":
+		fmt.Fprintf(&b, "[%s] [%s] tool call done: %s (content=%s, bytes=%s)\n", ts, server, get("tool"), get("content_type"), get("bytes"))
+		if args, ok := entry["args"]; ok {
+			fmt.Fprintf(&b, "  args: %v\n", args)
+		}
+		if res := get("result"); res != "" {
+			fmt.Fprintf(&b, "  result:\n")
+			for _, line := range strings.Split(res, "\n") {
+				fmt.Fprintf(&b, "    %s\n", line)
+			}
+		}
+	case "tool_call_failed":
+		fmt.Fprintf(&b, "[%s] [%s] tool call failed: %s error=%s\n", ts, server, get("tool"), get("error"))
+		if args, ok := entry["args"]; ok {
+			fmt.Fprintf(&b, "  args: %v\n", args)
+		}
+	case "stop":
+		fmt.Fprintf(&b, "[%s] mcp logging stopped\n", ts)
+	default:
+		// Fallback generic formatting: key=value pairs
+		fmt.Fprintf(&b, "[%s]", ts)
+		for k, v := range entry {
+			if k == "ts" {
+				continue
+			}
+			fmt.Fprintf(&b, " %s=%v", k, v)
+		}
+		b.WriteString("\n")
+	}
+	return []byte(b.String())
+}
+
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
+func stripANSI(s string) string {
+	return ansiRegexp.ReplaceAllString(s, "")
 }
 
 // AddServer adds a server connection to the registry
@@ -354,6 +514,33 @@ func (r *ServerRegistry) attemptReconnect(conn *ServerConnection, cfg *config.Co
 	conn.ctx = ctx
 	conn.cancel = cancel
 
+	// Hook stderr logging if enabled
+	if cfg.MCPLogEnabled {
+		if rpipe, rerr := cmd.StderrPipe(); rerr == nil {
+			serverName := name
+			go func() {
+				scanner := bufio.NewScanner(rpipe)
+				buf := make([]byte, 0, 64*1024)
+				scanner.Buffer(buf, 1024*1024)
+				for scanner.Scan() {
+					line := scanner.Text()
+					writeMCPLog(map[string]any{
+						"event":  "server_stderr",
+						"server": serverName,
+						"stream": "stderr",
+						"line":   line,
+					})
+				}
+			}()
+		} else {
+			logger.Log("warn", "[MCP] Unable to capture stderr for server %s during reconnect: %v", name, rerr)
+		}
+		writeMCPLog(map[string]any{
+			"event":  "server_reconnect",
+			"server": name,
+		})
+	}
+
 	// Attempt connection
 	transport := sdkmcp.NewCommandTransport(cmd)
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{
@@ -370,6 +557,13 @@ func (r *ServerRegistry) attemptReconnect(conn *ServerConnection, cfg *config.Co
 	sess, err := client.Connect(ctx, transport)
 	if err != nil {
 		logger.Log("warn", "[MCP] Failed to reconnect server %s: %v", name, err)
+		if cfg.MCPLogEnabled {
+			writeMCPLog(map[string]any{
+				"event":  "server_reconnect_failed",
+				"server": name,
+				"error":  err.Error(),
+			})
+		}
 		r.mu.Lock()
 		conn.LastError = err
 		conn.Connected = false
@@ -403,6 +597,14 @@ func (r *ServerRegistry) attemptReconnect(conn *ServerConnection, cfg *config.Co
 	r.mu.Unlock()
 
 	logger.Log("info", "[MCP] Successfully reconnected server %s with %d tools", name, len(tools))
+	if cfg.MCPLogEnabled {
+		writeMCPLog(map[string]any{
+			"event":    "server_reconnected",
+			"server":   name,
+			"tool_cnt": len(tools),
+			"tools":    tools,
+		})
+	}
 }
 
 // Tools returns a list of tool names from all connected servers
@@ -466,6 +668,8 @@ func Start(cfg *config.Config) error {
 
 	// Initialize registry
 	registry = NewServerRegistry()
+	// Initialize MCP stdio logging (overwrites file on start)
+	initMCPLogging(cfg)
 
 	if len(cfgDoc.Servers) == 0 {
 		logger.Log("info", "[MCP] No servers configured")
@@ -533,6 +737,37 @@ func startServer(idx int, spec ServerSpec, cfg *config.Config) {
 	}
 	conn.Process = cmd
 
+	// Hook stderr logging if enabled
+	if cfg.MCPLogEnabled {
+		if r, err := cmd.StderrPipe(); err == nil {
+			serverName := name
+			go func() {
+				scanner := bufio.NewScanner(r)
+				// Increase buffer for long lines
+				buf := make([]byte, 0, 64*1024)
+				scanner.Buffer(buf, 1024*1024)
+				for scanner.Scan() {
+					line := scanner.Text()
+					writeMCPLog(map[string]any{
+						"event":  "server_stderr",
+						"server": serverName,
+						"stream": "stderr",
+						"line":   line,
+					})
+				}
+			}()
+		} else {
+			logger.Log("warn", "[MCP] Unable to capture stderr for server %s: %v", name, err)
+		}
+		// Log server start record
+		writeMCPLog(map[string]any{
+			"event":   "server_start",
+			"server":  name,
+			"command": spec.Command,
+			"args":    spec.Args,
+		})
+	}
+
 	// Create transport using mcp.NewCommandTransport as specified
 	transport := sdkmcp.NewCommandTransport(cmd)
 
@@ -553,6 +788,13 @@ func startServer(idx int, spec ServerSpec, cfg *config.Config) {
 	sess, err := client.Connect(ctx, transport)
 	if err != nil {
 		logger.Log("warn", "[MCP] Failed to connect to server %s: %v", name, err)
+		if cfg.MCPLogEnabled {
+			writeMCPLog(map[string]any{
+				"event":  "server_connect_failed",
+				"server": name,
+				"error":  err.Error(),
+			})
+		}
 		conn.LastError = err
 		conn.Connected = false
 		registry.AddServer(name, conn)
@@ -580,6 +822,14 @@ func startServer(idx int, spec ServerSpec, cfg *config.Config) {
 	registry.AddServer(name, conn)
 
 	logger.Log("info", "[MCP] Successfully connected to server %s with %d tools", name, len(tools))
+	if cfg.MCPLogEnabled {
+		writeMCPLog(map[string]any{
+			"event":    "server_connected",
+			"server":   name,
+			"tool_cnt": len(tools),
+			"tools":    tools,
+		})
+	}
 	for _, tool := range toolInfos {
 		logger.Log("debug", "[MCP] Tool: %s - %s", tool.Name, tool.Description)
 	}
@@ -707,6 +957,14 @@ func Stop() {
 	}
 	started = false
 	logger.Log("info", "[MCP] All servers stopped")
+	if mcpLogEnabled && mcpLogFile != nil {
+		writeMCPLog(map[string]any{
+			"event": "stop",
+		})
+		_ = mcpLogFile.Close()
+		mcpLogFile = nil
+		mcpLogEnabled = false
+	}
 }
 
 // HealthCheck performs health checks on all MCP servers
@@ -741,8 +999,25 @@ func executeToolOnServer(conn *ServerConnection, toolName string, args map[strin
 	}
 
 	logger.Log("info", "[MCP] Executing tool %s on server %s with args: %v", toolName, conn.Spec.Name, args)
+	if mcpLogEnabled {
+		writeMCPLog(map[string]any{
+			"event":  "tool_call_start",
+			"server": conn.Spec.Name,
+			"tool":   toolName,
+			"args":   args,
+		})
+	}
 	res, err := conn.Session.CallTool(ctx, params)
 	if err != nil {
+		if mcpLogEnabled {
+			writeMCPLog(map[string]any{
+				"event":  "tool_call_failed",
+				"server": conn.Spec.Name,
+				"tool":   toolName,
+				"args":   args,
+				"error":  err.Error(),
+			})
+		}
 		return "", fmt.Errorf("tool call failed: %w", err)
 	}
 
@@ -771,6 +1046,17 @@ func executeToolOnServer(conn *ServerConnection, toolName string, args map[strin
 		// Pretty print structured content for better readability
 		if data, err := json.MarshalIndent(res.StructuredContent, "", "  "); err == nil {
 			logger.Log("info", "[MCP] Tool '%s' returned structured content (%d bytes)", toolName, len(data))
+			if mcpLogEnabled {
+				writeMCPLog(map[string]any{
+					"event":        "tool_call",
+					"server":       conn.Spec.Name,
+					"tool":         toolName,
+					"args":         args,
+					"content_type": "structured",
+					"bytes":        len(data),
+					"result":       string(data),
+				})
+			}
 			return string(data), nil
 		} else {
 			logger.Log("warn", "[MCP] Failed to marshal structured content for tool '%s': %v", toolName, err)
@@ -797,6 +1083,17 @@ func executeToolOnServer(conn *ServerConnection, toolName string, args map[strin
 
 	result := contentBuilder.String()
 	logger.Log("info", "[MCP] Tool '%s' returned %d text content item(s), total length: %d", toolName, textItemCount, len(result))
+	if mcpLogEnabled {
+		writeMCPLog(map[string]any{
+			"event":        "tool_call",
+			"server":       conn.Spec.Name,
+			"tool":         toolName,
+			"args":         args,
+			"content_type": "text",
+			"bytes":        len(result),
+			"result":       result,
+		})
+	}
 
 	return result, nil
 }

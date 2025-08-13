@@ -364,22 +364,25 @@ QuackOps is highly configurable through environment variables or command-line fl
 
 ### MCP Configuration (YAML)
 
-Create `~/.config/quackops/mcp.yaml`:
+Create `~/.quackops/mcp.json`:
 
-```yaml
-servers:
-  - name: sequential-thinking
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
-  # Example HTTP server:
-  - name: example-remote
-    url: https://api.example.com/mcp
-    auth:
-      type: bearer
-      token: ${MCP_TOKEN}
-```
+```json
+{
+  "mcpServers": {
+    "kubeview-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "https://github.com/mikhae1/kubeview-mcp"
+      ],
+      "env": {
+        "KUBECONFIG": "/Users/mikhae1/.kube/config"
+      }
+    }
+  }
+}```
 
-In MCP mode, QuackOps prefers MCP tools for `$ ...` and `kubectl ...` diagnostics, with optional strict mode to avoid local fallback. Tools can be restricted using `QU_ALLOWED_TOOLS`/`QU_DENIED_TOOLS`.
+In MCP mode, QuackOps prefers MCP tools for diagnostics, with optional strict mode to avoid local fallback. Tools can be restricted using `QU_ALLOWED_TOOLS`/`QU_DENIED_TOOLS`.
 
 ## 🛡️ Security Considerations
 
