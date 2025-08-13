@@ -314,11 +314,9 @@ func TestFilterCommand(t *testing.T) {
 			result := FilterCommand(tc.input)
 
 			if tc.skipExact {
-				// Skip exact matching for cases with variable output
-				// Just check that expected strings are or are not present
+				// Variable output: verify presence/absence only
 				if tc.name == "kubectl get secret with sensitive output" {
-					// This is the only test case where we expect the output to be the same as input
-					// We can't reliably test this with the current implementation
+					// Not reliably testable with current implementation
 					return
 				}
 			} else if tc.name == "Command with password in it" || tc.name == "Command with escaped quotes" {

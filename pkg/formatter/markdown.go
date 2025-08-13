@@ -73,8 +73,7 @@ func (f *MarkdownFormatter) ProcessChunk(chunk []byte) []byte {
 		// Inside a code block but not at the end marker
 		// Check if the chunk already has a newline
 		if !bytes.Contains(chunk, []byte("\n")) {
-			// This is a code block content chunk without delimiters or newlines
-			// We shouldn't automatically add a newline, as it might break code lines
+			// Code block chunk without delimiters/newlines; avoid auto-newline
 			f.buffer.Write(chunk)
 		} else {
 			// If it does have a newline, process normally
@@ -390,7 +389,7 @@ func NewStreamingWriter(outWriter io.Writer, options ...FormatterOption) *Stream
 
 // Write implements io.Writer interface for streaming processing
 func (w *StreamingWriter) Write(p []byte) (n int, err error) {
-	// We no longer need to trim suspected stderr fragments because spinner writes to stderr only.
+	// Spinner writes to stderr; no trimming required here
 
 	// Process the chunk
 	formatted := w.formatter.ProcessChunk(p)
@@ -410,13 +409,13 @@ func (w *StreamingWriter) Write(p []byte) (n int, err error) {
 		w.lineStart = false
 	}
 
-	// Return the original length to indicate we processed all bytes
+	// Report processed byte count
 	return len(p), nil
 }
 
 // Flush flushes any remaining content
 func (w *StreamingWriter) Flush() error {
-	// Process any remaining content in the buffer
+	// Process remaining buffered content
 	formatted := w.formatter.Flush()
 
 	// If we have formatted output, write it

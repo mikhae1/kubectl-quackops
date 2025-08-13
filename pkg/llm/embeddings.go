@@ -122,7 +122,7 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 				logger.Log("warn", "Failed to create Google AI client: %v", err)
 			} else {
 				logger.Log("info", "Using Google AI embedding model: %s", embeddingModel)
-				// Create and return our custom Google embedder
+				// Return custom Google embedder
 				return &GoogleEmbedder{
 					client: googleClient,
 					model:  embeddingModel,
@@ -226,8 +226,7 @@ type simpleEmbedder struct{}
 func (s *simpleEmbedder) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
 	embeddings := make([][]float32, len(texts))
 	for i, text := range texts {
-		// Create a simple embedding based on word frequencies
-		// This is a very basic approach but works as a fallback
+		// Simple frequency-based fallback embedding
 		embeddings[i] = createSimpleEmbedding(text)
 	}
 	return embeddings, nil
@@ -238,11 +237,9 @@ func (s *simpleEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32
 	return createSimpleEmbedding(text), nil
 }
 
-// createSimpleEmbedding creates a basic embedding based on word frequencies
-// This is a very simplified approach that creates a 300-dimension vector
-// based on character and word frequencies
+// createSimpleEmbedding: 300-dim frequency-based vector (fallback)
 func createSimpleEmbedding(text string) []float32 {
-	// Create a 300-dimension embedding (common size for word embeddings)
+	// 300 dimensions
 	embedding := make([]float32, 300)
 
 	// Normalize and tokenize text
@@ -255,10 +252,9 @@ func createSimpleEmbedding(text string) []float32 {
 		wordFreq[word]++
 	}
 
-	// Generate simple embedding based on word hashing
-	// This is not semantically meaningful but provides a consistent vector
+	// Hash-based projection; not semantically meaningful, but consistent
 	for word, freq := range wordFreq {
-		// Create a simple hash of the word
+		// Simple hash of the word
 		var hash uint32
 		for i, char := range word {
 			hash += uint32(char) * uint32(i+1)

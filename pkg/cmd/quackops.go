@@ -106,7 +106,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 func printEnvVarsHelp() {
 	envVars := config.GetEnvVarsInfo()
 
-	// Setup colors for better readability
+	// Colors for readability
 	titleColor := color.New(color.FgHiYellow, color.Bold)
 	keyColor := color.New(color.FgHiCyan, color.Bold)
 	typeColor := color.New(color.FgHiMagenta)
@@ -117,14 +117,14 @@ func printEnvVarsHelp() {
 	titleColor.Println("ENVIRONMENT VARIABLES:")
 	fmt.Println()
 
-	// Get the keys and sort them for consistent output
+	// Sort keys for consistent output
 	keys := make([]string, 0, len(envVars))
 	for k := range envVars {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	// Track which environment variables are currently set
+	// Track currently set environment variables
 	var setVars []string
 
 	// Print each environment variable
@@ -135,7 +135,7 @@ func printEnvVarsHelp() {
 		typeColor.Printf("    Type: %s\n", info.Type)
 		defaultColor.Printf("    Default: %v\n", info.DefaultValue)
 
-		// Check if the environment variable is set
+		// If environment variable is set, show it
 		if val, exists := os.LookupEnv(key); exists {
 			currentColor.Printf("    Current: %s\n", val)
 			setVars = append(setVars, key)
@@ -146,7 +146,7 @@ func printEnvVarsHelp() {
 
 	fmt.Println("These environment variables can be set before running the command or passed as arguments with the format KEY=VALUE.")
 
-	// Display summary of currently set environment variables
+	// Summary of currently set environment variables
 	if len(setVars) > 0 {
 		fmt.Println()
 		titleColor.Println("CURRENTLY SET ENVIRONMENT VARIABLES:")
@@ -206,7 +206,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 	}
 
 	var rl *readline.Instance
-	// Use FuncFilterInputRune to capture ESC and $ for edit mode toggling
+	// Capture ESC and $ for edit mode toggle
 	rlConfig.FuncFilterInputRune = func(r rune) (rune, bool) {
 		// Toggle edit mode with $ key press
 		if r == '$' {
@@ -214,7 +214,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 			if rl != nil {
 				if cfg.EditMode {
 					rl.SetPrompt(lib.FormatEditPromptWith(cfg))
-					// Reset edit-mode history cursor to the end on entry
+					// Reset edit-mode history cursor on entry
 					cfg.EditModeHistoryIndex = len(cfg.EditModeHistory)
 				} else {
 					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
@@ -239,9 +239,9 @@ func startChatSession(cfg *config.Config, args []string) error {
 		return r, true
 	}
 
-	// Add listener; avoid recomputing prompt on every keystroke to prevent latency
+	// Avoid recomputing prompt on every keystroke to prevent latency
 	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
-		// Intercept history navigation in edit mode to show only successfully executed commands without `$` prefix
+		// Intercept history navigation in edit mode to show successful commands without `$` prefix
 		if cfg.EditMode {
 			// Up/down arrows
 			if key == readline.CharPrev || key == readline.CharNext {
@@ -260,19 +260,19 @@ func startChatSession(cfg *config.Config, args []string) error {
 					}
 				}
 
-				// Determine the replacement line
+				// Determine replacement line
 				var replacement string
 				if cfg.EditModeHistoryIndex >= 0 && cfg.EditModeHistoryIndex < len(cfg.EditModeHistory) {
 					replacement = cfg.EditModeHistory[cfg.EditModeHistoryIndex]
 				} else {
-					// When past the newest entry, show empty line
+					// Past newest entry: show empty line
 					replacement = ""
 				}
 				// Replace current buffer with replacement
 				return []rune(replacement), len([]rune(replacement)), true
 			}
 		}
-		// Backup ESC handling if it reaches listener
+		// Backup ESC handling
 		if cfg.EditMode && key == readline.CharEsc {
 			cfg.EditMode = false
 			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
@@ -280,7 +280,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 			return line, pos, true
 		}
 
-		// Only update prompt on ENTER or INTERRUPT; other keys are ignored to keep input responsive
+		// Update prompt on ENTER or INTERRUPT only
 		if key == readline.CharEnter || key == readline.CharInterrupt {
 			if cfg.EditMode {
 				rl.SetPrompt(lib.FormatEditPromptWith(cfg))

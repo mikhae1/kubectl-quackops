@@ -174,8 +174,7 @@ func PatternSanitizer(input string) string {
 	return result
 }
 
-// FilterCommand filters sensitive information from kubectl commands
-// This is used to sanitize commands before logging or displaying them
+// FilterCommand filters sensitive information from kubectl commands.
 func FilterCommand(command string) string {
 	if command == "" {
 		return command

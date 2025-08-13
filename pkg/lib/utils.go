@@ -20,11 +20,9 @@ func CosineSimilarity(a, b []float32) float64 {
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
-// CosineSimilarity computes row‑wise cosine similarity between two equal‑shaped matrices X and Y.
+// CosineSimilarityMatrix computes row‑wise cosine similarity between two equal‑shaped matrices X and Y.
 // Each of X and Y must be a slice of the same number of float32 slices, each of equal length.
-// Returns a slice of length len(X) where each element is
-//
-//	dot(X[i],Y[i]) / (‖X[i]‖ · ‖Y[i]‖).
+// Returns element i: dot(X[i],Y[i]) / (‖X[i]‖ · ‖Y[i]‖).
 func CosineSimilarityMatrix(X, Y [][]float32) ([]float32, error) {
 	n := len(X)
 	if n != len(Y) {

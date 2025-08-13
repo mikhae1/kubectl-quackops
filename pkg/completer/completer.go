@@ -50,8 +50,7 @@ func (c *shellAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, length 
 		}
 	}
 
-	// Remove the command prefix for completion processing when present
-	// In edit mode, commands are typed without a prefix
+	// Remove the command prefix when present; in edit mode the prefix is omitted
 	if !c.Cfg.EditMode {
 		prefix := c.Cfg.CommandPrefix
 		if strings.TrimSpace(prefix) == "" {
@@ -61,26 +60,26 @@ func (c *shellAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, length 
 	}
 	lineStr = strings.TrimLeft(lineStr, " ")
 
-	// If the line is empty after the $, complete with common commands
+	// If empty after prefix, suggest common commands
 	if strings.TrimSpace(lineStr) == "" {
 		return c.CompleteFirst(lineStr)
 	}
 
-	// Parse the command line, respecting quotes
+	// Parse respecting quotes
 	words := ParseCommandLine(lineStr)
 	if len(words) == 0 {
 		return [][]rune{}, 0
 	}
 
-	// Get the word being completed (which might be empty if we're at a space)
+	// Word being completed (may be empty)
 	incomplete := ""
 
-	// If the line ends with a space, we're completing a new word
+	// If line ends with a space, completing a new word
 	if len(lineStr) > 0 && lineStr[len(lineStr)-1] == ' ' {
 		words = append(words, "")
 		incomplete = ""
 	} else {
-		// Otherwise, we're completing the last word
+		// Otherwise, complete the last word
 		if len(words) > 0 {
 			incomplete = words[len(words)-1]
 			words = words[:len(words)-1]
@@ -111,11 +110,11 @@ func (c *shellAutoCompleter) CompleteFirst(prefix string) ([][]rune, int) {
 	// Prevent command injection by sanitizing the prefix
 	sanitizedPrefix := sanitizeInput(prefix)
 	if sanitizedPrefix != prefix {
-		// If sanitization changed the string, it contained unsafe chars
+		// Reject if sanitization changed string
 		return [][]rune{}, 0
 	}
 
-	// Get command completions from bash
+	// Query bash for command completions
 	command := fmt.Sprintf("compgen -c %s", sanitizedPrefix)
 	output, err := execCommand("bash", "-c", command).Output()
 	if err != nil {
@@ -235,7 +234,7 @@ func (c *shellAutoCompleter) parseCompletionOutput(output string, lastWord strin
 			if len(parts) > 1 {
 				// Check if the second part starts with a number
 				if _, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
-					// This is a special directive line, skip it
+					// Skip special directive line
 					continue
 				}
 			}
@@ -295,17 +294,17 @@ func (c *shellAutoCompleter) CompleteShell(lastWord string) ([][]rune, int) {
 		lastWord = "./"
 	}
 
-	// Escape the lastWord safely for shell command execution
+	// Escape lastWord for shell
 	escapedLastWord := escapePathForShell(lastWord)
 
-	// Use compgen -f to get file completions
+	// Use compgen -f for file completions
 	command := fmt.Sprintf("compgen -f -- %s", escapedLastWord)
 	output, err := execCommand("bash", "-c", command).Output()
 	if err != nil {
 		return [][]rune{}, 0
 	}
 
-	// Extract the directory part to properly handle relative paths
+	// Extract directory part for relative paths
 	dirPrefix := ""
 	if lastIndex := strings.LastIndex(lastWord, "/"); lastIndex != -1 {
 		dirPrefix = lastWord[:lastIndex+1]
@@ -332,7 +331,7 @@ func (c *shellAutoCompleter) processFileCompletions(output string, lastWord stri
 		// Get full path if needed
 		fullPath := line
 		if dirPrefix != "" && !strings.HasPrefix(line, "/") {
-			// This is a relative path result, so prepend the directory
+			// Prepend directory for relative paths
 			fullPath = dirPrefix + line
 		}
 
@@ -343,7 +342,7 @@ func (c *shellAutoCompleter) processFileCompletions(output string, lastWord stri
 			isDir = true
 		}
 
-		// Only return the part that should be added after the lastWord
+		// Only return the part to add after lastWord
 		suffix := ""
 		baseFilename := line
 		if lastSlash := strings.LastIndex(line, "/"); lastSlash != -1 {
@@ -352,12 +351,12 @@ func (c *shellAutoCompleter) processFileCompletions(output string, lastWord stri
 
 		pathToCompare := strings.TrimPrefix(lastWord, dirPrefix)
 		if strings.HasPrefix(baseFilename, pathToCompare) {
-			// For directories, add a trailing slash
+			// For directories, add trailing slash
 			if isDir {
 				suffix = "/"
 			}
 
-			// Return only the part to be completed
+			// Return only the completion suffix
 			toAppend := line[len(pathToCompare):] + suffix
 			if toAppend != "" {
 				completions = append(completions, []rune(toAppend))

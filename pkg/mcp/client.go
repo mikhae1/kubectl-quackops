@@ -242,7 +242,7 @@ func (r *ServerRegistry) HealthCheckAll() {
 
 // healthCheckServer performs a health check on a single server
 func (r *ServerRegistry) healthCheckServer(name string, conn *ServerConnection) {
-	// Skip if health check was done recently (within last 30 seconds)
+	// Rate-limit health checks (~30s)
 	if time.Since(conn.LastHealthCheck) < 30*time.Second {
 		return
 	}
@@ -271,7 +271,7 @@ func (r *ServerRegistry) healthCheckServer(name string, conn *ServerConnection) 
 		logger.Log("info", "[MCP] Health check passed for server %s", name)
 		conn.LastError = nil
 		if !conn.Connected {
-			// Server recovered, re-add tools
+			// Server recovered; re-add tools
 			conn.Connected = true
 			for _, tool := range conn.Tools {
 				r.toolToServer[tool] = conn

@@ -65,7 +65,7 @@ func getEncoder(encoding string) *tiktoken.Tiktoken {
 }
 
 // charPerTokenHeuristic returns approximate characters-per-token by provider/model family.
-// This is used to improve estimates when the encoding library under/over-estimates for non-OpenAI models.
+// Rationale: improves estimates where encoding libs mis-estimate for non-OpenAI models.
 func charPerTokenHeuristic(provider string, model string) float64 {
 	p := strings.ToLower(provider)
 	m := strings.ToLower(model)
@@ -216,11 +216,7 @@ func EstimateExpectedIncomingTokens(cfg *config.Config, outgoing int) int {
 	return predicted
 }
 
-// EffectiveMaxTokens returns the effective maximum input token window for the
-// current provider/model, falling back to cfg.MaxTokens when unknown.
-// For Google Gemini models, we align to commonly published context sizes.
-// This is used for display and budgeting heuristics only and does not change
-// provider API limits.
+// EffectiveMaxTokens returns a display/budgeting token window; does not alter provider API limits.
 func EffectiveMaxTokens(cfg *config.Config) int {
 	if cfg == nil {
 		return 0

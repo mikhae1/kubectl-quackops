@@ -11,8 +11,7 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 )
 
-// ExecShellCommand executes a shell command with context and timeout
-// Returns the combined output and any error encountered
+// ExecShellCommand executes a shell command with context and timeout.
 func ExecShellCommand(cfg *config.Config, command string) (string, error) {
 	// Use the provided timeout for the command execution
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Timeout)*time.Second)

@@ -54,7 +54,7 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 		return []config.CmdRes{}, nil
 	}
 
-	// Initialize tracking variables
+	// Track start time and preallocate results
 	startTime := time.Now()
 	results := make([]config.CmdRes, len(commands))
 
@@ -65,7 +65,7 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 	// Status channel to collect execution updates
 	statusChan := make(chan cmdStatus, len(commands))
 
-	// Initialize spinner
+	// Spinner for progress feedback
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Suffix = fmt.Sprintf(" Executing %d commands...", len(commands))
 	s.Color("cyan", "bold")
@@ -319,7 +319,7 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 	command = strings.TrimSpace(command)
 	result.Cmd = command
 
-	// Return early if the command is empty
+	// Reject empty commands
 	if command == "" {
 		result.Err = fmt.Errorf("empty command provided")
 		result.Out = "No command provided"
@@ -370,10 +370,10 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 
 	logger.Log("info", "Executing command with %d second timeout: %s", cfg.Timeout, command)
 
-	// Create a new command with process group setup
+	// Create command with process group setup
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 
-	// Create a new process group on Unix systems
+	// New process group on Unix systems
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Setup separate goroutine to enforce timeout

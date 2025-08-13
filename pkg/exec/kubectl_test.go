@@ -54,41 +54,26 @@ func TestPrintExecutionSummary(t *testing.T) {
 
 	commands := []string{"cmd1", "cmd2", "cmd3", "cmd4", "cmd5"}
 
-	// The test ensures the function runs without panicking and shows the proper format
-	// In a real scenario, we'd capture stdout and verify the exact output
-	//
-	// Expected output format with these parameters:
-	// ✓ Executing 5 command(s): 2/5 completed in 0ms (1 failed, 2 skipped)
-	//
-	// Where:
-	// - 5 is the total command count (len(commands))
-	// - 2 is the success count (completedCount - failedCount)
-	// - 1 is the failed count
-	// - 2 is the skipped count
+	// Smoke test for printExecutionSummary
 	printExecutionSummary(commands, statusData, time.Now())
 }
 
 func TestMonitorCommandStatus(t *testing.T) {
-	// Create a mock spinner
 	cfg := &config.Config{SpinnerTimeout: 100}
 	s := initSpinner(cfg, 5)
 	defer s.Stop()
 
-	// Create status channel
 	statusChan := make(chan cmdStatus, 5)
 	defer close(statusChan)
 
-	// Start monitoring
 	data := monitorCommandStatus(statusChan, s, 5)
 
-	// Send test statuses
 	statusChan <- cmdStatus{0, true, nil, false} // Completed successfully
 	statusChan <- cmdStatus{1, true, nil, true}  // Skipped
 	statusChan <- cmdStatus{2, true, nil, true}  // Skipped
 	statusChan <- cmdStatus{3, true, nil, false} // Completed successfully
 	statusChan <- cmdStatus{4, true, nil, false} // Completed successfully
 
-	// Process the status data manually for testing
 	for i := 0; i < 5; i++ {
 		status := <-statusChan
 		if status.done {
@@ -104,7 +89,6 @@ func TestMonitorCommandStatus(t *testing.T) {
 		}
 	}
 
-	// Verify counts
 	if data.completedCount != 3 {
 		t.Errorf("Expected 3 completed commands, got %d", data.completedCount)
 	}
@@ -119,17 +103,14 @@ func TestMonitorCommandStatus(t *testing.T) {
 }
 
 func TestShellCommandsSkippedInSafeMode(t *testing.T) {
-	// Create a mock spinner
 	cfg := &config.Config{SpinnerTimeout: 100, SafeMode: true}
 	s := initSpinner(cfg, 4)
 	defer s.Stop()
 
-	// Create status channel and setup tracking
 	statusChan := make(chan cmdStatus, 4)
 	defer close(statusChan)
 	data := monitorCommandStatus(statusChan, s, 4)
 
-	// Setup for mock execution
 	commands := []string{
 		"kubectl get pods",
 		"$echo 'Shell command'",
@@ -138,12 +119,9 @@ func TestShellCommandsSkippedInSafeMode(t *testing.T) {
 	}
 	results := make([]config.CmdRes, len(commands))
 
-	// Mock the promptForCommandConfirmation function behavior
-	// This simulates all kubectl commands being skipped by user
-	// and $ commands being automatically skipped in safe mode
+	// Simulate user declines kubectl; safe mode auto-skips $ commands
 	for i, cmd := range commands {
 		if strings.HasPrefix(cmd, cfg.CommandPrefix) {
-			// For $ commands, they should be automatically marked as skipped
 			result := config.CmdRes{
 				Cmd: cmd,
 				Out: "Skipped shell command in safe mode",
@@ -151,12 +129,10 @@ func TestShellCommandsSkippedInSafeMode(t *testing.T) {
 			results[i] = result
 			statusChan <- cmdStatus{i, true, nil, true}
 		} else {
-			// For kubectl commands, simulate user saying "no"
 			statusChan <- cmdStatus{i, true, nil, true}
 		}
 	}
 
-	// Process the statuses manually for testing
 	for i := 0; i < 4; i++ {
 		status := <-statusChan
 		if status.done {
@@ -172,7 +148,6 @@ func TestShellCommandsSkippedInSafeMode(t *testing.T) {
 		}
 	}
 
-	// Verify all commands are counted as skipped
 	if data.skippedCount != 4 {
 		t.Errorf("Expected 4 skipped commands, got %d", data.skippedCount)
 	}

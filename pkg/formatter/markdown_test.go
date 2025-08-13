@@ -61,7 +61,7 @@ func TestMarkdownFormatter_ProcessChunk(t *testing.T) {
 				}
 			}
 
-			// Flush any remaining content
+			// Flush remaining content
 			flush := f.Flush()
 			if flush != nil {
 				output.Write(flush)
@@ -162,8 +162,7 @@ func TestFormattedMarkdown(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// This test just ensures formatting doesn't crash
-			// Visual verification needs to be done manually
+			// Crash-only test; visual verification is manual
 			f := NewMarkdownFormatter()
 			formatted := f.ProcessChunk([]byte(tc.markdown))
 			if formatted == nil {
@@ -174,7 +173,7 @@ func TestFormattedMarkdown(t *testing.T) {
 }
 
 func TestCodeBlockMarkerRegex(t *testing.T) {
-	// Define the regex pattern directly in the test (not using the one from markdown.go)
+	// Use the regex from markdown.go
 	regex := codeBlockMarkerRegex
 
 	testCases := []struct {

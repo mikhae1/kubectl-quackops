@@ -45,7 +45,7 @@ func anthropicRequestWithChat(cfg *config.Config, prompt string, stream bool, hi
 
 // ollamaRequestWithChat sends a request to Ollama
 func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
-	// Make sure the API URL is properly formatted - it should not end with /api
+	// Ensure API URL does not end with /api
 	serverURL := strings.TrimSuffix(cfg.ApiURL, "/api")
 
 	// Create Ollama client
@@ -62,7 +62,7 @@ func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool, histo
 
 // googleRequestWithChat sends a request to Google AI
 func googleRequestWithChat(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
-	// Prefer custom client that builds genai schemas with Items for arrays.
+	// Prefer custom client that builds genai schemas with Items for arrays
 	ctx := context.Background()
 	apiKey := os.Getenv("GOOGLE_API_KEY")
 	if apiKey != "" {

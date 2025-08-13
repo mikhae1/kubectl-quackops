@@ -116,8 +116,7 @@ func (tw *TypewriterWriter) Write(p []byte) (n int, err error) {
 	tw.charBuffer = append(tw.charBuffer, p...)
 	tw.bufferMutex.Unlock()
 
-	// Signal content availability only if buffer was empty before
-	// This prevents excessive signals when buffer already has content
+	// Signal only when buffer was empty to avoid redundant notifications
 	if wasEmpty {
 		select {
 		case tw.contentAvailable <- struct{}{}:
@@ -127,7 +126,7 @@ func (tw *TypewriterWriter) Write(p []byte) (n int, err error) {
 		}
 	}
 
-	// Return the number of bytes processed
+	// Return processed byte count
 	return len(p), nil
 }
 
@@ -155,8 +154,7 @@ func (tw *TypewriterWriter) animateOutput() {
 	}
 }
 
-// processCharBatch outputs a batch of characters from the buffer
-// Returns true if characters were processed, false if buffer was empty
+// processCharBatch outputs a batch of characters; returns false if buffer was empty
 func (tw *TypewriterWriter) processCharBatch() bool {
 	tw.bufferMutex.Lock()
 
@@ -172,8 +170,7 @@ func (tw *TypewriterWriter) processCharBatch() bool {
 		batchSize = len(tw.charBuffer)
 	}
 
-	// Special handling for newline characters
-	// If the batch contains a newline, we'll process up to and including the newline
+	// If batch contains a newline, process up to and including the newline
 	nlIndex := bytes.IndexByte(tw.charBuffer[:batchSize], '\n')
 	if nlIndex >= 0 {
 		// Include the newline in the current batch
@@ -182,7 +179,7 @@ func (tw *TypewriterWriter) processCharBatch() bool {
 
 	// Extract the batch
 	batch := tw.charBuffer[:batchSize]
-	// Create a copy to avoid buffer reuse issues
+	// Copy to avoid buffer reuse issues
 	batchCopy := make([]byte, batchSize)
 	copy(batchCopy, batch)
 	tw.charBuffer = tw.charBuffer[batchSize:]

@@ -8,10 +8,10 @@ import (
 )
 
 func TestInitLoggers(t *testing.T) {
-	// Create a buffer to capture log output
+	// Capture log output
 	var buf bytes.Buffer
 
-	// Initialize loggers with our buffer
+	// Initialize loggers with buffer
 	InitLoggers(&buf, 0)
 
 	// Verify that all expected loggers are created
@@ -51,10 +51,10 @@ func TestLog(t *testing.T) {
 		DEBUG = originalDebug == "true" || originalDebug == "1"
 	}()
 
-	// Create a buffer to capture log output
+	// Capture log output
 	var buf bytes.Buffer
 
-	// Initialize loggers with our buffer
+	// Initialize loggers with buffer
 	InitLoggers(&buf, 0)
 
 	// Test logging with various levels
@@ -82,7 +82,7 @@ func TestLog(t *testing.T) {
 			// Call the Log function
 			Log(tc.level, tc.format, tc.args...)
 
-			// Get the log output
+			// Get log output
 			output := buf.String()
 
 			// Verify the output contains the expected string
@@ -107,7 +107,7 @@ func TestDebugFlag(t *testing.T) {
 		DEBUG = originalDebug == "true" || originalDebug == "1"
 	}()
 
-	// Create a buffer to capture log output
+	// Capture log output
 	var buf bytes.Buffer
 
 	// Test with DEBUG disabled
@@ -158,7 +158,7 @@ func TestLogWriter(t *testing.T) {
 		logger: LoggerMap["info"], // Use the initialized logger
 		prefix: "TEST: ",
 		color: func(a ...interface{}) string {
-			// Return the input without color for testing
+			// Return input without color for testing
 			if len(a) == 0 {
 				return ""
 			}
@@ -166,7 +166,7 @@ func TestLogWriter(t *testing.T) {
 		},
 	}
 
-	// Test writing a multi-line message
+	// Write multi-line message
 	message := "Line 1\nLine 2\nLine 3"
 	n, err := writer.Write([]byte(message))
 
