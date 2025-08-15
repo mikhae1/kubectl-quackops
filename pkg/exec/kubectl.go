@@ -198,6 +198,12 @@ func executeCommandsSequentially(
 
 		// Print command result
 		printCommandResult(command, results[i].Err, cmdDuration, firstCommandCompleted, firstCommandCompletedMutex)
+		
+		// Render diagnostic result if not in verbose mode and not a shell command
+		if !cfg.Verbose && !strings.HasPrefix(strings.TrimSpace(command), cfg.CommandPrefix) {
+			renderDiagnosticResult(cfg, command, results[i].Out, results[i].Err)
+		}
+		
 		if results[i].Err != nil {
 			logger.Log("warn", "Command failed: %s", command)
 		}
@@ -423,6 +429,12 @@ func executeCommandsParallel(
 
 			// Print command result
 			printCommandResult(cmd, results[idx].Err, cmdDuration, firstCommandCompleted, firstCommandCompletedMutex)
+			
+			// Render diagnostic result if not in verbose mode and not a shell command
+			if !cfg.Verbose && !strings.HasPrefix(strings.TrimSpace(cmd), cfg.CommandPrefix) {
+				renderDiagnosticResult(cfg, cmd, results[idx].Out, results[idx].Err)
+			}
+			
 			if results[idx].Err != nil {
 				logger.Log("warn", "Command failed: %s", cmd)
 			}
@@ -432,7 +444,7 @@ func executeCommandsParallel(
 	wg.Wait()
 }
 
-// printCommandResult formats and prints the result of a command execution
+// printCommandResult formats and prints the result of a command execution with enhanced styling
 func printCommandResult(
 	command string,
 	cmdErr error,
@@ -440,10 +452,10 @@ func printCommandResult(
 	firstCommandCompleted *bool,
 	firstCommandCompletedMutex *sync.Mutex,
 ) {
-	checkmark := color.GreenString("✓")
-	cmdLabel := color.HiWhiteString("running:")
+	checkmark := config.Colors.Ok.Sprint("✓")
+	cmdLabel := config.Colors.Info.Sprint("running:")
 	if cmdErr != nil {
-		checkmark = color.RedString("✗")
+		checkmark = config.Colors.Error.Sprint("✗")
 	}
 
 	firstCommandCompletedMutex.Lock()
@@ -460,11 +472,75 @@ func printCommandResult(
 	fmt.Printf("%s %s %s %s\n",
 		checkmark,
 		cmdLabel,
-		color.CyanString(command),
-		color.HiBlackString("in %s", lib.FormatDuration(cmdDuration.Milliseconds())))
+		config.Colors.Accent.Sprint(command),
+		config.Colors.Dim.Sprintf("in %s", lib.FormatDuration(cmdDuration.Milliseconds())))
 }
 
-// printExecutionSummary displays the execution result summary
+// renderDiagnosticResult renders command output with enhanced formatting matching FormatToolCallBlock style
+func renderDiagnosticResult(cfg *config.Config, command string, output string, cmdErr error) {
+	if cfg.Verbose || output == "" {
+		return // Skip rendering in verbose mode or if no output
+	}
+
+	// Skip rendering for unhelpful results
+	if isUnhelpfulResult(output) {
+		return
+	}
+
+	block := formatDiagnosticBlock(cfg, command, output, cmdErr)
+	fmt.Print(block)
+	fmt.Println() // Add spacing after the block
+}
+
+// isUnhelpfulResult checks if the output contains common unhelpful messages
+func isUnhelpfulResult(output string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(output))
+	unhelpfulPatterns := []string{
+		"no resources found",
+		"no resources found in",
+		"no objects passed to",
+		"no such file or directory",
+		"connection refused",
+		"command not found",
+	}
+	
+	for _, pattern := range unhelpfulPatterns {
+		if strings.Contains(trimmed, pattern) {
+			return true
+		}
+	}
+	
+	// Also skip very short outputs (likely not useful)
+	if len(strings.TrimSpace(output)) < 20 {
+		return true
+	}
+	
+	return false
+}
+
+// formatDiagnosticBlock builds a colored block for diagnostic command output using shared lib functionality
+func formatDiagnosticBlock(cfg *config.Config, command string, output string, cmdErr error) string {
+	maxLineLen := cfg.ToolOutputMaxLineLen
+	maxLines := cfg.DiagnosticResultMaxLines
+	if maxLines <= 0 {
+		maxLines = 5 // fallback default
+	}
+
+	// Create render block using shared functionality
+	block := &lib.RenderBlock{
+		Title:      "Diagnostic: " + command,
+		MaxLineLen: maxLineLen,
+		MaxLines:   maxLines,
+		Sections: []lib.RenderSection{
+			{Label: "Output", Content: output},
+		},
+	}
+
+	return block.Format()
+}
+
+
+// printExecutionSummary displays the execution result summary with enhanced formatting
 func printExecutionSummary(commands []string, statusData *struct {
 	completedCount int
 	failedCount    int
@@ -477,27 +553,38 @@ func printExecutionSummary(commands []string, statusData *struct {
 	// Print summary with improved formatting
 	totalDuration := time.Since(startTime)
 	successCount := statusData.completedCount - statusData.failedCount
-
 	totalCommands := len(commands)
 
-	summaryColor := color.HiGreenString
+	// Choose color based on results
+	var summaryColor *color.Color
+	var checkmark string
 	if statusData.failedCount > 0 {
-		summaryColor = color.HiYellowString
+		summaryColor = config.Colors.Warn
+		checkmark = config.Colors.Warn.Sprint("✓")
+	} else {
+		summaryColor = config.Colors.Ok
+		checkmark = config.Colors.Ok.Sprint("✓")
 	}
 
+	// Build status info
 	skippedInfo := ""
 	if statusData.skippedCount > 0 {
-		skippedInfo = fmt.Sprintf(", %d skipped", statusData.skippedCount)
+		skippedInfo = fmt.Sprintf(" (%d skipped)", statusData.skippedCount)
+	}
+
+	failedInfo := ""
+	if statusData.failedCount > 0 {
+		failedInfo = fmt.Sprintf(" (%d failed)", statusData.failedCount)
 	}
 
 	fmt.Printf("%s %s %s\n",
-		color.GreenString("✓"),
-		color.HiWhiteString("Executing %d command(s):", totalCommands),
-		summaryColor("%d/%d completed in %s (%d failed%s)",
+		checkmark,
+		config.Colors.Info.Sprintf("Executing %d command(s):", totalCommands),
+		summaryColor.Sprintf("%d/%d completed in %s%s%s",
 			successCount,
 			totalCommands,
-			color.HiBlackString(lib.FormatDuration(totalDuration.Milliseconds())),
-			statusData.failedCount,
+			config.Colors.Dim.Sprint(lib.FormatDuration(totalDuration.Milliseconds())),
+			failedInfo,
 			skippedInfo))
 }
 

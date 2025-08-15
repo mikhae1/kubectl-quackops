@@ -100,8 +100,9 @@ type Config struct {
 	DeniedTools  []string
 
 	// Presentation
-	ToolOutputMaxLines   int
-	ToolOutputMaxLineLen int
+	ToolOutputMaxLines       int
+	ToolOutputMaxLineLen     int
+	DiagnosticResultMaxLines int
 
 	// LLM Request Throttling
 	ThrottleRequestsPerMinute int
@@ -217,13 +218,14 @@ func LoadConfig() *Config {
 		CommandPrefix:         getEnvArg("QU_COMMAND_PREFIX", "$").(string),
 		StoredUserCmdResults:  []CmdRes{},
 		// Diagnostics toggles
-		EnableBaseline:       getEnvArg("QU_ENABLE_BASELINE", true).(bool),
-		EventsWindowMinutes:  getEnvArg("QU_EVENTS_WINDOW_MINUTES", 60).(int),
-		EventsWarningsOnly:   getEnvArg("QU_EVENTS_WARN_ONLY", true).(bool),
-		LogsTail:             getEnvArg("QU_LOGS_TAIL", 200).(int),
-		LogsAllContainers:    getEnvArg("QU_LOGS_ALL_CONTAINERS", false).(bool),
-		ToolOutputMaxLines:   getEnvArg("QU_TOOL_OUTPUT_MAX_LINES", 40).(int),
-		ToolOutputMaxLineLen: getEnvArg("QU_TOOL_OUTPUT_MAX_LINE_LEN", 140).(int),
+		EnableBaseline:           getEnvArg("QU_ENABLE_BASELINE", true).(bool),
+		EventsWindowMinutes:      getEnvArg("QU_EVENTS_WINDOW_MINUTES", 60).(int),
+		EventsWarningsOnly:       getEnvArg("QU_EVENTS_WARN_ONLY", true).(bool),
+		LogsTail:                 getEnvArg("QU_LOGS_TAIL", 200).(int),
+		LogsAllContainers:        getEnvArg("QU_LOGS_ALL_CONTAINERS", false).(bool),
+		ToolOutputMaxLines:       getEnvArg("QU_TOOL_OUTPUT_MAX_LINES", 40).(int),
+		ToolOutputMaxLineLen:     getEnvArg("QU_TOOL_OUTPUT_MAX_LINE_LEN", 140).(int),
+		DiagnosticResultMaxLines: getEnvArg("QU_DIAGNOSTIC_RESULT_MAX_LINES", 10).(int),
 
 		// MCP client mode
 		MCPClientEnabled: getEnvArg("QU_MCP_CLIENT", true).(bool),
