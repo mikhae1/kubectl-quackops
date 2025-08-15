@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/tmc/langchaingo/llms"
@@ -101,6 +102,10 @@ type Config struct {
 	// Presentation
 	ToolOutputMaxLines   int
 	ToolOutputMaxLineLen int
+
+	// LLM Request Throttling
+	ThrottleRequestsPerMinute int
+	ThrottleDelayOverride     time.Duration
 }
 
 // UIColorRoles defines terminal color roles and gradient palette for consistent UI styling.
@@ -247,6 +252,10 @@ func LoadConfig() *Config {
 		// Tool policy
 		AllowedTools: getEnvArg("QU_ALLOWED_TOOLS", defaultAllowedTools).([]string),
 		DeniedTools:  getEnvArg("QU_DENIED_TOOLS", defaultDeniedTools).([]string),
+
+		// LLM Request Throttling
+		ThrottleRequestsPerMinute: getEnvArg("QU_THROTTLE_REQUESTS_PER_MINUTE", 60).(int),
+		ThrottleDelayOverride:     time.Duration(getEnvArg("QU_THROTTLE_DELAY_OVERRIDE_MS", 0).(int)) * time.Millisecond,
 
 		// Prompt templates
 		KubectlStartPrompt:       getEnvArg("QU_KUBECTL_SYSTEM_PROMPT", defaultKubectlStartPrompt).(string),

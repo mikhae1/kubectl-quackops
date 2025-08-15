@@ -159,6 +159,9 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 			s.Suffix = originalSuffix
 		}
 
+		// Apply throttling delay before making the request (including retries)
+		applyThrottleDelayWithSpinner(cfg, s)
+
 		if len(messages) == 0 {
 			messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, prompt))
 		}
@@ -236,6 +239,9 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 					}
 
 					toolCallCount++
+
+					// Apply throttling delay for MCP tool call follow-up requests
+					applyThrottleDelayWithSpinner(cfg, s)
 
 					resp, err = client.GenerateContent(context.Background(), messages, generateOptions...)
 					if err != nil {

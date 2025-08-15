@@ -36,10 +36,15 @@ var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, h
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
 	s.Color("green", "bold")
+	s.Start()
 
-	// Start spinner if not streaming (for streaming, we'll show the output directly)
-	if !stream {
-		s.Start()
+	// Apply throttling delay with the spinner (before making the request)
+	applyThrottleDelayWithSpinner(cfg, s)
+
+	// Stop spinner for streaming mode, keep it running for non-streaming
+	if stream {
+		s.Stop()
+	} else {
 		defer s.Stop()
 	}
 
