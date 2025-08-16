@@ -241,7 +241,7 @@ For users seeking the most advanced AI capabilities.
 
 3. **Start QuackOps:**
    ```sh
-   kubectl quackops -p openai -m gpt-4o -x 4096
+   kubectl quackops -p openai -m gpt-5-mini
    ```
 
 ### Google: Large Contexts
@@ -265,7 +265,7 @@ For users requiring extensive context analysis and handling large command output
 
 3. **Start QuackOps:**
    ```sh
-   kubectl quackops -p google -m gemini-2.0-flash-thinking-exp
+   kubectl quackops -p google -m gemini-2.5-flash --throttle-rpm 10
    ```
 
 ### Anthropic: Reliable Technical Analysis
@@ -323,42 +323,49 @@ QU_MCP_CLIENT=1
 | `OPENAI_API_KEY` | string |  | OpenAI API key (required for `openai` provider) |
 | `GOOGLE_API_KEY` | string |  | Google AI API key (required for `google` provider) |
 | `ANTHROPIC_API_KEY` | string |  | Anthropic API key (required for `anthropic` provider) |
-| `QU_COMMAND_PREFIX` | string | `$` | Single-character prefix to enter command mode and mark shell commands |
 | `QU_LLM_PROVIDER` | string | `ollama` | LLM model provider (`ollama`, `openai`, `google`, `anthropic`) |
-| `QU_LLM_MODEL` | string | provider-dependent | LLM model to use. Defaults: `llama3.1` (ollama), `gpt-4o-mini` (openai), `gemini-2.5-flash-preview-04-17` (google), `claude-3-5-sonnet-latest` (anthropic) |
+| `QU_LLM_MODEL` | string | provider-dependent | LLM model to use. Defaults: `lla3.1` (ollama), `gpt-5-mini` (openai), `gemini-2.5-flash-preview-04-17` (google), `claude-3-7-sonnet-latest` (anthropic) |
 | `QU_API_URL` | string | `http://localhost:11434` | LLM API base URL (used with `ollama`) |
 | `QU_SAFE_MODE` | bool | `false` | Require confirmation before executing commands |
-| `QU_KUBECTL_BINARY` | string | `kubectl` | Path to the kubectl binary |
 | `QU_RETRIES` | int | `3` | Number of retries for kubectl commands |
 | `QU_TIMEOUT` | int | `30` | Timeout for kubectl commands (seconds) |
 | `QU_MAX_TOKENS` | int | provider-dependent | Max tokens in LLM context window. Defaults: `4096` (ollama), `128000` (openai/google), `200000` (anthropic) |
 | `QU_TEMPERATURE` | float | `0.0` | Temperature for LLM generation |
 | `QU_ALLOWED_KUBECTL_CMDS` | []string | see `defaultAllowedKubectlCmds` | Comma-separated allowlist of kubectl command prefixes |
 | `QU_BLOCKED_KUBECTL_CMDS` | []string | see `defaultBlockedKubectlCmds` | Comma-separated denylist of kubectl command prefixes |
-| `QU_KUBECTL_BLOCKED_CMDS_EXTRA` | string |  | Extra comma-separated kubectl command prefixes to block |
 | `QU_DISABLE_MARKDOWN_FORMAT` | bool | `false` | Disable Markdown formatting and colorization |
 | `QU_DISABLE_ANIMATION` | bool | `false` | Disable typewriter animation effect |
 | `QU_MAX_COMPLETIONS` | int | `50` | Maximum number of completions to display |
 | `QU_HISTORY_FILE` | string | `~/.quackops/history` | Path to the history file |
 | `QU_DISABLE_HISTORY` | bool | `false` | Disable storing prompt history in a file |
-| `QU_EMBEDDING_MODEL` | string | provider-dependent | Embedding model. Defaults: `models/text-embedding-004` (google), `text-embedding-3-small` (openai), `nomic-embed-text` (anthropic); for `ollama`, see `QU_OLLAMA_EMBEDDING_MODELS` |
+| `QU_KUBECTL_BINARY` | string | `kubectl` | Path to the kubectl binary |
+| `QU_COMMAND_PREFIX` | string | `$` | Single-character prefix to enter command mode and mark shell commands |
+| `QU_ENABLE_BASELINE` | bool | `true` | Enable baseline diagnostic pack before LLM |
+| `QU_EVENTS_WINDOW_MINUTES` | int | `60` | Events time window in minutes for summarization |
+| `QU_EVENTS_WARN_ONLY` | bool | `true` | Include only Warning events in summaries |
+| `QU_LOGS_TAIL` | int | `200` | Tail lines for log aggregation when triggered by playbooks |
+| `QU_LOGS_ALL_CONTAINERS` | bool | `false` | Aggregate logs from all containers when collecting logs |
+| `QU_TOOL_OUTPUT_MAX_LINES` | int | `40` | Maximum number of lines to show in MCP tool output blocks |
+| `QU_TOOL_OUTPUT_MAX_LINE_LEN` | int | `140` | Maximum line length to show in MCP tool output blocks |
+| `QU_DIAGNOSTIC_RESULT_MAX_LINES` | int | `10` | Maximum lines for diagnostic result display |
+| `QU_MCP_CLIENT` | bool | `true` | Enable MCP client mode to use external MCP servers for tools |
+| `QU_MCP_TOOL_TIMEOUT` | int | `30` | Timeout for MCP tool calls (seconds) |
+| `QU_MCP_STRICT` | bool | `false` | Strict MCP mode: do not fall back to local execution when MCP fails |
+| `QU_MCP_MAX_TOOL_CALLS` | int | `10` | Maximum iterative MCP tool calls per model response |
+| `QU_MCP_LOG` | bool | `false` | Enable logging of MCP server stdio to a file |
+| `QU_MCP_LOG_FORMAT` | string | `jsonl` | MCP log format: jsonl (default), text, or yaml |
+| `QU_EMBEDDING_MODEL` | string | provider-dependent | Embedding model. Defaults: `models/text-embedding-004` (google), `text-embedding-3-small` (openai), `nomic-embed-text` (anthropic) |
 | `QU_OLLAMA_EMBEDDING_MODELS` | string | `nomic-embed-text,mxbai-embed-large,all-minilm-l6-v2` | Comma-separated list of Ollama embedding models |
+| `QU_ALLOWED_TOOLS` | []string | `*` | Comma-separated allowlist of tool names when invoking via MCP (`*` = allow all) |
+| `QU_DENIED_TOOLS` | []string |  | Comma-separated denylist of tool names when invoking via MCP |
+| `QU_THROTTLE_REQUESTS_PER_MINUTE` | int | `60` | Maximum number of LLM requests per minute |
+| `QU_THROTTLE_DELAY_OVERRIDE_MS` | int | `0` | Override throttle delay in milliseconds |
 | `QU_KUBECTL_SYSTEM_PROMPT` | string | see `defaultKubectlStartPrompt` | Start prompt for kubectl command generation |
 | `QU_KUBECTL_SHORT_PROMPT` | string | code default | Short prompt for kubectl command generation |
-| `QU_KUBECTL_SHORT_PROMPT_2` | string | code default | Secondary short prompt for kubectl command generation |
 | `QU_KUBECTL_FORMAT_PROMPT` | string | see `defaultKubectlFormatPrompt` | Format prompt for kubectl command generation |
 | `QU_DIAGNOSTIC_ANALYSIS_PROMPT` | string | see `defaultDiagnosticAnalysisPrompt` | Prompt for diagnostic analysis |
 | `QU_MARKDOWN_FORMAT_PROMPT` | string | "Format your response using Markdown, including headings, lists, and code blocks for improved readability in a terminal environment." | Markdown formatting guidance |
 | `QU_PLAIN_FORMAT_PROMPT` | string | "Provide a clear, concise analysis that is easy to read in a terminal environment." | Plain text formatting guidance |
-| `QU_MCP_CLIENT` | bool | `true` | Enable MCP client mode to use external MCP servers for tools |
-| `QU_MCP_CONFIG` | string | `~/.config/quackops/mcp.yaml` | Path to MCP client configuration file |
-| `QU_MCP_TOOL_TIMEOUT` | int | `30` | Timeout for MCP tool calls (seconds) |
-| `QU_MCP_MAX_TOOL_CALLS` | int | `10` | Maximum iterative MCP tool calls per model response |
-| `QU_MCP_STRICT` | bool | `false` | Strict MCP mode: do not fall back to local execution when MCP fails |
-| `QU_ALLOWED_TOOLS` | []string | `*` | Comma-separated allowlist of tool names when invoking via MCP (`*` = allow all) |
-| `QU_DENIED_TOOLS` | []string |  | Comma-separated denylist of tool names when invoking via MCP |
-| `QU_TOOL_OUTPUT_MAX_LINES` | int | `40` | Maximum number of lines to show in MCP tool output blocks |
-| `QU_TOOL_OUTPUT_MAX_LINE_LEN` | int | `140` | Maximum line length to show in MCP tool output blocks |
 
 ### Command-Line Flags
 
@@ -377,7 +384,8 @@ QU_MCP_CLIENT=1
 | `-a, --disable-animation` | Disable typewriter animation effect for LLM outputs | `false` |
 | `--disable-history` | Disable storing prompt history in a file | `false` |
 | `--history-file` | Path to the history file | `~/.quackops/history` |
-| `--mcp-client` | Enable MCP client mode | `false` |
+| `--throttle-rpm` | Maximum number of LLM requests per minute | `60` |
+| `--mcp-client` | Enable MCP client mode | `true` |
 | `--mcp-config` | Path to MCP client YAML | `~/.config/quackops/mcp.yaml` |
 | `--mcp-tool-timeout` | Timeout for MCP tools (seconds) | `30` |
 | `--mcp-strict` | Strict MCP mode (no fallback) | `false` |
@@ -403,6 +411,8 @@ Create `~/.quackops/mcp.json`:
 }```
 
 In MCP mode, QuackOps prefers MCP tools for diagnostics, with optional strict mode to avoid local fallback. Tools can be restricted using `QU_ALLOWED_TOOLS`/`QU_DENIED_TOOLS`.
+
+**Currently in experimental mode: tested with Google Gemini only**.
 
 ## 🛡️ Security Considerations
 

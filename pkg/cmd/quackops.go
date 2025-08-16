@@ -68,6 +68,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().BoolVarP(&cfg.EventsWarningsOnly, "events-warn-only", "", cfg.EventsWarningsOnly, "Include only Warning events in summaries")
 	cmd.Flags().IntVarP(&cfg.LogsTail, "logs-tail", "", cfg.LogsTail, "Tail lines for log aggregation when triggered by playbooks")
 	cmd.Flags().BoolVarP(&cfg.LogsAllContainers, "logs-all-containers", "", cfg.LogsAllContainers, "Aggregate logs from all containers when collecting logs")
+	cmd.Flags().IntVarP(&cfg.ThrottleRequestsPerMinute, "throttle-rpm", "", cfg.ThrottleRequestsPerMinute, "Maximum number of LLM requests per minute")
 	cmd.Flags().BoolVarP(&showEnv, "show-env", "", false, "Show information about environment variables used by the application")
 
 	// Add env subcommand

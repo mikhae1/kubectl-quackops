@@ -56,8 +56,23 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 	generateOptions := []llms.CallOption{}
 
-	if cfg.Temperature > 0 {
+	// Check if model supports custom temperature values
+	supportsCustomTemperature := true
+	if cfg.Provider == "openai" || cfg.Provider == "deepseek" {
+		// Some OpenAI models don't support custom temperature (only default value of 1.0)
+		if strings.Contains(cfg.Model, "gpt-5") {
+			supportsCustomTemperature = false
+		}
+	}
+
+	// Handle temperature based on model support
+	if supportsCustomTemperature {
 		generateOptions = append(generateOptions, llms.WithTemperature(cfg.Temperature))
+		logger.Log("info", "Setting temperature to %f for model %s/%s", cfg.Temperature, cfg.Provider, cfg.Model)
+	} else {
+		// For gpt-5 models, explicitly set temperature to 1.0 (the only supported value)
+		generateOptions = append(generateOptions, llms.WithTemperature(1.0))
+		logger.Log("info", "Model %s/%s does not support custom temperature, setting to default 1.0", cfg.Provider, cfg.Model)
 	}
 
 	if cfg.MaxTokens > 0 {

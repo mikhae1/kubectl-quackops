@@ -172,7 +172,7 @@ func initUIColorRoles() *UIColorRoles {
 func LoadConfig() *Config {
 	// Load configuration from config file first
 	configFileValues = loadConfigFile()
-	
+
 	provider := getEnvArg("QU_LLM_PROVIDER", "ollama").(string)
 
 	defaultMaxTokens := 16000
@@ -186,15 +186,15 @@ func LoadConfig() *Config {
 	} else if provider == "ollama" {
 		// https://ai.meta.com/blog/meta-llama-3-1/
 		defaultMaxTokens = 4096
-		defaultModel = "llama3.1"
+		defaultModel = "lla3.1"
 	} else if provider == "openai" {
 		// https://platform.openai.com/docs/models/gpt-4o-mini
 		defaultMaxTokens = 128000
-		defaultModel = "gpt-4o-mini"
+		defaultModel = "gpt-5-mini"
 		defaultEmbeddingModel = "text-embedding-3-small"
 	} else if provider == "anthropic" {
 		defaultMaxTokens = 200000
-		defaultModel = "claude-3-5-sonnet-latest"
+		defaultModel = "claude-3-7-sonnet-latest"
 		defaultEmbeddingModel = "nomic-embed-text"
 	}
 
@@ -452,7 +452,7 @@ func loadConfigFile() map[string]string {
 			return values // Successfully loaded from this file
 		}
 	}
-	
+
 	return nil
 }
 
@@ -469,7 +469,7 @@ func loadConfigFromFile(configPath string) map[string]string {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		
+
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -486,7 +486,7 @@ func loadConfigFromFile(configPath string) map[string]string {
 
 		// Remove quotes if present
 		if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
-		   (strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+			(strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
 			value = value[1 : len(value)-1]
 		}
 
@@ -496,7 +496,7 @@ func loadConfigFromFile(configPath string) map[string]string {
 	if scanner.Err() != nil {
 		return nil
 	}
-	
+
 	return values
 }
 
@@ -538,7 +538,7 @@ func getEnvArg(key string, fallback interface{}) interface{} {
 	}
 
 	// Priority order: 1. CLI args, 2. Environment variables, 3. Config file, 4. Default fallback
-	
+
 	// Check CLI arguments first (highest priority)
 	for _, arg := range os.Args[1:] {
 		parts := strings.SplitN(arg, "=", 2)
@@ -552,7 +552,7 @@ func getEnvArg(key string, fallback interface{}) interface{} {
 			return getValue(v)
 		}
 	}
-	
+
 	// Check environment variables second
 	if val, exists := os.LookupEnv(key); exists {
 		return getValue(val)
