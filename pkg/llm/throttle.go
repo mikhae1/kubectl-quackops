@@ -13,80 +13,79 @@ import (
 
 var (
 	// Global throttling state
-	throttleMutex    sync.Mutex
-	lastRequestTime  time.Time
-	requestCount     int
-	windowStartTime  time.Time
+	throttleMutex     sync.Mutex
+	lastResponseTime  time.Time
+	requestCount      int
+	windowStartTime   time.Time
+	requestTimestamps []time.Time // Track individual request timestamps in the current window
 )
 
-// calculateThrottleDelay calculates the delay needed based on requests per minute
-// Returns the delay duration that should be applied before making the request
+// calculateThrottleDelay calculates the delay needed based on configuration
+// Two modes:
+// 1. Fixed delay mode: when QU_THROTTLE_DELAY_OVERRIDE_MS is set, apply that delay between all calls
+// 2. Burst mode: when QU_THROTTLE_REQUESTS_PER_MINUTE is set, use burst-then-wait logic
 func calculateThrottleDelay(cfg *config.Config) time.Duration {
 	throttleMutex.Lock()
 	defer throttleMutex.Unlock()
 
 	now := time.Now()
 
-	// If delay override is set, use it directly
+	// Mode 1: Fixed delay override - apply delay between all calls
 	if cfg.ThrottleDelayOverride > 0 {
-		logger.Log("info", "Using throttle delay override: %v", cfg.ThrottleDelayOverride)
-		lastRequestTime = now // Update last request time even for override
+		logger.Log("info", "Using fixed delay throttling: %v between all calls", cfg.ThrottleDelayOverride)
 		return cfg.ThrottleDelayOverride
 	}
 
-	// If throttling is disabled (0 requests per minute), no delay
+	// Mode 2: Burst throttling - allow N requests immediately, then wait for window
 	if cfg.ThrottleRequestsPerMinute <= 0 {
-		lastRequestTime = now // Update last request time
+		// Throttling disabled
 		return 0
 	}
 
-	// Calculate target delay between requests
-	targetDelay := time.Minute / time.Duration(cfg.ThrottleRequestsPerMinute)
+	maxRequestsPerMinute := cfg.ThrottleRequestsPerMinute
 
-	// If this is the very first request ever (lastRequestTime is zero), no delay needed
-	if lastRequestTime.IsZero() {
-		lastRequestTime = now
-		windowStartTime = now
-		requestCount = 1
-		logger.Log("info", "First LLM request - no throttling delay")
-		return 0
-	}
-
-	// Calculate how much time has passed since the last request
-	timeSinceLastRequest := now.Sub(lastRequestTime)
-	
-	// If enough time has passed since the last request, no additional delay needed
-	if timeSinceLastRequest >= targetDelay {
-		lastRequestTime = now
-		
-		// Reset window if more than a minute has passed
-		if now.Sub(windowStartTime) >= time.Minute {
-			windowStartTime = now
-			requestCount = 1
-		} else {
-			requestCount++
+	// Clean up old timestamps that are outside the 60-second window
+	cutoff := now.Add(-time.Minute)
+	var validTimestamps []time.Time
+	for _, ts := range requestTimestamps {
+		if ts.After(cutoff) {
+			validTimestamps = append(validTimestamps, ts)
 		}
-		
-		logger.Log("info", "Sufficient time elapsed since last request (%v >= %v) - no throttling delay", 
-			timeSinceLastRequest, targetDelay)
+	}
+	requestTimestamps = validTimestamps
+
+	// If this is the first request or we have room in the current minute window
+	if len(requestTimestamps) < maxRequestsPerMinute {
+		// Add this request timestamp to the window
+		requestTimestamps = append(requestTimestamps, now)
+		logger.Log("info", "Burst throttling: request %d of %d in current minute window - no delay",
+			len(requestTimestamps), maxRequestsPerMinute)
 		return 0
 	}
 
-	// Calculate the required delay
-	delay := targetDelay - timeSinceLastRequest
-	
-	// Update counters (the actual request will happen after the delay)
-	// Reset window if more than a minute has passed
-	if now.Sub(windowStartTime) >= time.Minute {
-		windowStartTime = now
-		requestCount = 1
-	} else {
-		requestCount++
+	// We've hit the limit for this minute window
+	// Find the oldest timestamp in our window and calculate when we can make the next request
+	oldestTimestamp := requestTimestamps[0]
+	for _, ts := range requestTimestamps {
+		if ts.Before(oldestTimestamp) {
+			oldestTimestamp = ts
+		}
 	}
-	
-	logger.Log("info", "Throttling LLM request: %d requests in window, delaying %v (time since last: %v, target: %v)", 
-		requestCount, delay, timeSinceLastRequest, targetDelay)
-	
+
+	// Calculate when the oldest request will be 2*60 seconds old for safety
+	nextAvailableTime := oldestTimestamp.Add(time.Minute)
+	delay := 2 * nextAvailableTime.Sub(now)
+
+	if delay <= 0 {
+		// This shouldn't happen due to our cleanup above, but just in case
+		requestTimestamps = append(requestTimestamps, now)
+		logger.Log("info", "Burst throttling: window expired, allowing request - no delay")
+		return 0
+	}
+
+	logger.Log("info", "Burst throttling: %d/%d requests in minute window, delaying %v until window expires",
+		len(requestTimestamps), maxRequestsPerMinute, delay)
+
 	return delay
 }
 
@@ -96,7 +95,7 @@ var throttleMessages = []string{
 	"⏳ Pacing requests like a zen master...",
 	"🎯 Maintaining optimal request velocity...",
 	"🌊 Riding the rate limit waves smoothly...",
-	"⚡ Throttling at light speed (ironically)...", 
+	"⚡ Throttling at light speed...",
 	"🔄 Cycling through the cool-down period...",
 	"🎭 Performing the ancient art of patience...",
 	"🚦 Waiting for the green light from rate limits...",
@@ -116,15 +115,25 @@ func applyThrottleDelay(cfg *config.Config) {
 
 // applyThrottleDelayWithSpinner applies throttling delay with enhanced spinner messaging
 func applyThrottleDelayWithSpinner(cfg *config.Config, s *spinner.Spinner) {
+	applyThrottleDelayWithCustomMessage(cfg, s, "")
+}
+
+// applyThrottleDelayWithCustomMessage applies throttling delay with a custom message or random if empty
+func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *spinner.Spinner, customMessage string) {
 	delay := calculateThrottleDelay(cfg)
 	if delay > 0 {
 		logger.Log("info", "Applying throttle delay: %v", delay)
-		
+
 		if s != nil {
-			// Pick a random cool message
-			message := throttleMessages[rand.Intn(len(throttleMessages))]
+			// Use custom message or pick a random cool message
+			var message string
+			if customMessage != "" {
+				message = customMessage
+			} else {
+				message = throttleMessages[rand.Intn(len(throttleMessages))]
+			}
 			originalSuffix := s.Suffix
-			
+
 			// Show throttling message with countdown
 			start := time.Now()
 			for {
@@ -133,21 +142,27 @@ func applyThrottleDelayWithSpinner(cfg *config.Config, s *spinner.Spinner) {
 				if remaining <= 0 {
 					break
 				}
-				
+
 				s.Suffix = fmt.Sprintf(" %s (%.1fs remaining)", message, remaining.Seconds())
 				time.Sleep(100 * time.Millisecond)
 			}
-			
+
 			// Restore original spinner message
 			s.Suffix = originalSuffix
 		} else {
 			// Fallback to simple sleep if no spinner provided
 			time.Sleep(delay)
 		}
-		
-		// Update last request time after the delay
-		throttleMutex.Lock()
-		lastRequestTime = time.Now()
-		throttleMutex.Unlock()
+
+		// Note: lastResponseTime will be updated separately when the response is received
 	}
+}
+
+// updateResponseTime updates the last response timestamp for throttling calculations
+// In the new burst-then-wait system, this mainly serves as a record-keeping function
+func updateResponseTime() {
+	throttleMutex.Lock()
+	defer throttleMutex.Unlock()
+	lastResponseTime = time.Now()
+	logger.Log("debug", "Updated throttling response timestamp: %v", lastResponseTime)
 }

@@ -131,6 +131,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	originalSuffix := s.Suffix
 	var responseContent string
 	var bufferedToolBlocks []string
+	var lastError error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
@@ -168,6 +169,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 		resp, err := client.GenerateContent(context.Background(), messages, generateOptions...)
 		if err != nil {
+			lastError = err
 			if attempt < maxRetries {
 				fmt.Printf("%s\n", color.RedString(err.Error()))
 				continue
@@ -178,6 +180,9 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 			}
 			return "", err
 		}
+
+		// Update response timestamp for throttling calculations
+		updateResponseTime()
 
 		if cfg.MCPClientEnabled {
 			toolCallCount := 0
@@ -211,6 +216,10 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 							args = map[string]any{}
 						}
 
+						// Apply throttling delay before each MCP tool execution with iteration info
+						customMessage := fmt.Sprintf("Processing MCP tool call: %d of %d...", toolCallCount+1, maxToolCalls)
+						applyThrottleDelayWithCustomMessage(cfg, s, customMessage)
+
 						logger.Log("info", "Executing MCP tool: %s with args: %v", tc.FunctionCall.Name, args)
 						toolResult, callErr := mcp.ExecuteTool(cfg, tc.FunctionCall.Name, args)
 						if callErr != nil {
@@ -220,13 +229,16 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 							logger.Log("info", "MCP tool %s executed successfully, result length: %d", tc.FunctionCall.Name, len(toolResult))
 						}
 
+						// Update response timestamp for throttling calculations after MCP tool execution
+						updateResponseTime()
+
 						var block string
 						if cfg.Verbose {
 							block = mcp.FormatToolCallVerbose(tc.FunctionCall.Name, args, toolResult)
 						} else {
 							block = mcp.FormatToolCallBlock(tc.FunctionCall.Name, args, toolResult)
 						}
-						
+
 						if useStreaming {
 							bufferedToolBlocks = append(bufferedToolBlocks, block)
 						} else if originalStream {
@@ -251,6 +263,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 					resp, err = client.GenerateContent(context.Background(), messages, generateOptions...)
 					if err != nil {
+						lastError = err
 						if attempt < maxRetries {
 							fmt.Printf("%s\n", color.RedString(err.Error()))
 							continue
@@ -260,6 +273,9 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 						}
 						return "", err
 					}
+
+					// Update response timestamp for throttling calculations after MCP tool follow-up
+					updateResponseTime()
 					continue
 				}
 				break
@@ -270,6 +286,14 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 			responseContent = resp.Choices[0].Content
 			cfg.LastIncomingTokens = lib.EstimateTokens(cfg, responseContent)
 		}
+
+		// Check if we got empty content and should retry
+		if responseContent == "" {
+			if attempt < maxRetries {
+				logger.Log("warn", "Received empty content from %s/%s", cfg.Provider, cfg.Model)
+				continue // This will trigger the backoff and retry
+			}
+		}
 		break
 	}
 
@@ -278,6 +302,9 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	}
 
 	if responseContent == "" {
+		if lastError != nil {
+			return "", fmt.Errorf("no content generated from %s after retries, last error: %w", cfg.Provider, lastError)
+		}
 		return "", fmt.Errorf("no content generated from %s", cfg.Provider)
 	}
 
