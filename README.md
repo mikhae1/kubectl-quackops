@@ -294,7 +294,27 @@ For users requiring clear explanations and technical reliability.
 
 ## ⚙️ Configuration Options
 
-QuackOps is highly configurable through environment variables or command-line flags:
+QuackOps is highly configurable through environment variables, command-line flags, or config files:
+
+### Config Files
+
+QuackOps automatically loads configuration from config files in your home directory. Config files use simple `KEY=VALUE` format and support all `QU_*` environment variables.
+
+**Config file locations (in order of preference):**
+- `~/.quackops/config`
+- `~/.config/quackops/config`
+
+**Configuration priority (highest to lowest):**
+1. Command-line arguments
+2. Environment variables
+3. Config file values
+4. Default values
+
+**Example config file (`~/.quackops/config`):**
+```bash
+# MCP client mode
+QU_MCP_CLIENT=1
+```
 
 ### Environment Variables
 

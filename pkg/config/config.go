@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -168,6 +170,9 @@ func initUIColorRoles() *UIColorRoles {
 
 // LoadConfig initializes the application configuration
 func LoadConfig() *Config {
+	// Load configuration from config file first
+	configFileValues = loadConfigFile()
+	
 	provider := getEnvArg("QU_LLM_PROVIDER", "ollama").(string)
 
 	defaultMaxTokens := 16000
@@ -423,6 +428,78 @@ func LoadConfig() *Config {
 	}
 }
 
+// configFileValues holds key-value pairs loaded from config file
+var configFileValues map[string]string
+
+// loadConfigFile loads environment variables from config files in order of preference:
+// 1. ~/.quackops/config
+// 2. ~/.config/quackops/config
+// Returns a map of config values that can be used as lowest priority fallback.
+func loadConfigFile() map[string]string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil // Can't determine home directory
+	}
+
+	// Try config files in order of preference
+	configPaths := []string{
+		filepath.Join(homeDir, ".quackops", "config"),
+		filepath.Join(homeDir, ".config", "quackops", "config"),
+	}
+
+	for _, configPath := range configPaths {
+		if values := loadConfigFromFile(configPath); values != nil {
+			return values // Successfully loaded from this file
+		}
+	}
+	
+	return nil
+}
+
+// loadConfigFromFile loads environment variables from a specific config file
+// Returns map of key-value pairs if successful, nil otherwise
+func loadConfigFromFile(configPath string) map[string]string {
+	file, err := os.Open(configPath)
+	if err != nil {
+		return nil // File doesn't exist or can't be opened
+	}
+	defer file.Close()
+
+	values := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Parse KEY=VALUE format
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue // Skip malformed lines
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		// Remove quotes if present
+		if (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
+		   (strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) {
+			value = value[1 : len(value)-1]
+		}
+
+		values[key] = value
+	}
+
+	if scanner.Err() != nil {
+		return nil
+	}
+	
+	return values
+}
+
 // GetEnv returns the value of the environment variable with the given key.
 func getEnvArg(key string, fallback interface{}) interface{} {
 	getValue := func(value string) interface{} {
@@ -460,11 +537,9 @@ func getEnvArg(key string, fallback interface{}) interface{} {
 		return nil
 	}
 
-	if val, exists := os.LookupEnv(key); exists {
-		return getValue(val)
-	}
-
-	// Search in os.Args
+	// Priority order: 1. CLI args, 2. Environment variables, 3. Config file, 4. Default fallback
+	
+	// Check CLI arguments first (highest priority)
 	for _, arg := range os.Args[1:] {
 		parts := strings.SplitN(arg, "=", 2)
 		if len(parts) != 2 {
@@ -477,7 +552,20 @@ func getEnvArg(key string, fallback interface{}) interface{} {
 			return getValue(v)
 		}
 	}
+	
+	// Check environment variables second
+	if val, exists := os.LookupEnv(key); exists {
+		return getValue(val)
+	}
 
+	// Check config file values third
+	if configFileValues != nil {
+		if val, exists := configFileValues[key]; exists {
+			return getValue(val)
+		}
+	}
+
+	// Use default fallback (lowest priority)
 	return fallback
 }
 
