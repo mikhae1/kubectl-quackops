@@ -783,7 +783,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	if strings.HasPrefix(lowered, "/") {
 		switch lowered {
 		case "/help", "/h", "/?":
-			printInlineHelp()
+			printInlineHelp(cfg)
 			return nil
 		default:
 			fmt.Printf("Unknown command: %s\n", userPrompt)
@@ -933,9 +933,10 @@ func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
 }
 
 // printInlineHelp prints quick usage information for interactive mode
-func printInlineHelp() {
+func printInlineHelp(cfg *config.Config) {
 	title := color.New(color.FgHiYellow, color.Bold)
 	body := color.New(color.FgHiWhite)
+	accent := color.New(color.FgHiCyan)
 
 	fmt.Println()
 	title.Println("Tips for getting started:")
@@ -943,10 +944,33 @@ func printInlineHelp() {
 	fmt.Println(body.Sprint("- Example: $ kubectl get events -A"))
 	fmt.Println(body.Sprint("- Type 'exit', 'quit', or 'bye' to leave"))
 	fmt.Println()
-	title.Println("Commands:")
+	
+	title.Println("Available Commands:")
+	// Display slash commands from config
+	for _, cmd := range cfg.SlashCommands {
+		// Show primary command with description
+		fmt.Printf("%s - %s\n", accent.Sprint(cmd.Primary), body.Sprint(cmd.Description))
+		
+		// Show variations if there are multiple commands
+		if len(cmd.Commands) > 1 {
+			var variations []string
+			for _, variation := range cmd.Commands {
+				if variation != cmd.Primary {
+					variations = append(variations, variation)
+				}
+			}
+			if len(variations) > 0 {
+				fmt.Printf("    %s (%s)\n", body.Sprint("Aliases:"), body.Sprint(strings.Join(variations, ", ")))
+			}
+		}
+	}
+	fmt.Println()
+	
+	title.Println("Shell Commands:")
 	fmt.Println(body.Sprint("- Press $ to toggle command mode; type $ again to exit command mode"))
 	fmt.Println(body.Sprint("- Press tab for shell auto-completion"))
 	fmt.Println()
+	
 	title.Println("Examples (cluster diagnostics):")
 	fmt.Println(body.Sprint("- Pods: 'find any issues with pods'"))
 	fmt.Println(body.Sprint("- Ingress: 'why is my ingress not routing traffic properly to backend services?'"))

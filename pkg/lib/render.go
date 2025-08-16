@@ -54,7 +54,7 @@ func (rb *RenderBlock) Format() string {
 		}
 	}
 
-	fmt.Fprint(&b, config.Colors.Gradient[0].Sprint("╰─"))
+	fmt.Fprintln(&b, config.Colors.Gradient[0].Sprint("╰"))
 	return b.String()
 }
 

@@ -35,7 +35,12 @@ func (c *shellAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, length 
 
 	lineStr := string(line[:pos])
 
-	// Only enable completion for command prefix mode or persistent edit mode
+	// Handle slash commands autocomplete first - works in all modes
+	if strings.HasPrefix(lineStr, "/") {
+		return c.CompleteSlashCommands(lineStr)
+	}
+
+	// Only enable shell completion for command prefix mode or persistent edit mode
 	if len(lineStr) == 0 {
 		if !c.Cfg.EditMode {
 			return [][]rune{}, 0
@@ -418,4 +423,39 @@ func ParseCommandLine(line string) []string {
 	}
 
 	return tokens
+}
+
+// CompleteSlashCommands provides autocomplete for slash commands
+func (c *shellAutoCompleter) CompleteSlashCommands(input string) ([][]rune, int) {
+	// Use slash commands from configuration
+	slashCommands := c.Cfg.SlashCommands
+
+	if input == "/" {
+		// Show primary commands when just "/" is typed for cleaner menu
+		var completions [][]rune
+		for _, cmdInfo := range slashCommands {
+			remaining := cmdInfo.Primary[1:] // Remove the leading "/"
+			completions = append(completions, []rune(remaining))
+		}
+		return completions, 1
+	}
+
+	// Filter commands that match the input (check all variations)
+	var completions [][]rune
+	seen := make(map[string]bool)
+	
+	for _, cmdInfo := range slashCommands {
+		for _, cmd := range cmdInfo.Commands {
+			if strings.HasPrefix(cmd, input) {
+				// Return the remaining part of the command
+				remaining := cmd[len(input):]
+				if remaining != "" && !seen[remaining] {
+					completions = append(completions, []rune(remaining))
+					seen[remaining] = true
+				}
+			}
+		}
+	}
+
+	return completions, len(input)
 }

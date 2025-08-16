@@ -220,7 +220,13 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 							logger.Log("info", "MCP tool %s executed successfully, result length: %d", tc.FunctionCall.Name, len(toolResult))
 						}
 
-						block := mcp.FormatToolCallBlock(tc.FunctionCall.Name, args, toolResult)
+						var block string
+						if cfg.Verbose {
+							block = mcp.FormatToolCallVerbose(tc.FunctionCall.Name, args, toolResult)
+						} else {
+							block = mcp.FormatToolCallBlock(tc.FunctionCall.Name, args, toolResult)
+						}
+						
 						if useStreaming {
 							bufferedToolBlocks = append(bufferedToolBlocks, block)
 						} else if originalStream {

@@ -489,7 +489,6 @@ func renderDiagnosticResult(cfg *config.Config, command string, output string, c
 
 	block := formatDiagnosticBlock(cfg, command, output, cmdErr)
 	fmt.Print(block)
-	fmt.Println() // Add spacing after the block
 }
 
 // isUnhelpfulResult checks if the output contains common unhelpful messages

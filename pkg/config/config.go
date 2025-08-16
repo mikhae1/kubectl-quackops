@@ -27,6 +27,13 @@ type KubectlPrompt = struct {
 	UseDefaultCmds  bool
 }
 
+// SlashCommand represents a slash command with its variations and description
+type SlashCommand struct {
+	Commands    []string // All variations of the command
+	Primary     string   // Primary command to show
+	Description string   // Command description
+}
+
 type Config struct {
 	ChatMessages []llms.ChatMessage
 
@@ -66,6 +73,7 @@ type Config struct {
 
 	KubectlPrompts       []KubectlPrompt
 	StoredUserCmdResults []CmdRes
+	SlashCommands        []SlashCommand
 
 	// Token accounting for last LLM exchange (shown in prompt)
 	LastOutgoingTokens int
@@ -266,6 +274,8 @@ func LoadConfig() *Config {
 		DiagnosticAnalysisPrompt: getEnvArg("QU_DIAGNOSTIC_ANALYSIS_PROMPT", defaultDiagnosticAnalysisPrompt).(string),
 		MarkdownFormatPrompt:     getEnvArg("QU_MARKDOWN_FORMAT_PROMPT", "Format your response using Markdown, including headings, lists, and code blocks for improved readability in a terminal environment.").(string),
 		PlainFormatPrompt:        getEnvArg("QU_PLAIN_FORMAT_PROMPT", "Provide a clear, concise analysis that is easy to read in a terminal environment.").(string),
+
+		SlashCommands: defaultSlashCommands(),
 
 		KubectlPrompts: []KubectlPrompt{
 			{
@@ -559,5 +569,56 @@ var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
 - %s
 
 `
+
+// defaultSlashCommands returns the default slash commands configuration
+func defaultSlashCommands() []SlashCommand {
+	return []SlashCommand{
+		{
+			Commands:    []string{"/help", "/h", "/?"},
+			Primary:     "/help",
+			Description: "Show help information",
+		},
+		{
+			Commands:    []string{"/version"},
+			Primary:     "/version",
+			Description: "Show version information",
+		},
+		{
+			Commands:    []string{"/model"},
+			Primary:     "/model",
+			Description: "Show current LLM model",
+		},
+		{
+			Commands:    []string{"/reset"},
+			Primary:     "/reset",
+			Description: "Reset conversation context",
+		},
+		{
+			Commands:    []string{"/clear"},
+			Primary:     "/clear",
+			Description: "Clear screen",
+		},
+		{
+			Commands:    []string{"/mcp"},
+			Primary:     "/mcp",
+			Description: "Show MCP details",
+		},
+		{
+			Commands:    []string{"/servers"},
+			Primary:     "/servers",
+			Description: "List MCP servers",
+		},
+		{
+			Commands:    []string{"/tools"},
+			Primary:     "/tools",
+			Description: "List MCP tools",
+		},
+		{
+			Commands:    []string{"/bye", "/exit", "/quit", "/q"},
+			Primary:     "/quit",
+			Description: "Exit the application",
+		},
+	}
+}
 
 // (EnvVarInfo and GetEnvVarsInfo removed; docs moved to README)
