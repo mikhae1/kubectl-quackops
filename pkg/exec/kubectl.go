@@ -198,12 +198,12 @@ func executeCommandsSequentially(
 
 		// Print command result
 		printCommandResult(command, results[i].Err, cmdDuration, firstCommandCompleted, firstCommandCompletedMutex)
-		
+
 		// Render diagnostic result if not in verbose mode and not a shell command
 		if !cfg.Verbose && !strings.HasPrefix(strings.TrimSpace(command), cfg.CommandPrefix) {
 			renderDiagnosticResult(cfg, command, results[i].Out, results[i].Err)
 		}
-		
+
 		if results[i].Err != nil {
 			logger.Log("warn", "Command failed: %s", command)
 		}
@@ -429,12 +429,12 @@ func executeCommandsParallel(
 
 			// Print command result
 			printCommandResult(cmd, results[idx].Err, cmdDuration, firstCommandCompleted, firstCommandCompletedMutex)
-			
+
 			// Render diagnostic result if not in verbose mode and not a shell command
 			if !cfg.Verbose && !strings.HasPrefix(strings.TrimSpace(cmd), cfg.CommandPrefix) {
 				renderDiagnosticResult(cfg, cmd, results[idx].Out, results[idx].Err)
 			}
-			
+
 			if results[idx].Err != nil {
 				logger.Log("warn", "Command failed: %s", cmd)
 			}
@@ -469,17 +469,22 @@ func printCommandResult(
 		fmt.Println() // Add newline before first command output
 	}
 
-	fmt.Printf("%s %s %s %s\n",
+	fmt.Printf("\n%s %s %s %s\n",
 		checkmark,
 		cmdLabel,
-		config.Colors.Accent.Sprint(command),
+		config.Colors.Command.Sprint(command),
 		config.Colors.Dim.Sprintf("in %s", lib.FormatDuration(cmdDuration.Milliseconds())))
 }
 
-// renderDiagnosticResult renders command output with enhanced formatting matching FormatToolCallBlock style
+// renderDiagnosticResult renders command output with enhanced formatting
 func renderDiagnosticResult(cfg *config.Config, command string, output string, cmdErr error) {
 	if cfg.Verbose || output == "" {
 		return // Skip rendering in verbose mode or if no output
+	}
+
+	// Skip rendering for commands with errors in non-verbose mode
+	if cmdErr != nil {
+		return
 	}
 
 	// Skip rendering for unhelpful results
@@ -496,24 +501,26 @@ func isUnhelpfulResult(output string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(output))
 	unhelpfulPatterns := []string{
 		"no resources found",
-		"no resources found in",
 		"no objects passed to",
 		"no such file or directory",
 		"connection refused",
-		"command not found",
+		"not found",
+		"not available",
+		"not connected",
+		"not authorized",
 	}
-	
+
 	for _, pattern := range unhelpfulPatterns {
 		if strings.Contains(trimmed, pattern) {
 			return true
 		}
 	}
-	
+
 	// Also skip very short outputs (likely not useful)
 	if len(strings.TrimSpace(output)) < 20 {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -527,17 +534,16 @@ func formatDiagnosticBlock(cfg *config.Config, command string, output string, cm
 
 	// Create render block using shared functionality
 	block := &lib.RenderBlock{
-		Title:      "Diagnostic: " + command,
+		Title:      command,
 		MaxLineLen: maxLineLen,
 		MaxLines:   maxLines,
 		Sections: []lib.RenderSection{
-			{Label: "Output", Content: output},
+			{Content: output},
 		},
 	}
 
 	return block.Format()
 }
-
 
 // printExecutionSummary displays the execution result summary with enhanced formatting
 func printExecutionSummary(commands []string, statusData *struct {

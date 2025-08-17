@@ -22,7 +22,6 @@ import (
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
-
 func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cfg := config.LoadConfig()
 	showEnv := false
@@ -299,7 +298,6 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 	defer cleanupAndExit("", -1) // just cleanup
 
-
 	printWelcomeBanner(cfg)
 	if cfg.MCPClientEnabled {
 		info := color.New(color.FgHiWhite)
@@ -369,7 +367,16 @@ func startChatSession(cfg *config.Config, args []string) error {
 			fmt.Println("Context reset")
 			continue
 		case "/clear":
-			fmt.Print("\033[2J\033[H")
+			cfg.ChatMessages = nil
+			cfg.StoredUserCmdResults = nil
+			cfg.LastOutgoingTokens = 0
+			cfg.LastIncomingTokens = 0
+			lastDisplayedOutgoingTokens = 0
+			lastDisplayedIncomingTokens = 0
+			lastTextPrompt = ""
+			userMsgCount = 0
+			lib.CoolClearEffect(cfg)
+			fmt.Println("🦆 Context cleared!")
 			continue
 		case "/servers":
 			if cfg.MCPClientEnabled {
@@ -945,13 +952,13 @@ func printInlineHelp(cfg *config.Config) {
 	fmt.Println(body.Sprint("- Example: $ kubectl get events -A"))
 	fmt.Println(body.Sprint("- Type 'exit', 'quit', or 'bye' to leave"))
 	fmt.Println()
-	
+
 	title.Println("Available Commands:")
 	// Display slash commands from config
 	for _, cmd := range cfg.SlashCommands {
 		// Show primary command with description
 		fmt.Printf("%s - %s\n", accent.Sprint(cmd.Primary), body.Sprint(cmd.Description))
-		
+
 		// Show variations if there are multiple commands
 		if len(cmd.Commands) > 1 {
 			var variations []string
@@ -966,12 +973,12 @@ func printInlineHelp(cfg *config.Config) {
 		}
 	}
 	fmt.Println()
-	
+
 	title.Println("Shell Commands:")
 	fmt.Println(body.Sprint("- Press $ to toggle command mode; type $ again to exit command mode"))
 	fmt.Println(body.Sprint("- Press tab for shell auto-completion"))
 	fmt.Println()
-	
+
 	title.Println("Examples (cluster diagnostics):")
 	fmt.Println(body.Sprint("- Pods: 'find any issues with pods'"))
 	fmt.Println(body.Sprint("- Ingress: 'why is my ingress not routing traffic properly to backend services?'"))

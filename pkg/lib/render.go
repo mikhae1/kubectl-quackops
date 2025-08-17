@@ -10,10 +10,10 @@ import (
 
 // RenderBlock builds a colored block with gradient borders and content
 type RenderBlock struct {
-	Title       string
-	Sections    []RenderSection
-	MaxLineLen  int
-	MaxLines    int
+	Title      string
+	Sections   []RenderSection
+	MaxLineLen int
+	MaxLines   int
 }
 
 // RenderSection represents a section within a render block
@@ -24,7 +24,7 @@ type RenderSection struct {
 
 // Format builds the complete formatted block as a string
 func (rb *RenderBlock) Format() string {
-	header := config.Colors.Gradient[0].Sprint("╭─ ") + config.Colors.Gradient[0].Sprint(rb.Title)
+	header := config.Colors.Gradient[0].Sprint("╭─ ") + config.Colors.Accent.Sprint(rb.Title)
 
 	// Gradient color helper for the left border "│"
 	gradientBar := func(i int) string {
@@ -42,8 +42,10 @@ func (rb *RenderBlock) Format() string {
 
 	for _, section := range rb.Sections {
 		// Print section label
-		fmt.Fprintln(&b, gradientBar(lineIdx)+" "+config.Colors.Label.Sprint(section.Label+":"))
-		lineIdx++
+		if section.Label != "" {
+			fmt.Fprintln(&b, gradientBar(lineIdx)+" "+config.Colors.Label.Sprint(section.Label+":"))
+			lineIdx++
+		}
 
 		// Process section content
 		processedContent := rb.processContent(section.Content)
@@ -136,12 +138,51 @@ func LeadingWhitespace(s string) string {
 	return b.String()
 }
 
+// isErrorContent detects if a line contains error-related content
+func isErrorContent(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	errorPatterns := []string{
+		"error:",
+		"error executing",
+		"mcp tool execution failed",
+		"tool call failed",
+		"failed to connect",
+		"connection refused",
+		"permission denied",
+		"unauthorized",
+		"forbidden",
+		"not found",
+		"timeout",
+		"unable to",
+		"cannot",
+		"invalid",
+		"unknown flag:",
+		"unknown command",
+		"see '",
+		"usage:",
+	}
+	
+	for _, pattern := range errorPatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	
+	return false
+}
+
 // ColorizeKVOrFallback applies mono-palette coloring to JSON-like key/value lines
 func ColorizeKVOrFallback(line string, keyColor *color.Color, valueColor *color.Color, fallback *color.Color) string {
 	colored, ok := ColorizeJSONKeyValueLine(line, keyColor, valueColor)
 	if ok {
 		return colored
 	}
+	
+	// Check if this line contains error content and colorize accordingly
+	if isErrorContent(line) {
+		return config.Colors.Error.Sprint(line)
+	}
+	
 	return fallback.Sprint(line)
 }
 

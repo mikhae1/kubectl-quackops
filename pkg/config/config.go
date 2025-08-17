@@ -131,6 +131,7 @@ type UIColorRoles struct {
 	Warn    *color.Color
 	Error   *color.Color
 	Magenta *color.Color
+	Command *color.Color
 
 	// MCP/header specific
 	Header *color.Color
@@ -155,6 +156,7 @@ func initUIColorRoles() *UIColorRoles {
 		Warn:    color.New(color.FgHiRed, color.Bold),
 		Error:   color.New(color.FgHiRed, color.Bold),
 		Magenta: color.New(color.FgHiMagenta),
+		Command: color.New(color.FgHiBlue),
 
 		Header: color.New(color.FgHiMagenta, color.Bold),
 		Border: color.New(color.FgHiBlack),

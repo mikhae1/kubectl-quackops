@@ -104,8 +104,8 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Color("green", "bold")
 	s.Writer = os.Stderr
-	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...",
-		cfg.Provider, cfg.Model)
+	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response... [↑%s tokens]",
+		cfg.Provider, cfg.Model, config.Colors.Dim.Sprint(lib.FormatCompactNumber(outgoingTokens)))
 
 	var stopOnce sync.Once
 	s.Start()
@@ -157,7 +157,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 			logger.Log("info", "Retrying in %.2f seconds (attempt %d/%d)", retrySeconds, attempt, maxRetries)
 
-			s.Suffix = fmt.Sprintf(" Retrying %s/%s... (attempt %d/%d)", cfg.Provider, cfg.Model, attempt, maxRetries)
+			s.Suffix = fmt.Sprintf(" Retrying %s/%s... (attempt %d/%d) [↑%s tokens]", cfg.Provider, cfg.Model, attempt, maxRetries, lib.FormatCompactNumber(outgoingTokens))
 
 			countdownStart := time.Now()
 			for {
@@ -167,8 +167,8 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 					break
 				}
 
-				s.Suffix = fmt.Sprintf(" Retrying %s/%s in %.1fs... (attempt %d/%d)",
-					cfg.Provider, cfg.Model, remaining.Seconds(), attempt, maxRetries)
+				s.Suffix = fmt.Sprintf(" Retrying %s/%s in %.1fs... (attempt %d/%d) [↑%s tokens]",
+					cfg.Provider, cfg.Model, remaining.Seconds(), attempt, maxRetries, lib.FormatCompactNumber(outgoingTokens))
 				time.Sleep(100 * time.Millisecond)
 			}
 

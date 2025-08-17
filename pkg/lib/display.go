@@ -3,13 +3,17 @@ package lib
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/tmc/langchaingo/llms"
+	"golang.org/x/term"
 )
 
 // KubeCtxInfo shows the user which Kubernetes context is currently active
@@ -183,4 +187,102 @@ func FormatEditPromptWith(cfg *config.Config) string {
 		prefix = cfg.CommandPrefix
 	}
 	return color.New(color.FgHiRed, color.Bold).Sprint(prefix + " ❯ ")
+}
+
+// getTerminalSize returns the width and height of the terminal
+func getTerminalSize() (int, int) {
+	// Try to get terminal size using golang.org/x/term
+	if width, height, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+		return width, height
+	}
+	
+	// Fallback: try environment variables
+	if cols := os.Getenv("COLUMNS"); cols != "" {
+		if width, err := strconv.Atoi(cols); err == nil {
+			if rows := os.Getenv("LINES"); rows != "" {
+				if height, err := strconv.Atoi(rows); err == nil {
+					return width, height
+				}
+			}
+		}
+	}
+	
+	// Fallback: try tput command
+	if cmd := exec.Command("tput", "cols"); cmd != nil {
+		if output, err := cmd.Output(); err == nil {
+			if width, err := strconv.Atoi(strings.TrimSpace(string(output))); err == nil {
+				if cmd := exec.Command("tput", "lines"); cmd != nil {
+					if output, err := cmd.Output(); err == nil {
+						if height, err := strconv.Atoi(strings.TrimSpace(string(output))); err == nil {
+							return width, height
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Final fallback to reasonable defaults
+	return 80, 24
+}
+
+// CoolClearEffect creates an animated clearing effect for the terminal
+func CoolClearEffect(cfg *config.Config) {
+	if cfg.DisableAnimation {
+		// Just clear immediately if animations are disabled
+		fmt.Print("\033[2J\033[H")
+		return
+	}
+
+	// Get actual terminal dimensions
+	width, height := getTerminalSize()
+	
+	// Colors for the effect
+	cyan := color.New(color.FgHiCyan)
+	blue := color.New(color.FgHiBlue)
+	magenta := color.New(color.FgHiMagenta)
+	colors := []*color.Color{cyan, blue, magenta}
+	
+	// Matrix-style clearing effect
+	fmt.Print("\033[2J") // Clear screen first
+	
+	// Animate clearing from top to bottom with colored "dust"
+	for row := 0; row < height; row++ {
+		fmt.Printf("\033[%d;1H", row+1) // Move cursor to row
+		
+		// Create a line of random characters fading away
+		for col := 0; col < width; col++ {
+			if rand.Float32() < 0.3 { // 30% chance to show a character
+				char := []rune("⠁⠂⠄⡀⢀⠠⠐⠈")[rand.Intn(8)] // Braille dots for effect
+				c := colors[rand.Intn(len(colors))]
+				fmt.Print(c.Sprint(string(char)))
+			} else {
+				fmt.Print(" ")
+			}
+		}
+		
+		time.Sleep(time.Millisecond * 25) // Speed of the effect
+	}
+	
+	// Final clear and show completion message with duck
+	fmt.Print("\033[2J\033[H")
+	
+	// Show a quick "CLEARED" message with duck centered on screen
+	duck := color.New(color.FgHiYellow)
+	cleared := color.New(color.FgHiGreen, color.Bold)
+	
+	// Center the message
+	centerRow := height / 2
+	message := "🦆 CLEARED 🦆"
+	centerCol := (width - len(message)) / 2
+	if centerCol < 0 {
+		centerCol = 0
+	}
+	
+	fmt.Printf("\033[%d;%dH", centerRow, centerCol)
+	fmt.Print(duck.Sprint("🦆 ") + cleared.Sprint("CLEARED") + duck.Sprint(" 🦆"))
+	time.Sleep(time.Millisecond * 500)
+	
+	// Final clear
+	fmt.Print("\033[2J\033[H")
 }
