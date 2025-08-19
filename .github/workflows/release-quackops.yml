@@ -144,14 +144,52 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set version for manual release
-        if: github.event_name == 'workflow_dispatch'
+      - name: Set version
         run: |
-          echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+          fi
+          if echo "$VERSION" | grep -q "-"; then
+            echo "PRERELEASE=true" >> $GITHUB_ENV
+          else
+            echo "PRERELEASE=false" >> $GITHUB_ENV
+          fi
+
+      - name: Detect release notes from CHANGELOG
+        id: detect_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="$VERSION"
+          ver_no_v="${ver#v}"
+          start_line=$(grep -n -E "^###[[:space:]]*v?${ver_no_v}([[:space:]]|—|-|$)" CHANGELOG.md | head -n1 | cut -d: -f1 || true)
+          if [ -z "$start_line" ]; then
+            echo "has_notes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Find the next version heading after start_line
+          tail_start=$((start_line + 1))
+          next_rel=$(tail -n +$tail_start CHANGELOG.md | grep -n -E "^###[[:space:]]*v[0-9]+\.[0-9]+\.[0-9]+" | head -n1 | cut -d: -f1 || true)
+          if [ -n "$next_rel" ]; then
+            end_line=$((start_line + next_rel - 2))
+            sed -n "${start_line},${end_line}p" CHANGELOG.md > notes.txt
+          else
+            sed -n "${start_line},\$p" CHANGELOG.md > notes.txt
+          fi
+          if [ ! -s notes.txt ]; then
+            echo "has_notes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "has_notes=true" >> $GITHUB_OUTPUT
+          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+          cat notes.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Generate Changelog
         id: changelog
-        if: github.event.inputs.release_notes == ''
+        if: github.event.inputs.release_notes == '' && steps.detect_notes.outputs.has_notes != 'true'
         uses: mikepenz/release-changelog-builder-action@v4
         with:
           configurationJson: |
@@ -187,6 +225,10 @@ jobs:
             echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
             echo "${{ github.event.inputs.release_notes }}" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
+          elif [ "${{ steps.detect_notes.outputs.has_notes }}" = "true" ]; then
+            echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+            echo "${{ steps.detect_notes.outputs.release_notes }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           else
             echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
             echo "${{ steps.changelog.outputs.changelog }}" >> $GITHUB_ENV
@@ -198,46 +240,5 @@ jobs:
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
           body: ${{ env.RELEASE_NOTES }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  krew-template:
-    needs: [goreleaser, goreleaser-skip-tests]
-    if: always() && (needs.goreleaser.result == 'success' || needs.goreleaser-skip-tests.result == 'success')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set custom ref for manual release
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          echo "TAG=${{ github.event.inputs.version }}" >> $GITHUB_ENV
-
-      - name: Set tag from git for automatic release
-        if: github.event_name != 'workflow_dispatch'
-        run: |
-          echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-          cache: true
-
-      - name: Download Krew template tools
-        run: |
-          go install github.com/rajatjindal/krew-release-bot@latest
-
-      - name: Process Krew YAML Template
-        id: krew-template
-        run: |
-          krew-release-bot template --tag $TAG --template-file .krew.yaml
-
-      - name: Upload Krew Manifest
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          files: quackops.yaml
+          prerelease: ${{ env.PRERELEASE }}
           token: ${{ secrets.GITHUB_TOKEN }}

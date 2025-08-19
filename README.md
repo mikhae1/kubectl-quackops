@@ -4,26 +4,37 @@
 
 **QuackOps** is a powerful kubectl AI-agent plugin designed to enhance your Kubernetes troubleshooting experience with advanced AI assistance. It acts as an intelligent agent, translating natural language queries into actionable insights by analyzing diagnostics directly from your current Kubernetes context.
 
-Beyond simple question-answering, QuackOps provides a rich, interactive experience that enhances the standard command-line workflow. It maintains context throughout a session, allowing for follow-up questions and iterative troubleshooting. Need to inspect a specific resource mentioned in the AI's analysis? You can execute arbitrary kubectl commands directly within the QuackOps session by prefixing them with a command marker (default `$`, e.g., `$ kubectl describe deployment my-app`). This interactive shell includes familiar features like command history navigation using arrow keys and persistent history storage, making it easy to recall and reuse previous commands or prompts. Furthermore, built-in auto-completion aids in quickly formulating shell commands, streamlining the entire interaction.
+QuackOps goes beyond simple question-and-answer functionality, offering natural language interaction to translate problems into diagnostic steps, interactive troubleshooting with follow-up questions, and direct command execution (e.g., $ kubectl describe deployment my-app) within a feature-rich shell that includes history, persistence, and auto-completion. Safety is built in with read-only command generation, approval-based safe mode, and secret sanitization, ensuring confident exploration of your cluster. With support for the Model Context Protocol (MCP), QuackOps can integrate with a growing ecosystem of external tools, while the flexibility to switch between local models for privacy or cloud-based models for advanced reasoning provides the right balance of control and power.
+
+## 🎥 Demo
+
+<img src="https://raw.githubusercontent.com/mikhae1/media/master/quackops/quackops-demo.gif" alt="QuackOps Demo" width="800">
 
 ## 🚀 Key Features
 
-- **Multi-Model Support:** Choose the LLM that fits your requirements:
-  - **[Ollama](https://ollama.com/)** - Run models locally for complete data privacy and air-gapped environments
-  - **[Google Gemini](https://gemini.google.com/)** - Process massive outputs with 1M+ token context windows
-  - **[OpenAI](https://openai.com/)** - Leverage cutting-edge models like o3 for complex diagnostics
-  - **[Anthropic](https://anthropic.com/)** - Utilize Claude models for reliable technical analysis
+- **AI-Powered Diagnostics:**
+  - **Natural Language Queries:** Ask questions like "Why are my pods crash-looping?" and get immediate insights.
+  - **Context-Aware Sessions:** QuackOps remembers the context of your troubleshooting session for relevant follow-up suggestions.
 
-- **Interactive Sessions:**
-  - Execute arbitrary commands directly with the `$` prefix (e.g., `$ kubectl describe my-pod`)
-  - Maintain context across multiple queries for deeper troubleshooting sessions
-  - Chain commands and prompts together to analyze complex issues step-by-step
-  - Auto-completion support for cli commands through tab completion
+- **Interactive Shell:**
+  - **Run Any Command:** Execute `kubectl` or any shell command directly in the session by prefixing it with `$`.
+  - **Command History:** Use arrow keys to navigate and reuse previous commands.
+  - **Auto-Completion:** Get intelligent suggestions for commands and arguments.
 
-- **Security:**
-  - **Secret Protection:** Automatically filters sensitive data from output sent to LLMs
-  - **Safe Mode:** Review and approve commands before execution with `--safe-mode` flag
-  - **Command Whitelisting:** Prevents destructive operations with configurable command restrictions
+- **Multi-Model Support:**
+  - **[Ollama](https://ollama.com/):** Run LLMs locally for maximum privacy.
+  - **[Google Gemini](https://gemini.google.com/):** Handle massive outputs with large context windows.
+  - **[OpenAI](https://openai.com/):** Leverage the latest models for cutting-edge diagnostics.
+  - **[Anthropic](https://anthropic.com/):** Get reliable, technically sound analysis.
+
+- **Model Context Protocol (MCP) for Tooling:**
+  - **External Tool Integration:** Use MCP to connect to external diagnostic tools like `kubeview-mcp` for extended capabilities.
+  - **Standardized Ecosystem:** As MCP is adopted more widely, QuackOps will be able to connect to an ever-growing set of tools.
+
+- **Security and Safety:**
+  - **Secret Protection:** Sensitive data is automatically filtered before being sent to an LLM.
+  - **Safe Mode:** Review and approve all commands before they are executed with the `--safe-mode` flag.
+  - **Command Whitelisting:** Prevents destructive operations by default.
 
 - **Syntax highlighting:**
   - Markdown-based output formatting with color-coded elements for better readability
@@ -167,23 +178,15 @@ kubectl quackops --history-file ~/.my_custom_history
 kubectl quackops --disable-history
 ```
 
-## 🔄 Shell Completions
+## 🔄 Shell Commands
 
-QuackOps provides intelligent tab completion for command execution mode (commands starting with `$`), leveraging bash-compatible shell completions:
+QuackOps provides intelligent tab completion for command execution mode (enter with `$`), leveraging bash-compatible shell completions:
 
 - **Command Completions:** When typing `$ `, type and press Tab to see available commands.
 - **Argument Completions:** QuackOps supports completions for cli tools like `kubectl`, `helm`, and other CLI tools that implement completion.
 - **File Path Completions:** Automatically complete file paths when navigating the filesystem.
 
 Note that completions rely on bash-compatible shell completion functions being available on your system. The feature works best in environments where bash completion is properly configured.
-
-### Example Usage
-
-```sh
-$ kubectl <tab>              # Shows kubectl subcommands
-$ kubectl get po<tab>        # Completes to 'pods'
-$ kubectl get pods -n <tab>  # Shows available namespaces
-```
 
 ## 🌟 Supported LLMs
 
@@ -210,7 +213,7 @@ For maximum data security, leverage the power of local LLMs with [Ollama](https:
    ollama serve
    ```
 
-3. **Download local LLM model** (e.g., `llama3.1`, `deepseek-r1`):
+3. **Download local LLM model** (e.g., `llama3.1`, `deepseek-r1`, `qwen2.5-coder`):
    ```sh
    ollama run deepseek-r1:8b
    ```
@@ -311,9 +314,10 @@ QuackOps automatically loads configuration from config files in your home direct
 4. Default values
 
 **Example config file (`~/.quackops/config`):**
+
 ```bash
-# MCP client mode
-QU_MCP_CLIENT=1
+QU_SAFE_MODE=false
+QU_MCP_CLIENT=true
 ```
 
 ### Environment Variables
@@ -386,7 +390,7 @@ QU_MCP_CLIENT=1
 | `--history-file` | Path to the history file | `~/.quackops/history` |
 | `--throttle-rpm` | Maximum number of LLM requests per minute | `60` |
 | `--mcp-client` | Enable MCP client mode | `true` |
-| `--mcp-config` | Path to MCP client YAML | `~/.config/quackops/mcp.yaml` |
+| `--mcp-config` | Path to MCP client YAML | `~/.config/quackops/mcp.json` |
 | `--mcp-tool-timeout` | Timeout for MCP tools (seconds) | `30` |
 | `--mcp-strict` | Strict MCP mode (no fallback) | `false` |
 
@@ -408,7 +412,8 @@ Create `~/.quackops/mcp.json`:
       }
     }
   }
-}```
+}
+```
 
 In MCP mode, QuackOps prefers MCP tools for diagnostics, with optional strict mode to avoid local fallback. Tools can be restricted using `QU_ALLOWED_TOOLS`/`QU_DENIED_TOOLS`.
 
