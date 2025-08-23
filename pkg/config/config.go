@@ -64,6 +64,9 @@ type Config struct {
 	DisableHistory        bool
 	KubectlBinaryPath     string
 
+	// Test-friendly switch to skip sleeps/backoffs/throttle waits
+	SkipWaits bool
+
 	// Embedding model configuration
 	EmbeddingModel        string
 	OllamaEmbeddingModels string
@@ -242,6 +245,7 @@ func LoadConfig() *Config {
 		HistoryFile:           getEnvArg("QU_HISTORY_FILE", defaultHistoryFile).(string),
 		DisableHistory:        getEnvArg("QU_DISABLE_HISTORY", false).(bool),
 		KubectlBinaryPath:     getEnvArg("QU_KUBECTL_BINARY", "kubectl").(string),
+		SkipWaits:             getEnvArg("QU_SKIP_WAITS", false).(bool),
 		SpinnerTimeout:        300,
 		CommandPrefix:         getEnvArg("QU_COMMAND_PREFIX", "$").(string),
 		StoredUserCmdResults:  []CmdRes{},
@@ -452,10 +456,31 @@ func LoadConfig() *Config {
 		},
 	}
 
+	// Auto-enable SkipWaits under `go test` without requiring env/flags
+	if !config.SkipWaits && isRunningUnderGoTest() {
+		config.SkipWaits = true
+	}
+
 	return config
 }
 
-// configFileValues holds key-value pairs loaded from config file
+// isRunningUnderGoTest heuristically detects if the program is executing under `go test`.
+func isRunningUnderGoTest() bool {
+	// Look for typical -test.* flags in args
+	for _, arg := range os.Args {
+		if strings.HasPrefix(arg, "-test.") {
+			return true
+		}
+	}
+	// Check test binary naming convention
+	exe := filepath.Base(os.Args[0])
+	if strings.HasSuffix(exe, ".test") {
+		return true
+	}
+	return false
+}
+
+// configFileValues holds key-value pairs loaded from config files
 var configFileValues map[string]string
 
 // loadConfigFile loads environment variables from config files in order of preference:

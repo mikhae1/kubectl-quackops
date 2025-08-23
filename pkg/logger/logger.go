@@ -60,9 +60,17 @@ func InitLoggers(output io.Writer, flags int) {
 
 // Log function to use defined loggers
 func Log(level, format string, a ...interface{}) {
-	logger, ok := LoggerMap[level]
-	if !ok {
-		logger = LoggerMap["info"]
+	lgr, ok := LoggerMap[level]
+	if !ok || lgr == nil {
+		// Lazily initialize loggers to avoid panics in tests or early calls
+		if len(LoggerMap) == 0 {
+			InitLoggers(os.Stderr, 0)
+		}
+		lgr = LoggerMap[level]
 	}
-	logger.Printf(format, a...)
+	if lgr == nil {
+		// Fallback to info logger for unknown levels
+		lgr = LoggerMap["info"]
+	}
+	lgr.Printf(format, a...)
 }

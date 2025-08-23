@@ -19,7 +19,6 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-
 // Chat orchestrates a chat completion with the provided llms.Model, handling
 // history, streaming, retries, token accounting, and MCP tool calls.
 func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, history bool) (string, error) {
@@ -395,6 +394,10 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 // applyRetryDelayWithCountdown applies a retry delay with spinner countdown
 func applyRetryDelayWithCountdown(s *spinner.Spinner, cfg *config.Config, delay time.Duration, attempt int, maxRetries int, outgoingTokens int, messageType string) {
+	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
+	if cfg != nil && cfg.SkipWaits {
+		return
+	}
 	countdownStart := time.Now()
 	for {
 		elapsed := time.Since(countdownStart)

@@ -341,87 +341,27 @@ func startChatSession(cfg *config.Config, args []string) error {
 			continue
 		}
 
+		// Centralized slash command handling
+		if strings.HasPrefix(strings.ToLower(userPrompt), "/") {
+			handled, action := handleSlashCommand(cfg, userPrompt)
+			if handled {
+				// Apply additional UI state for clear/reset
+				if action == "clear" {
+					lastDisplayedOutgoingTokens = 0
+					lastDisplayedIncomingTokens = 0
+					lastTextPrompt = ""
+					userMsgCount = 0
+					lib.CoolClearEffect(cfg)
+					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+					rl.Refresh()
+				}
+				continue
+			}
+		}
+
 		switch strings.ToLower(userPrompt) {
 		case "bye", "exit", "quit", "/bye", "/exit", "/quit", "/q":
 			cleanupAndExit("🦆...quack!", 0)
-		case "/version":
-			fmt.Println(version.Version)
-			continue
-		case "/mcp":
-			if cfg.MCPClientEnabled {
-				printMCPDetails(cfg)
-			} else {
-				fmt.Println("MCP client: disabled")
-			}
-			continue
-		case "/model":
-			prov := strings.ToUpper(strings.TrimSpace(cfg.Provider))
-			if prov == "" {
-				prov = "DEFAULT"
-			}
-			m := strings.TrimSpace(cfg.Model)
-			if m == "" {
-				m = "auto"
-			}
-			fmt.Printf("%s/%s\n", prov, m)
-			continue
-		case "/reset":
-			cfg.ChatMessages = nil
-			cfg.StoredUserCmdResults = nil
-			fmt.Println("Context reset")
-			continue
-		case "/clear", "/clean":
-			cfg.ChatMessages = nil
-			cfg.StoredUserCmdResults = nil
-			cfg.LastOutgoingTokens = 0
-			cfg.LastIncomingTokens = 0
-			lastDisplayedOutgoingTokens = 0
-			lastDisplayedIncomingTokens = 0
-			lastTextPrompt = ""
-			userMsgCount = 0
-			lib.CoolClearEffect(cfg)
-			fmt.Println("🦆 Context cleared!")
-			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
-			rl.Refresh()
-			continue
-		case "/servers":
-			if cfg.MCPClientEnabled {
-				list := mcp.Servers(cfg)
-				if len(list) == 0 {
-					fmt.Println("No MCP servers configured")
-				} else {
-					fmt.Println("MCP servers:")
-					for _, s := range list {
-						fmt.Printf(" - %s\n", s)
-					}
-				}
-			} else {
-				fmt.Println("MCP client: disabled")
-			}
-			continue
-		case "/tools":
-			if cfg.MCPClientEnabled {
-				toolInfos := mcp.GetToolInfos(cfg)
-				if len(toolInfos) == 0 {
-					fmt.Println("No MCP tools discovered")
-				} else {
-					toolColor := color.New(color.FgHiCyan)
-					descColor := color.New(color.FgWhite)
-					fmt.Printf("MCP tools (%d):\n", len(toolInfos))
-					for _, tool := range toolInfos {
-						// Truncate description if too long
-						desc := tool.Description
-						maxLen := 320
-						if len(desc) > maxLen {
-							desc = desc[:maxLen] + "..."
-						}
-						fmt.Printf(" - %s: %s\n", toolColor.Sprint(tool.Name), descColor.Sprint(desc))
-					}
-				}
-			} else {
-				fmt.Println("MCP client: disabled")
-			}
-			continue
 		}
 
 		// Do not save raw input here. History saving is handled after processing to apply rules.
@@ -512,6 +452,95 @@ func startChatSession(cfg *config.Config, args []string) error {
 			lastDisplayedOutgoingTokens = cfg.LastOutgoingTokens
 			lastDisplayedIncomingTokens = cfg.LastIncomingTokens
 		}
+	}
+}
+
+// Centralized slash command handler
+func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
+	lowered := strings.ToLower(strings.TrimSpace(userPrompt))
+	if !strings.HasPrefix(lowered, "/") {
+		return false, ""
+	}
+
+	switch lowered {
+	case "/help", "/h", "/?":
+		printInlineHelp(cfg)
+		return true, "help"
+	case "/version":
+		fmt.Println(version.Version)
+		return true, "version"
+	case "/reset":
+		cfg.ChatMessages = nil
+		cfg.StoredUserCmdResults = nil
+		fmt.Println("Context reset")
+		return true, "reset"
+	case "/clear", "/clean":
+		cfg.ChatMessages = nil
+		cfg.StoredUserCmdResults = nil
+		cfg.LastOutgoingTokens = 0
+		cfg.LastIncomingTokens = 0
+		fmt.Println("🦆 Context cleared!")
+		return true, "clear"
+	case "/mcp":
+		if cfg.MCPClientEnabled {
+			printMCPDetails(cfg)
+		} else {
+			fmt.Println("MCP client: disabled")
+		}
+		return true, "mcp"
+	case "/model":
+		prov := strings.ToUpper(strings.TrimSpace(cfg.Provider))
+		if prov == "" {
+			prov = "DEFAULT"
+		}
+		m := strings.TrimSpace(cfg.Model)
+		if m == "" {
+			m = "auto"
+		}
+		fmt.Printf("%s/%s\n", prov, m)
+		return true, "model"
+	case "/servers":
+		if cfg.MCPClientEnabled {
+			list := mcp.Servers(cfg)
+			if len(list) == 0 {
+				fmt.Println("No MCP servers configured")
+			} else {
+				fmt.Println("MCP servers:")
+				for _, s := range list {
+					fmt.Printf(" - %s\n", s)
+				}
+			}
+		} else {
+			fmt.Println("MCP client: disabled")
+		}
+		return true, "servers"
+	case "/tools":
+		if cfg.MCPClientEnabled {
+			toolInfos := mcp.GetToolInfos(cfg)
+			if len(toolInfos) == 0 {
+				fmt.Println("No MCP tools discovered")
+			} else {
+				toolColor := color.New(color.FgHiCyan)
+				descColor := color.New(color.FgWhite)
+				fmt.Printf("MCP tools (%d):\n", len(toolInfos))
+				for _, tool := range toolInfos {
+					// Truncate description if too long
+					desc := tool.Description
+					maxLen := 320
+					if len(desc) > maxLen {
+						desc = desc[:maxLen] + "..."
+					}
+					fmt.Printf(" - %s: %s\n", toolColor.Sprint(tool.Name), descColor.Sprint(desc))
+				}
+			}
+		} else {
+			fmt.Println("MCP client: disabled")
+		}
+		return true, "tools"
+	default:
+		fmt.Printf("Unknown command: %s\n", userPrompt)
+		fmt.Println("Type /help for available commands.")
+		return true, "unknown"
 	}
 }
 
@@ -818,18 +847,9 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	var augPrompt string
 	var err error
 
-	// Handle slash commands (e.g., /help) before any other processing
-	lowered := strings.ToLower(strings.TrimSpace(userPrompt))
-	if strings.HasPrefix(lowered, "/") {
-		switch lowered {
-		case "/help", "/h", "/?":
-			printInlineHelp(cfg)
-			return nil
-		default:
-			fmt.Printf("Unknown command: %s\n", userPrompt)
-			fmt.Println("Type /help for available commands.")
-			return nil
-		}
+	// Centralized slash command handling
+	if handled, _ := handleSlashCommand(cfg, userPrompt); handled {
+		return nil
 	}
 
 	// Edit mode: treat input as command without requiring '$' prefix
@@ -869,6 +889,11 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 	if augPrompt == "" {
 		augPrompt = userPrompt
+	}
+
+	// Print a minimal verbose trace for tests when verbose is enabled
+	if cfg.Verbose {
+		fmt.Fprintln(os.Stderr, "Processing prompt (verbose mode)")
 	}
 
 	// Add MCP tool information to the prompt if MCP is enabled

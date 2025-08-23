@@ -118,6 +118,10 @@ func applyThrottleDelayWithSpinner(cfg *config.Config, s *spinner.Spinner) {
 
 // applyThrottleDelayWithCustomMessage applies throttling delay with a custom message or random if empty
 func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *spinner.Spinner, customMessage string) {
+	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
+	if cfg != nil && cfg.SkipWaits {
+		return
+	}
 	delay := calculateThrottleDelay(cfg)
 	if delay > 0 {
 		logger.Log("info", "Applying throttle delay: %v", delay)
