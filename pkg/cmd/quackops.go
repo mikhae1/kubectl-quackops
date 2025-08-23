@@ -40,11 +40,11 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 
 	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai', 'google', 'anthropic')")
 	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "LLM model to use")
-	cmd.Flags().StringVarP(&cfg.ApiURL, "api-url", "u", cfg.ApiURL, "URL for LLM API, used with 'ollama' provider")
+	cmd.Flags().StringVarP(&cfg.OllamaApiURL, "api-url", "u", cfg.OllamaApiURL, "URL for LLM API, used with 'ollama' provider")
 	cmd.Flags().BoolVarP(&cfg.SafeMode, "safe-mode", "s", cfg.SafeMode, "Enable safe mode to prevent executing commands without confirmation")
 	cmd.Flags().IntVarP(&cfg.Retries, "retries", "r", cfg.Retries, "Number of retries for kubectl commands")
 	cmd.Flags().IntVarP(&cfg.Timeout, "timeout", "t", cfg.Timeout, "Timeout for kubectl commands in seconds")
-	cmd.Flags().IntVarP(&cfg.MaxTokens, "max-tokens", "x", cfg.MaxTokens, "Maximum number of tokens in LLM context window")
+	cmd.Flags().IntVarP(&cfg.UserMaxTokens, "max-tokens", "x", cfg.UserMaxTokens, "Maximum number of tokens in LLM context window (override; >0 disables auto-detect)")
 	cmd.Flags().BoolVarP(&cfg.Verbose, "verbose", "v", cfg.Verbose, "Enable verbose output")
 	cmd.Flags().BoolVarP(&cfg.DisableSecretFilter, "disable-secrets-filter", "c", cfg.DisableSecretFilter, "Disable filtering sensitive data in secrets from being sent to LLMs")
 	cmd.Flags().BoolVarP(&cfg.DisableMarkdownFormat, "disable-markdown", "d", cfg.DisableMarkdownFormat, "Disable Markdown formatting and colorization of LLM outputs (by default, responses are formatted with Markdown)")
@@ -114,6 +114,10 @@ func printEnvVarsHelp() {
 func runQuackOps(cfg *config.Config, args []string) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		logger.InitLoggers(os.Stderr, 0)
+
+		// Apply auto-detection after CLI flags are parsed
+		cfg.EnhanceConfigWithAutoDetection()
+
 		// Start MCP client mode if enabled
 		if cfg.MCPClientEnabled {
 			_ = mcp.Start(cfg)
@@ -366,7 +370,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 			cfg.StoredUserCmdResults = nil
 			fmt.Println("Context reset")
 			continue
-		case "/clear":
+		case "/clear", "/clean":
 			cfg.ChatMessages = nil
 			cfg.StoredUserCmdResults = nil
 			cfg.LastOutgoingTokens = 0
@@ -377,6 +381,8 @@ func startChatSession(cfg *config.Config, args []string) error {
 			userMsgCount = 0
 			lib.CoolClearEffect(cfg)
 			fmt.Println("🦆 Context cleared!")
+			rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+			rl.Refresh()
 			continue
 		case "/servers":
 			if cfg.MCPClientEnabled {
@@ -571,8 +577,8 @@ func printWelcomeBanner(cfg *config.Config) {
 	}
 	// Plain strings are used for computing rainbow offsets; we will use the live cfg values directly
 	apiPlain := ""
-	if cfg.ApiURL != "" {
-		apiPlain = fmt.Sprintf("K8s API: %s", cfg.ApiURL)
+	if cfg.OllamaApiURL != "" {
+		apiPlain = fmt.Sprintf("K8s API: %s", cfg.OllamaApiURL)
 	}
 	// Safe/history plain strings are not needed directly here
 
@@ -686,11 +692,37 @@ func printWelcomeBanner(cfg *config.Config) {
 		fmt.Println(indent + colored)
 	}
 
-	// Non-rainbow info lines (useful details) - keep original text, but left-aligned
+	// Non-rainbow info lines (useful details) - compact one-line with tokens
 	llmStyled := dim.Sprint("LLM:") + " " + accent.Sprintf("%s", provider) + dim.Sprint(" · ") + magenta.Sprintf("%s", model)
-	fmt.Println(indent + llmStyled)
+
+	// Fancy tokens/budget line showing max and reservations
+	effective := lib.EffectiveMaxTokens(cfg)
+	limit := effective
+	if limit <= 0 {
+		limit = 4096
+	}
+	inputReserve := int(float64(limit) * float64(cfg.InputTokenReservePercent) / 100.0)
+	if inputReserve < cfg.MinInputTokenReserve {
+		inputReserve = cfg.MinInputTokenReserve
+	}
+	mcpReserve := 0
+	if cfg.MCPClientEnabled {
+		mcpReserve = len(mcp.Tools(cfg))*200 + cfg.MCPMaxToolCalls*1000
+	}
+	totalReserve := inputReserve + mcpReserve
+	outBudget := limit - totalReserve
+	if outBudget < cfg.MinOutputTokens {
+		outBudget = cfg.MinOutputTokens
+	}
+	// Build colored line: "LLM: PROVIDER · model · max 32.8k ↑ in 6.6k ↓ out 26.2k"
+	tokens_info := llmStyled +
+		dim.Sprint(" · ") +
+		dim.Sprint("max ") + ok.Sprint(lib.FormatCompactNumber(limit)) +
+		dim.Sprint("/") + accent.Sprint("↑") + info.Sprint(lib.FormatCompactNumber(inputReserve)) +
+		dim.Sprint("/") + accent.Sprint("↓") + info.Sprint(lib.FormatCompactNumber(outBudget))
+	fmt.Println(indent + tokens_info)
 	if apiPlain != "" {
-		fmt.Println(indent + dim.Sprint("API:") + " " + info.Sprintf("%s", cfg.ApiURL))
+		fmt.Println(indent + dim.Sprint("API:") + " " + info.Sprintf("%s", cfg.OllamaApiURL))
 	}
 	fmt.Println(indent + dim.Sprint("Safe mode:") + " " + func() string {
 		if cfg.SafeMode {
@@ -819,7 +851,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	}
 
 	// Non-command user prompts
-	if userMsgCount%2 == 1 || cfg.MaxTokens > 16000 {
+	if userMsgCount%2 == 1 || lib.EffectiveMaxTokens(cfg) > 16000 {
 		if len(cfg.StoredUserCmdResults) > 0 {
 			// Use stored command results instead of running diagnostic commands
 			augPrompt, err = llm.CreateAugPromptFromCmdResults(cfg, userPrompt, cfg.StoredUserCmdResults)
@@ -847,10 +879,16 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 	_, err = llm.Request(cfg, augPrompt, true, true)
 	if err != nil {
+		// Check if this is a 429 rate limit error - don't exit interactive mode for these
+		if lib.Is429Error(err) {
+			logger.Log("info", "Rate limit error in interactive mode - continuing chat session")
+			// The error details have already been displayed by the Chat function
+			return nil
+		}
 		return fmt.Errorf("error requesting LLM: %w", err)
 	}
 
-	llm.ManageChatThreadContext(cfg.ChatMessages, cfg.MaxTokens)
+	llm.ManageChatThreadContext(cfg.ChatMessages, lib.EffectiveMaxTokens(cfg))
 	return nil
 }
 

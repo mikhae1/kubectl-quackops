@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
@@ -256,4 +258,11 @@ func ReadKey(prompt string) string {
 		return "space"
 	}
 	return string([]byte{ch})
+}
+
+// CalculateExponentialBackoff calculates retry delay using exponential backoff with jitter
+func CalculateExponentialBackoff(attempt int, initialBackoff float64, backoffFactor float64) time.Duration {
+	backoffTime := initialBackoff * math.Pow(backoffFactor, float64(attempt-1))
+	jitter := (0.5 + rand.Float64())
+	return time.Duration(backoffTime * jitter * float64(time.Second))
 }

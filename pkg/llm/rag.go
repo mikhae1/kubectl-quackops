@@ -24,7 +24,8 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 	// LLM-suggested kubectl commands. We'll rely on baseline (if enabled) and MCP tools only.
 	if !(cfg.MCPClientEnabled && cfg.MCPStrict) {
 		// First get the kubectl commands without showing the spinner
-		for i := 0; i < cfg.Retries; i++ {
+		maxAttempts := cfg.Retries + 1 // Ensure at least one attempt even if retries=0
+		for i := 0; i < maxAttempts; i++ {
 			cmds, err = GenKubectlCmds(cfg, prompt, userMsgCount)
 			if err != nil {
 				logger.Log("warn", "Error retrieving kubectl commands: %v", err)
@@ -258,7 +259,7 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 	contextData := strings.Join(sections, "\n\n---\n\n")
 
 	// If the context is too large, use semantic trimming via embeddings
-	if len(lib.Tokenize(contextData)) > int(float64(cfg.MaxTokens)/5) {
+	if len(lib.Tokenize(contextData)) > int(float64(lib.EffectiveMaxTokens(cfg))/5) {
 		sections := strings.Split(contextData, "\n\n---\n\n")
 		ctx := context.Background()
 
@@ -268,16 +269,16 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 		if err != nil {
 			logger.Log("warn", "Error creating embedder: %v", err)
 			// Improved fallback: trim all sections proportionally instead of just taking the first section
-			trimmedSections := trimAllSectionsProportionally(sections, cfg.MaxTokens/5)
+			trimmedSections := trimAllSectionsProportionally(sections, lib.EffectiveMaxTokens(cfg)/5)
 			contextData = strings.Join(trimmedSections, "\n\n---\n\n")
 		} else {
 			// Use the embedder to semantically select the most relevant sections
-			selected := TrimSectionsWithEmbeddings(ctx, embedder, sections, prompt, cfg.MaxTokens/2)
+			selected := TrimSectionsWithEmbeddings(ctx, embedder, sections, prompt, lib.EffectiveMaxTokens(cfg)/2)
 			if len(selected) > 0 {
 				contextData = strings.Join(selected, "\n\n---\n\n")
 			} else {
 				// Improved fallback: trim all sections proportionally instead of just taking the first section
-				trimmedSections := trimAllSectionsProportionally(sections, cfg.MaxTokens/3)
+				trimmedSections := trimAllSectionsProportionally(sections, lib.EffectiveMaxTokens(cfg)/3)
 				contextData = strings.Join(trimmedSections, "\n\n---\n\n")
 			}
 		}

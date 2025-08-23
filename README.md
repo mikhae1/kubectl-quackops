@@ -213,9 +213,9 @@ For maximum data security, leverage the power of local LLMs with [Ollama](https:
    ollama serve
    ```
 
-3. **Download local LLM model** (e.g., `llama3.1`, `deepseek-r1`, `qwen2.5-coder`):
+3. **Download local LLM model** (e.g., `llama3.1`, `qwen2.5-coder`):
    ```sh
-   ollama run deepseek-r1:8b
+   ollama run llama3.1:8b
    ```
 
 4. **Start interactive chat:**
@@ -325,16 +325,16 @@ QU_MCP_CLIENT=true
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `OPENAI_API_KEY` | string |  | OpenAI API key (required for `openai` provider) |
+| `QU_OPENAI_BASE_URL` | string |  | Custom base URL for OpenAI-compatible APIs (e.g., for DeepSeek, local OpenAI-compatible servers). When set, streaming is automatically disabled for OpenAI to improve compatibility with non-standard SSE implementations. |
 | `GOOGLE_API_KEY` | string |  | Google AI API key (required for `google` provider) |
 | `ANTHROPIC_API_KEY` | string |  | Anthropic API key (required for `anthropic` provider) |
 | `QU_LLM_PROVIDER` | string | `ollama` | LLM model provider (`ollama`, `openai`, `google`, `anthropic`) |
 | `QU_LLM_MODEL` | string | provider-dependent | LLM model to use. Defaults: `lla3.1` (ollama), `gpt-5-mini` (openai), `gemini-2.5-flash-preview-04-17` (google), `claude-3-7-sonnet-latest` (anthropic) |
-| `QU_API_URL` | string | `http://localhost:11434` | LLM API base URL (used with `ollama`) |
+| `QU_OLLAMA_BASE_URL` | string | `http://localhost:11434` | Ollama server base URL (used with `ollama` provider) |
 | `QU_SAFE_MODE` | bool | `false` | Require confirmation before executing commands |
 | `QU_RETRIES` | int | `3` | Number of retries for kubectl commands |
 | `QU_TIMEOUT` | int | `30` | Timeout for kubectl commands (seconds) |
 | `QU_MAX_TOKENS` | int | provider-dependent | Max tokens in LLM context window. Defaults: `4096` (ollama), `128000` (openai/google), `200000` (anthropic) |
-| `QU_TEMPERATURE` | float | `0.0` | Temperature for LLM generation |
 | `QU_ALLOWED_KUBECTL_CMDS` | []string | see `defaultAllowedKubectlCmds` | Comma-separated allowlist of kubectl command prefixes |
 | `QU_BLOCKED_KUBECTL_CMDS` | []string | see `defaultBlockedKubectlCmds` | Comma-separated denylist of kubectl command prefixes |
 | `QU_DISABLE_MARKDOWN_FORMAT` | bool | `false` | Disable Markdown formatting and colorization |
@@ -415,9 +415,12 @@ Create `~/.quackops/mcp.json`:
 }
 ```
 
-In MCP mode, QuackOps prefers MCP tools for diagnostics, with optional strict mode to avoid local fallback. Tools can be restricted using `QU_ALLOWED_TOOLS`/`QU_DENIED_TOOLS`.
+Run quackops:
+```sh
+$ kubectl quackops -p openai -m moonshotai/kimi-k2:free --mcp-client=true --mcp-strict=true
+```
 
-**Currently in experimental mode: tested with Google Gemini only**.
+In MCP mode, QuackOps prefers MCP tools for diagnostics, with optional strict mode to avoid local fallback. Tools can be restricted using `QU_ALLOWED_TOOLS`/`QU_DENIED_TOOLS`.
 
 ## 🛡️ Security Considerations
 

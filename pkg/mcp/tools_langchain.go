@@ -561,7 +561,7 @@ func logSelectedParameterSchemasForGeminiDebug(tools []llms.Tool) {
 		}
 		if len(dump) > 0 {
 			if b, err := json.MarshalIndent(dump, "", "  "); err == nil {
-				logger.Log("info", "[LLM Tools] Gemini-debug Tool[%d] %s selected fields schema:\n%s", i, name, string(b))
+				logger.Log("info", "[LLM Tools] Tool[%d] %s selected fields schema:\n%s", i, name, string(b))
 			}
 		}
 	}

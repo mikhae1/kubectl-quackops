@@ -55,13 +55,17 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 
 	// Provider-specific embedding handling
 	switch cfg.Provider {
-	case "openai", "deepseek":
+	case "openai":
 		// OpenAI has the best embedding models
 		if os.Getenv("OPENAI_API_KEY") != "" {
 			// Set the API key as an env var which is how langchaingo accesses it
-			embedClient, err := openai.New(
+			openaiOpts := []openai.Option{
 				openai.WithModel(cfg.EmbeddingModel), // Use the configured embedding model
-			)
+			}
+			if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
+				openaiOpts = append(openaiOpts, openai.WithBaseURL(baseURL))
+			}
+			embedClient, err := openai.New(openaiOpts...)
 			if err != nil {
 				logger.Log("warn", "Failed to create OpenAI embedder: %v", err)
 			} else {
@@ -72,7 +76,7 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 
 	case "ollama":
 		// Ollama has built-in embedding capability
-		serverURL := strings.TrimSuffix(cfg.ApiURL, "/api")
+		serverURL := strings.TrimSuffix(cfg.OllamaApiURL, "/api")
 		// Try to use a dedicated embedding model if available, otherwise fall back to the configured model
 		embeddingModels := strings.Split(cfg.OllamaEmbeddingModels, ",")
 
@@ -142,9 +146,11 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 
 	// 1. Try OpenAI's dedicated embedding model as primary fallback
 	if os.Getenv("OPENAI_API_KEY") != "" {
-		embedClient, err := openai.New(
-			openai.WithModel(cfg.EmbeddingModel),
-		)
+		openaiOpts := []openai.Option{openai.WithModel(cfg.EmbeddingModel)}
+		if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
+			openaiOpts = append(openaiOpts, openai.WithBaseURL(baseURL))
+		}
+		embedClient, err := openai.New(openaiOpts...)
 		if err == nil {
 			logger.Log("info", "Using fallback OpenAI embeddings model: %s", cfg.EmbeddingModel)
 			return embeddings.NewEmbedder(embedClient)
@@ -172,8 +178,8 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 	}
 
 	// 3. Try Ollama as another fallback option
-	if cfg.ApiURL != "" {
-		serverURL := strings.TrimSuffix(cfg.ApiURL, "/api")
+	if cfg.OllamaApiURL != "" {
+		serverURL := strings.TrimSuffix(cfg.OllamaApiURL, "/api")
 		// Try standard embedding models
 		embeddingModels := strings.Split(cfg.OllamaEmbeddingModels, ",")
 

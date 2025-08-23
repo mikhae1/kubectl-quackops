@@ -2,6 +2,7 @@ vendor/
 .vscode/
 TODO/
 .DS_Store
+tmp/
 
 TODO*
 *.log

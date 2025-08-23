@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
-	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -20,6 +18,7 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
 	"github.com/tmc/langchaingo/llms"
 )
+
 
 // Chat orchestrates a chat completion with the provided llms.Model, handling
 // history, streaming, retries, token accounting, and MCP tool calls.
@@ -56,43 +55,51 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 	generateOptions := []llms.CallOption{}
 
-	// Check if model supports custom temperature values
-	supportsCustomTemperature := true
-	if cfg.Provider == "openai" || cfg.Provider == "deepseek" {
-		// Some OpenAI models don't support custom temperature (only default value of 1.0)
-		if strings.Contains(cfg.Model, "gpt-5") {
-			supportsCustomTemperature = false
-		}
-	}
-
-	// Handle temperature based on model support
-	if supportsCustomTemperature {
-		generateOptions = append(generateOptions, llms.WithTemperature(cfg.Temperature))
-		logger.Log("info", "Setting temperature to %f for model %s/%s", cfg.Temperature, cfg.Provider, cfg.Model)
-	} else {
-		// For gpt-5 models, explicitly set temperature to 1.0 (the only supported value)
+	// Use default temperature values - no configuration needed
+	if cfg.Provider == "openai" && strings.Contains(cfg.Model, "gpt-5") {
+		// gpt-5 models require temperature 1.0
 		generateOptions = append(generateOptions, llms.WithTemperature(1.0))
-		logger.Log("info", "Model %s/%s does not support custom temperature, setting to default 1.0", cfg.Provider, cfg.Model)
+	} else {
+		// All other models use temperature 0.0 for deterministic responses
+		generateOptions = append(generateOptions, llms.WithTemperature(0.0))
 	}
 
-	if cfg.MaxTokens > 0 {
-		effective := lib.EffectiveMaxTokens(cfg)
-		limit := cfg.MaxTokens
-		if effective > 0 && cfg.MaxTokens > effective {
-			limit = effective
-		}
-		generateOptions = append(generateOptions, llms.WithMaxTokens(limit))
-	}
-
-	mcpToolsExposed := false
+	var mcpToolReserve int = 0
 	if cfg.MCPClientEnabled {
 		llmTools := mcp.DiscoverLangchainTools(cfg)
 		if len(llmTools) > 0 {
 			generateOptions = append(generateOptions, llms.WithTools(llmTools))
 			generateOptions = append(generateOptions, llms.WithToolChoice("auto"))
 			logger.Log("info", "Exposed %d MCP tools to model: %v", len(llmTools), mcp.ExtractToolNames(llmTools))
-			mcpToolsExposed = true
+			// Reserve additional tokens for MCP tool definitions and results
+			// Estimate: ~200 tokens per tool definition + ~1000 tokens per potential tool result
+			mcpToolReserve = len(llmTools)*200 + cfg.MCPMaxToolCalls*1000
 		}
+	}
+
+	if lib.EffectiveMaxTokens(cfg) > 0 {
+		effective := lib.EffectiveMaxTokens(cfg)
+		limit := effective
+
+		// Reserve tokens for input to avoid exceeding context window
+		inputTokenReserve := int(float64(limit) * float64(cfg.InputTokenReservePercent) / 100.0)
+		if inputTokenReserve < cfg.MinInputTokenReserve {
+			inputTokenReserve = cfg.MinInputTokenReserve
+		}
+
+		// Add MCP tool token reserve if tools are enabled
+		totalReserve := inputTokenReserve + mcpToolReserve
+
+		// Calculate actual available tokens for output
+		availableForOutput := limit - totalReserve
+		if availableForOutput < cfg.MinOutputTokens {
+			availableForOutput = cfg.MinOutputTokens
+		}
+
+		logger.Log("info", "Token allocation: limit=%d, input_reserve=%d, mcp_reserve=%d, available_output=%d",
+			limit, inputTokenReserve, mcpToolReserve, availableForOutput)
+
+		generateOptions = append(generateOptions, llms.WithMaxTokens(availableForOutput))
 	}
 
 	outgoingTokens := lib.CountTokensWithConfig(cfg, prompt, cfg.ChatMessages)
@@ -113,8 +120,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	var callbackFn func(ctx context.Context, chunk []byte) error
 	var cleanupFn func()
 
-	originalStream := stream
-	useStreaming := stream && !(cfg.MCPClientEnabled && mcpToolsExposed)
+	useStreaming := stream && !cfg.MCPClientEnabled
 
 	if useStreaming {
 		onFirstChunk := func() {
@@ -150,28 +156,33 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			backoffTime := initialBackoff * math.Pow(backoffFactor, float64(attempt-1))
-			jitter := (0.5 + rand.Float64())
-			sleepTime := time.Duration(backoffTime * jitter * float64(time.Second))
-			retrySeconds := backoffTime * jitter
+			var delay time.Duration
+			var messageType string
 
-			logger.Log("info", "Retrying in %.2f seconds (attempt %d/%d)", retrySeconds, attempt, maxRetries)
-
-			s.Suffix = fmt.Sprintf(" Retrying %s/%s... (attempt %d/%d) [↑%s tokens]", cfg.Provider, cfg.Model, attempt, maxRetries, lib.FormatCompactNumber(outgoingTokens))
-
-			countdownStart := time.Now()
-			for {
-				elapsed := time.Since(countdownStart)
-				remaining := sleepTime - elapsed
-				if remaining <= 0 {
-					break
+			// Check if the last error was a 429 rate limit error
+			if lib.Is429Error(lastError) {
+				retryDelay, parseErr := lib.ParseRetryDelay(lastError)
+				if parseErr == nil {
+					// Successfully parsed provider delay - use it
+					delay = retryDelay
+					messageType = "Rate limited"
+					logger.Log("info", "Retrying after parsed rate limit delay: %v (attempt %d/%d)", delay, attempt, maxRetries)
+				} else {
+					// Failed to parse provider delay - fallback to exponential backoff for 429 errors
+					delay = lib.CalculateExponentialBackoff(attempt, initialBackoff, backoffFactor)
+					messageType = "Rate limited"
+					logger.Log("info", "Failed to parse 429 retry delay, using exponential backoff: %v", parseErr)
+					logger.Log("info", "Retrying 429 error with backoff in %v (attempt %d/%d)", delay, attempt, maxRetries)
 				}
-
-				s.Suffix = fmt.Sprintf(" Retrying %s/%s in %.1fs... (attempt %d/%d) [↑%s tokens]",
-					cfg.Provider, cfg.Model, remaining.Seconds(), attempt, maxRetries, lib.FormatCompactNumber(outgoingTokens))
-				time.Sleep(100 * time.Millisecond)
+			} else {
+				// Use exponential backoff for non-429 errors
+				delay = lib.CalculateExponentialBackoff(attempt, initialBackoff, backoffFactor)
+				messageType = "Retrying"
+				logger.Log("info", "Retrying in %v (attempt %d/%d)", delay, attempt, maxRetries)
 			}
 
+			// Apply the retry delay with countdown
+			applyRetryDelayWithCountdown(s, cfg, delay, attempt, maxRetries, outgoingTokens, messageType)
 			s.Suffix = originalSuffix
 		}
 
@@ -185,13 +196,40 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 		resp, err := client.GenerateContent(context.Background(), messages, generateOptions...)
 		if err != nil {
 			lastError = err
-			if attempt < maxRetries {
-				fmt.Printf("%s\n", color.RedString(err.Error()))
+			retriesLeft := maxRetries - attempt
+
+			// Handle 429 errors with special display logic
+			if lib.Is429Error(err) {
+				if retriesLeft == 0 {
+					// No more retries left: show detailed ⚠️ error message
+					lib.Display429Error(err, cfg, maxRetries)
+					// Return error to exit (will be handled by interactive mode logic)
+				} else {
+					// Has retries left: only show spinner/waiting message (no ⚠️ message)
+					logger.Log("debug", "429 Rate limit error - will retry with delay (%d retries left)", retriesLeft)
+					continue
+				}
+			} else if retriesLeft > 0 {
+				// Non-429 errors with retries left: show regular error message
+				errorMsg := lib.GetErrorMessage(err)
+				if errorMsg != "" {
+					fmt.Printf("%s\n", color.RedString(errorMsg))
+				} else {
+					fmt.Printf("%s\n", color.RedString(err.Error()))
+				}
 				continue
 			}
 
 			if attempt == maxRetries {
+				errorMsg := lib.GetErrorMessage(err)
+				if errorMsg != "" {
+					return "", fmt.Errorf("AI still returning error after %d retries (%s): %w", maxRetries, errorMsg, err)
+				}
 				return "", fmt.Errorf("AI still returning error after %d retries: %w", maxRetries, err)
+			}
+			errorMsg := lib.GetErrorMessage(err)
+			if errorMsg != "" {
+				return "", fmt.Errorf("%s: %w", errorMsg, err)
 			}
 			return "", err
 		}
@@ -256,7 +294,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 						if useStreaming {
 							bufferedToolBlocks = append(bufferedToolBlocks, block)
-						} else if originalStream {
+						} else {
 							fmt.Fprint(os.Stdout, block)
 						}
 
@@ -278,13 +316,19 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 					resp, err = client.GenerateContent(context.Background(), messages, generateOptions...)
 					if err != nil {
-						lastError = err
-						if attempt < maxRetries {
-							fmt.Printf("%s\n", color.RedString(err.Error()))
-							continue
+						if lib.Is429Error(err) {
+							lib.Display429Error(err, cfg, maxRetries)
 						}
 						if attempt == maxRetries {
+							errorMsg := lib.GetErrorMessage(err)
+							if errorMsg != "" {
+								return "", fmt.Errorf("AI still returning error after %d retries post-tool (%s): %w", maxRetries, errorMsg, err)
+							}
 							return "", fmt.Errorf("AI still returning error after %d retries post-tool: %w", maxRetries, err)
+						}
+						errorMsg := lib.GetErrorMessage(err)
+						if errorMsg != "" {
+							return "", fmt.Errorf("%s: %w", errorMsg, err)
 						}
 						return "", err
 					}
@@ -325,27 +369,42 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 	if !useStreaming {
 		tokenMeter.AddIncoming(lib.EstimateTokens(cfg, responseContent))
-		if originalStream {
-			s.Stop()
-			fmt.Fprint(os.Stderr, "\r\033[2K")
-			fmt.Fprint(os.Stdout, "\n")
-			if len(bufferedToolBlocks) > 0 {
-				for _, b := range bufferedToolBlocks {
-					fmt.Fprint(os.Stdout, b)
-				}
+		// Always display output in non-streaming mode, regardless of original stream setting
+		s.Stop()
+		fmt.Fprint(os.Stderr, "\r\033[2K")
+		fmt.Fprint(os.Stdout, "\n")
+		if len(bufferedToolBlocks) > 0 {
+			for _, b := range bufferedToolBlocks {
+				fmt.Fprint(os.Stdout, b)
 			}
-			if cfg.DisableMarkdownFormat {
-				fmt.Fprintln(os.Stdout, responseContent)
-				fmt.Fprintln(os.Stdout)
-			} else {
-				w := formatter.NewStreamingWriter(os.Stdout)
-				_, _ = w.Write([]byte(responseContent))
-				_ = w.Flush()
-				_ = w.Close()
-				fmt.Fprintln(os.Stdout)
-			}
+		}
+		if cfg.DisableMarkdownFormat {
+			fmt.Fprintln(os.Stdout, responseContent)
+			fmt.Fprintln(os.Stdout)
+		} else {
+			w := formatter.NewStreamingWriter(os.Stdout)
+			_, _ = w.Write([]byte(responseContent))
+			_ = w.Flush()
+			_ = w.Close()
+			fmt.Fprintln(os.Stdout)
 		}
 	}
 
 	return responseContent, nil
+}
+
+// applyRetryDelayWithCountdown applies a retry delay with spinner countdown
+func applyRetryDelayWithCountdown(s *spinner.Spinner, cfg *config.Config, delay time.Duration, attempt int, maxRetries int, outgoingTokens int, messageType string) {
+	countdownStart := time.Now()
+	for {
+		elapsed := time.Since(countdownStart)
+		remaining := delay - elapsed
+		if remaining <= 0 {
+			break
+		}
+
+		s.Suffix = fmt.Sprintf(" %s - retrying %s/%s in %.1fs... (attempt %d/%d) [↑%s tokens]",
+			messageType, cfg.Provider, cfg.Model, remaining.Seconds(), attempt, maxRetries, lib.FormatCompactNumber(outgoingTokens))
+		time.Sleep(100 * time.Millisecond)
+	}
 }

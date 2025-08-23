@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
+	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -42,14 +44,15 @@ type Config struct {
 	AllowedKubectlCmds []string
 	BlockedKubectlCmds []string
 
-	DuckASCIIArt          string
-	Provider              string
-	Model                 string
-	ApiURL                string
-	Retries               int
-	Timeout               int
-	MaxTokens             int
-	Temperature           float64
+	DuckASCIIArt string
+	Provider     string
+	Model        string
+	OllamaApiURL string
+	Retries      int
+	Timeout      int
+	// Token window configuration
+	DefaultMaxTokens      int // Provider/model default or auto-detected context window
+	UserMaxTokens         int // Explicit user override via env/flag; >0 disables auto-detect
 	SpinnerTimeout        int
 	SafeMode              bool
 	Verbose               bool
@@ -117,6 +120,16 @@ type Config struct {
 	// LLM Request Throttling
 	ThrottleRequestsPerMinute int
 	ThrottleDelayOverride     time.Duration
+
+	// Token Management
+	InputTokenReservePercent int // Percentage of max tokens to reserve for input (default 20%)
+	MinInputTokenReserve     int // Minimum tokens to reserve for input (default 1024)
+	MinOutputTokens          int // Minimum output tokens to ensure (default 512)
+
+	// Auto-detection settings
+	AutoDetectMaxTokens   bool          // Enable auto-detection of max tokens from model metadata
+	ModelMetadataCacheTTL time.Duration // Cache TTL for model metadata (default 1 hour)
+	ModelMetadataTimeout  time.Duration // HTTP timeout for model metadata requests (default 10 seconds)
 }
 
 // UIColorRoles defines terminal color roles and gradient palette for consistent UI styling.
@@ -210,17 +223,17 @@ func LoadConfig() *Config {
 		defaultHistoryFile = fmt.Sprintf("%s/.quackops/history", homeDir)
 	}
 
-	return &Config{
+	config := &Config{
 		ChatMessages:          []llms.ChatMessage{},
 		DuckASCIIArt:          defaultDuckASCIIArt,
 		Provider:              provider,
 		Model:                 getEnvArg("QU_LLM_MODEL", defaultModel).(string),
-		ApiURL:                getEnvArg("QU_API_URL", "http://localhost:11434").(string),
+		OllamaApiURL:          getEnvArg("QU_OLLAMA_BASE_URL", "http://localhost:11434").(string),
 		SafeMode:              getEnvArg("QU_SAFE_MODE", false).(bool),
 		Retries:               getEnvArg("QU_RETRIES", 3).(int),
 		Timeout:               getEnvArg("QU_TIMEOUT", 30).(int),
-		MaxTokens:             getEnvArg("QU_MAX_TOKENS", defaultMaxTokens).(int),
-		Temperature:           getEnvArg("QU_TEMPERATURE", 0.0).(float64),
+		DefaultMaxTokens:      defaultMaxTokens,
+		UserMaxTokens:         getEnvArg("QU_MAX_TOKENS", 0).(int),
 		AllowedKubectlCmds:    getEnvArg("QU_ALLOWED_KUBECTL_CMDS", defaultAllowedKubectlCmds).([]string),
 		BlockedKubectlCmds:    getEnvArg("QU_BLOCKED_KUBECTL_CMDS", defaultBlockedKubectlCmds).([]string),
 		DisableMarkdownFormat: getEnvArg("QU_DISABLE_MARKDOWN_FORMAT", false).(bool),
@@ -273,6 +286,16 @@ func LoadConfig() *Config {
 		// LLM Request Throttling
 		ThrottleRequestsPerMinute: getEnvArg("QU_THROTTLE_REQUESTS_PER_MINUTE", 60).(int),
 		ThrottleDelayOverride:     time.Duration(getEnvArg("QU_THROTTLE_DELAY_OVERRIDE_MS", 0).(int)) * time.Millisecond,
+
+		// Token Management
+		InputTokenReservePercent: getEnvArg("QU_INPUT_TOKEN_RESERVE_PERCENT", 20).(int),
+		MinInputTokenReserve:     getEnvArg("QU_MIN_INPUT_TOKEN_RESERVE", 1024).(int),
+		MinOutputTokens:          getEnvArg("QU_MIN_OUTPUT_TOKENS", 512).(int),
+
+		// Auto-detection settings
+		AutoDetectMaxTokens:   getEnvArg("QU_AUTO_DETECT_MAX_TOKENS_ENABLE", true).(bool),
+		ModelMetadataCacheTTL: time.Duration(getEnvArg("QU_MODEL_METADATA_CACHE_TTL", 3600).(int)) * time.Second, // 1 hour default
+		ModelMetadataTimeout:  time.Duration(getEnvArg("QU_MODEL_METADATA_TIMEOUT", 10).(int)) * time.Second,
 
 		// Prompt templates
 		KubectlStartPrompt:       getEnvArg("QU_KUBECTL_SYSTEM_PROMPT", defaultKubectlStartPrompt).(string),
@@ -428,6 +451,8 @@ func LoadConfig() *Config {
 			},
 		},
 	}
+
+	return config
 }
 
 // configFileValues holds key-value pairs loaded from config file
@@ -660,6 +685,53 @@ var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
 
 `
 
+// EnhanceConfigWithAutoDetection attempts to auto-detect and enhance config values using model metadata
+func (cfg *Config) EnhanceConfigWithAutoDetection() {
+	// Skip if auto-detection is disabled
+	if !cfg.AutoDetectMaxTokens {
+		return
+	}
+
+	// Only attempt auto-detection for OpenAI provider
+	if cfg.Provider != "openai" {
+		return
+	}
+
+	// Skip if user provided an explicit override (>0)
+	if cfg.UserMaxTokens > 0 {
+		return
+	}
+
+	// Create metadata service
+	metadataService := metadata.NewMetadataService(cfg.ModelMetadataTimeout, cfg.ModelMetadataCacheTTL)
+
+	// Determine base URL for the API call
+	baseURL := os.Getenv("QU_OPENAI_BASE_URL")
+
+	// If no base URL specified, try to infer from model name for OpenRouter models
+	if baseURL == "" {
+		if strings.Contains(cfg.Model, "/") || strings.Contains(cfg.Model, "openrouter") {
+			// This looks like an OpenRouter model, use OpenRouter's base URL
+			baseURL = "https://openrouter.ai/api/v1"
+		} else {
+			// Standard OpenAI model, use default OpenAI base URL
+			baseURL = "https://api.openai.com"
+		}
+	}
+
+	// Attempt to get context length
+	contextLength, err := metadataService.GetModelContextLength(cfg.Provider, cfg.Model, baseURL)
+	if err != nil {
+		// Log warning but don't fail - keep existing value
+		fmt.Fprintf(os.Stderr, "Warning: Failed to auto-detect max tokens for model %s: %v. Using default: %d\n", cfg.Model, err, cfg.DefaultMaxTokens)
+		return
+	}
+
+	// Update DefaultMaxTokens with auto-detected value
+	logger.Log("info", "Auto-detected max tokens for model %s: %d\n", cfg.Model, contextLength)
+	cfg.DefaultMaxTokens = contextLength
+}
+
 // defaultSlashCommands returns the default slash commands configuration
 func defaultSlashCommands() []SlashCommand {
 	return []SlashCommand{
@@ -684,9 +756,9 @@ func defaultSlashCommands() []SlashCommand {
 			Description: "Reset conversation context",
 		},
 		{
-			Commands:    []string{"/clear"},
+			Commands:    []string{"/clear", "/clean"},
 			Primary:     "/clear",
-			Description: "Clear screen",
+			Description: "Clear context and screen",
 		},
 		{
 			Commands:    []string{"/mcp"},

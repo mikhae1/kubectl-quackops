@@ -19,8 +19,11 @@ func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool, histo
 		openai.WithModel(cfg.Model),
 	}
 
-	if cfg.Provider == "deepseek" {
-		llmOptions = append(llmOptions, openai.WithBaseURL(cfg.ApiURL))
+	// Support custom OpenAI-compatible base URL
+	if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
+		llmOptions = append(llmOptions, openai.WithBaseURL(baseURL))
+		// Disable streaming for custom base URLs to improve compatibility with non-standard SSE implementations
+		stream = false
 	}
 
 	// Create OpenAI client
@@ -46,7 +49,7 @@ func anthropicRequestWithChat(cfg *config.Config, prompt string, stream bool, hi
 // ollamaRequestWithChat sends a request to Ollama
 func ollamaRequestWithChat(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
 	// Ensure API URL does not end with /api
-	serverURL := strings.TrimSuffix(cfg.ApiURL, "/api")
+	serverURL := strings.TrimSuffix(cfg.OllamaApiURL, "/api")
 
 	// Create Ollama client
 	client, err := ollama.New(

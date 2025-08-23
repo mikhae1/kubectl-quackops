@@ -25,8 +25,9 @@ type RequestFunc func(cfg *config.Config, prompt string, stream bool, history bo
 var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
 	truncPrompt := prompt
 	// Rude truncation of the prompt if it exceeds the maximum token length
-	if len(truncPrompt) > cfg.MaxTokens*2 {
-		truncPrompt = truncPrompt[:cfg.MaxTokens*2] + "..."
+	maxWin := lib.EffectiveMaxTokens(cfg)
+	if len(truncPrompt) > maxWin*2 {
+		truncPrompt = truncPrompt[:maxWin*2] + "..."
 	}
 
 	logger.Log("llmIn", "[%s/%s]: %s", cfg.Provider, cfg.Model, truncPrompt)
@@ -53,7 +54,7 @@ var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, h
 	switch cfg.Provider {
 	case "ollama":
 		answer, err = ollamaRequestWithChat(cfg, truncPrompt, stream, history)
-	case "openai", "deepseek":
+	case "openai":
 		answer, err = openaiRequestWithChat(cfg, truncPrompt, stream, history)
 	case "google":
 		answer, err = googleRequestWithChat(cfg, truncPrompt, stream, history)

@@ -58,8 +58,6 @@ func calculateThrottleDelay(cfg *config.Config) time.Duration {
 	if len(requestTimestamps) < maxRequestsPerMinute {
 		// Add this request timestamp to the window
 		requestTimestamps = append(requestTimestamps, now)
-		logger.Log("info", "Burst throttling: request %d of %d in current minute window - no delay",
-			len(requestTimestamps), maxRequestsPerMinute)
 		return 0
 	}
 

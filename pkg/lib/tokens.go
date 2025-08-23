@@ -34,7 +34,7 @@ func GetEncodingForModel(provider string, model string) string {
 	normalizedModel := strings.ToLower(model)
 
 	// Prefer o200k_base for newer OpenAI models (gpt-4o family, o3/o4 variants)
-	if normalizedProvider == "openai" || normalizedProvider == "deepseek" {
+	if normalizedProvider == "openai" {
 		if strings.Contains(normalizedModel, "gpt-4o") ||
 			strings.Contains(normalizedModel, "o3") || strings.Contains(normalizedModel, "o4") ||
 			strings.Contains(normalizedModel, "-mini") {
@@ -71,7 +71,7 @@ func charPerTokenHeuristic(provider string, model string) float64 {
 	m := strings.ToLower(model)
 	// Reasonable defaults gathered from public references and empirical averages
 	// OpenAI (GPT family): ~4 chars/token
-	if p == "openai" || p == "deepseek" {
+	if p == "openai" {
 		if strings.Contains(m, "gpt-4o") || strings.Contains(m, "o3") || strings.Contains(m, "o4") {
 			return 4.2
 		}
@@ -173,7 +173,7 @@ func (a *AtomicInt) Reset()        { atomic.StoreInt64(&a.v, 0) }
 // EstimateExpectedIncomingTokens predicts the likely size of the completion
 // before any tokens are streamed. This is a heuristic tuned per provider.
 func EstimateExpectedIncomingTokens(cfg *config.Config, outgoing int) int {
-	window := cfg.MaxTokens
+	window := EffectiveMaxTokens(cfg)
 	if window <= 0 {
 		window = 4096
 	}
@@ -189,7 +189,7 @@ func EstimateExpectedIncomingTokens(cfg *config.Config, outgoing int) int {
 	heur := provHeur{base: 512, ratio: 0.5}
 
 	switch {
-	case p == "openai" || p == "deepseek":
+	case p == "openai":
 		heur = provHeur{base: 1024, ratio: 0.55}
 		if strings.Contains(m, "gpt-4o") || strings.Contains(m, "o3") || strings.Contains(m, "o4") {
 			heur = provHeur{base: 1536, ratio: 0.6}
@@ -221,7 +221,11 @@ func EffectiveMaxTokens(cfg *config.Config) int {
 	if cfg == nil {
 		return 0
 	}
-	configured := cfg.MaxTokens
+	// User override takes precedence; otherwise use provider/model default
+	configured := cfg.UserMaxTokens
+	if configured <= 0 {
+		configured = cfg.DefaultMaxTokens
+	}
 	provider := strings.ToLower(cfg.Provider)
 	model := strings.ToLower(cfg.Model)
 
