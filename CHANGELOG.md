@@ -1,5 +1,30 @@
 ## Changelog
 
+### v1.8.0 — 2025-08-24
+
+- **Added**
+  - Add benchmarking system with dedicated benchmark command (`kubectl-quackops-benchmark`) for evaluating LLM provider performance on Kubernetes troubleshooting tasks.
+  - Comprehensive metrics collection and reporting capabilities with support for multiple output formats (table, JSON, CSV, markdown).
+  - Cost tracking and quality evaluation features for LLM benchmarking.
+  - Support for kubectl command generation testing in benchmarks.
+  - New Makefile targets (`build-benchmark`, `test-benchmark`) for building and running benchmarks.
+
+### v1.7.0 — 2025-08-23
+
+- **Added**
+  - Support for openrouter.ai LLM models and API settings.
+  - Auto-detection of max tokens based on model metadata.
+  - Comprehensive test suite with unit, integration, and end-to-end tests.
+
+- **Enhanced**
+  - Configuration management with support for new fields (Ollama API URL, token management).
+  - Error handling and logging infrastructure.
+  - LLM chat functionality and client management.
+
+- **Fixed**
+  - Temporary files now excluded from version control via .gitignore.
+  - Various improvements to LLM provider handling and metadata service.
+
 ### v1.6.0 — 2025-08-19
 
 - **Added**
@@ -104,4 +129,3 @@
 
 - **Initial release**
   - Initial release of `kubectl-quackops`; README published.
-
