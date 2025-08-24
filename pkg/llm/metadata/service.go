@@ -1,22 +1,25 @@
 package metadata
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // ModelMetadata holds information about a model's capabilities
 type ModelMetadata struct {
-	ID                    string `json:"id"`
-	ContextLength         int    `json:"context_length"`
-	MaxTokens             int    `json:"max_tokens"`
-	MaxCompletionTokens   int    `json:"max_completion_tokens"`
+	ID                  string `json:"id"`
+	ContextLength       int    `json:"context_length"`
+	MaxTokens           int    `json:"max_tokens"`
+	MaxCompletionTokens int    `json:"max_completion_tokens"`
 }
 
 // OpenRouterModelsResponse represents the OpenRouter API models response
@@ -61,7 +64,7 @@ func NewMetadataService(timeout time.Duration, cacheTTL time.Duration) *Metadata
 // GetModelContextLength retrieves the context length for a given model
 func (ms *MetadataService) GetModelContextLength(provider, model, baseURL string) (int, error) {
 	cacheKey := fmt.Sprintf("%s:%s:%s", provider, model, baseURL)
-	
+
 	// Check cache first
 	if cached, exists := ms.cache[cacheKey]; exists {
 		return cached.ContextLength, nil
@@ -77,6 +80,12 @@ func (ms *MetadataService) GetModelContextLength(provider, model, baseURL string
 		} else {
 			metadata, err = ms.fetchOpenAIMetadata(model, baseURL)
 		}
+	case "google":
+		metadata, err = ms.fetchGoogleMetadata(model, baseURL)
+	case "anthropic":
+		metadata, err = ms.fetchAnthropicMetadata(model, baseURL)
+	case "ollama":
+		metadata, err = ms.fetchOllamaMetadata(model, baseURL)
 	default:
 		return 0, fmt.Errorf("unsupported provider: %s", provider)
 	}
@@ -100,7 +109,7 @@ func (ms *MetadataService) fetchOpenRouterMetadata(model, baseURL string) (*Mode
 	} else {
 		apiURL = strings.TrimSuffix(baseURL, "/") + "/api/v1/models"
 	}
-	
+
 	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -151,9 +160,9 @@ func (ms *MetadataService) fetchOpenAIMetadata(model, baseURL string) (*ModelMet
 	if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}
-	
+
 	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1/models"
-	
+
 	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -197,6 +206,270 @@ func (ms *MetadataService) fetchOpenAIMetadata(model, baseURL string) (*ModelMet
 	}
 
 	return nil, fmt.Errorf("model %s not found", model)
+}
+
+// GoogleModelResponse represents a single Google (Gemini) model response
+type GoogleModelResponse struct {
+	Name             string `json:"name"`
+	InputTokenLimit  int    `json:"inputTokenLimit"`
+	OutputTokenLimit int    `json:"outputTokenLimit"`
+}
+
+// fetchGoogleMetadata fetches model metadata from Google Generative Language API
+func (ms *MetadataService) fetchGoogleMetadata(model, baseURL string) (*ModelMetadata, error) {
+	if baseURL == "" {
+		baseURL = "https://generativelanguage.googleapis.com"
+	}
+
+	// Normalize model path expected by API: v1beta/models/{model}
+	apiModel := model
+	if !strings.HasPrefix(apiModel, "models/") {
+		apiModel = "models/" + apiModel
+	}
+
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1beta/" + apiModel
+
+	// Google Generative Language API expects API key via query parameter
+	if apiKey := os.Getenv("GOOGLE_API_KEY"); apiKey != "" {
+		if strings.Contains(apiURL, "?") {
+			apiURL += "&key=" + apiKey
+		} else {
+			apiURL += "?key=" + apiKey
+		}
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch model: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var gm GoogleModelResponse
+	if err := json.Unmarshal(body, &gm); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Derive context length. Prefer explicit input token limit; if zero, try output, else default.
+	contextLen := gm.InputTokenLimit
+	if contextLen == 0 {
+		contextLen = gm.OutputTokenLimit
+	}
+	if contextLen == 0 {
+		// Fallback to a safe default for Gemini family if limits are missing
+		contextLen = 128000
+	}
+
+	// The API returns name like "models/gemini-..."; use original model id for ID
+	id := model
+	if strings.TrimSpace(id) == "" {
+		id = gm.Name
+	}
+
+	return &ModelMetadata{
+		ID:            id,
+		ContextLength: contextLen,
+		MaxTokens:     contextLen,
+	}, nil
+}
+
+// --- Anthropic ---
+
+type anthropicModelsResponse struct {
+	Data []struct {
+		ID               string `json:"id"`
+		InputTokenLimit  int    `json:"input_token_limit"`
+		OutputTokenLimit int    `json:"output_token_limit"`
+		ContextWindow    int    `json:"context_window"`
+	} `json:"data"`
+}
+
+func (ms *MetadataService) fetchAnthropicMetadata(model, baseURL string) (*ModelMetadata, error) {
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1/models"
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+		req.Header.Set("x-api-key", apiKey)
+	}
+	// Required version header
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	var r anthropicModelsResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	// First try exact match
+	for _, m := range r.Data {
+		if m.ID == model {
+			ctx := m.ContextWindow
+			if ctx == 0 {
+				if m.InputTokenLimit > 0 {
+					ctx = m.InputTokenLimit
+				} else if m.OutputTokenLimit > 0 {
+					ctx = m.OutputTokenLimit
+				}
+			}
+			if ctx == 0 {
+				ctx = 200000
+			}
+			return &ModelMetadata{ID: m.ID, ContextLength: ctx, MaxTokens: ctx}, nil
+		}
+	}
+	// If not found and model uses -latest alias, resolve to newest dated version
+	if strings.HasSuffix(model, "-latest") {
+		family := strings.TrimSuffix(model, "-latest")
+		bestID := ""
+		bestDate := ""
+		dateRe := regexp.MustCompile(`^` + regexp.QuoteMeta(family) + `-(\d{8})$`)
+		for _, m := range r.Data {
+			if strings.HasPrefix(m.ID, family+"-") {
+				// Prefer strict date-suffixed IDs
+				if sub := dateRe.FindStringSubmatch(m.ID); len(sub) == 2 {
+					if sub[1] >= bestDate {
+						bestDate = sub[1]
+						bestID = m.ID
+					}
+				} else if bestID == "" {
+					// Fallback: take the first prefixed ID if no date match yet
+					bestID = m.ID
+				}
+			}
+		}
+		if bestID != "" {
+			// Find the selected model again to compute context
+			for _, m := range r.Data {
+				if m.ID == bestID {
+					ctx := m.ContextWindow
+					if ctx == 0 {
+						if m.InputTokenLimit > 0 {
+							ctx = m.InputTokenLimit
+						} else if m.OutputTokenLimit > 0 {
+							ctx = m.OutputTokenLimit
+						}
+					}
+					if ctx == 0 {
+						ctx = 200000
+					}
+					return &ModelMetadata{ID: bestID, ContextLength: ctx, MaxTokens: ctx}, nil
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("model %s not found", model)
+}
+
+// --- Ollama ---
+
+type ollamaShowResponse struct {
+	Model      string         `json:"model"`
+	Parameters string         `json:"parameters"`
+	ModelInfo  map[string]any `json:"model_info"`
+}
+
+func (ms *MetadataService) fetchOllamaMetadata(model, baseURL string) (*ModelMetadata, error) {
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+	// Ollama accepts both base and base/api; normalize to base without trailing /api
+	serverURL := strings.TrimSuffix(baseURL, "/api")
+	apiURL := strings.TrimSuffix(serverURL, "/") + "/api/show"
+	payload := map[string]string{"name": model}
+	b, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(context.Background(), "POST", apiURL, bytes.NewReader(b))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch model: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	var r ollamaShowResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Try multiple places to determine context length
+	ctx := 0
+	// 1) model_info.num_ctx or similar
+	if r.ModelInfo != nil {
+		for k, v := range r.ModelInfo {
+			lk := strings.ToLower(k)
+			if strings.Contains(lk, "num_ctx") || strings.Contains(lk, "context") || strings.Contains(lk, "ctx") {
+				switch t := v.(type) {
+				case float64:
+					if int(t) > ctx {
+						ctx = int(t)
+					}
+				case string:
+					if n, err := strconv.Atoi(t); err == nil && n > ctx {
+						ctx = n
+					}
+				}
+			}
+		}
+	}
+	// 2) parse parameters string like "num_ctx 8192"
+	if ctx == 0 && strings.TrimSpace(r.Parameters) != "" {
+		re := regexp.MustCompile(`(?i)num_ctx\s+(\d+)`)
+		m := re.FindStringSubmatch(r.Parameters)
+		if len(m) == 2 {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				ctx = n
+			}
+		}
+	}
+	if ctx == 0 {
+		ctx = 4096
+	}
+	id := model
+	if strings.TrimSpace(id) == "" && strings.TrimSpace(r.Model) != "" {
+		id = r.Model
+	}
+	return &ModelMetadata{ID: id, ContextLength: ctx, MaxTokens: ctx}, nil
 }
 
 // isOpenRouterURL checks if the base URL belongs to OpenRouter

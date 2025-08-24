@@ -89,7 +89,7 @@ func Display429Error(err error, cfg *config.Config, maxRetries int) {
 	fmt.Printf("\n")
 }
 
-// GetErrorMessage returns a simple error message based on HTTP status codes
+// GetErrorMessage preserves the original error and appends a known code hint.
 func GetErrorMessage(err error) string {
 	if err == nil {
 		return ""
@@ -102,30 +102,35 @@ func GetErrorMessage(err error) string {
 	matches := re.FindStringSubmatch(errorStr)
 
 	if len(matches) < 2 {
-		return ""
+		// No recognizable HTTP code; return the original error
+		return errorStr
 	}
 
 	code, parseErr := strconv.Atoi(matches[1])
 	if parseErr != nil {
-		return ""
+		return errorStr
 	}
 
+	var hint string
 	switch code {
 	case 400:
-		return "Bad Request (invalid or missing params, CORS)"
+		hint = "Bad Request (invalid or missing params)"
 	case 401:
-		return "Invalid credentials (OAuth session expired, disabled/invalid API key)"
+		hint = "Invalid credentials (OAuth session expired, disabled/invalid API key)"
 	case 402:
-		return "Your account or API key has insufficient credits. Add more credits and retry the request."
+		hint = "Your account or API key has insufficient credits. Add more credits and retry the request."
 	case 403:
-		return "Your chosen model requires moderation and your input was flagged"
+		hint = "Your chosen model requires moderation and your input was flagged"
 	case 408:
-		return "Your request timed out"
+		hint = "Your request timed out"
 	case 502:
-		return "Your chosen model is down or we received an invalid response from it"
+		hint = "Your chosen model is down or we received an invalid response from it"
 	case 503:
-		return "There is no available model provider that meets your routing requirements"
+		hint = "There is no available model provider that meets your routing requirements"
 	default:
-		return ""
+		// Unrecognized code; return original error as-is
+		return errorStr
 	}
+
+	return fmt.Sprintf("%s (%d: %s)", errorStr, code, hint)
 }

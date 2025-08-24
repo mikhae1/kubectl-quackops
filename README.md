@@ -436,6 +436,24 @@ QuackOps is designed with security in mind, but there are important consideratio
 
 - **Local Models:** For sensitive environments, use Ollama with local models to ensure your cluster data never leaves your infrastructure.
 
+## 📊 Benchmarking
+
+QuackOps includes a comprehensive benchmarking tool for evaluating and comparing LLM provider performance on Kubernetes troubleshooting tasks.
+
+**📖 [Benchmark Documentation](docs/benchmark.md)** - Complete technical reference for the benchmarking functionality
+
+### Quick Example
+```bash
+# Build benchmark tool
+make build-benchmark
+
+# Compare models across providers
+./kubectl-quackops-benchmark --models=openai/gpt-5-mini,google/gemini-2.5-flash --iterations=5
+
+# Generate detailed markdown report
+./kubectl-quackops-benchmark --models=openai/moonshotai/kimi-k2:free --complexity=simple --format=markdown --output=results.md
+```
+
 ## 🤝 Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started.

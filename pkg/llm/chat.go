@@ -50,6 +50,9 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 		messages = append(messages, llms.TextParts(role, content))
 	}
 
+	// Ensure the current prompt is included even when history is disabled
+	messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, prompt))
+
 	logger.Log("info", "Sending request to %s/%s with %d messages in history", cfg.Provider, cfg.Model, len(messages))
 
 	generateOptions := []llms.CallOption{}
@@ -110,7 +113,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Color("green", "bold")
 	s.Writer = os.Stderr
-	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response... [↑%s tokens]",
+	s.Suffix = fmt.Sprintf(" 🤖 Waiting for %s/%s response... [↑%s tokens]",
 		cfg.Provider, cfg.Model, config.Colors.Dim.Sprint(lib.FormatCompactNumber(outgoingTokens)))
 
 	var stopOnce sync.Once

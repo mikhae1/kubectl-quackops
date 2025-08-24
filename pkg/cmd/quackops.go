@@ -116,7 +116,7 @@ func runQuackOps(cfg *config.Config, args []string) func(cmd *cobra.Command, arg
 		logger.InitLoggers(os.Stderr, 0)
 
 		// Apply auto-detection after CLI flags are parsed
-		cfg.EnhanceConfigWithAutoDetection()
+		cfg.ConfigDetectMaxTokens()
 
 		// Start MCP client mode if enabled
 		if cfg.MCPClientEnabled {

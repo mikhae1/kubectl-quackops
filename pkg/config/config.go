@@ -133,6 +133,23 @@ type Config struct {
 	AutoDetectMaxTokens   bool          // Enable auto-detection of max tokens from model metadata
 	ModelMetadataCacheTTL time.Duration // Cache TTL for model metadata (default 1 hour)
 	ModelMetadataTimeout  time.Duration // HTTP timeout for model metadata requests (default 10 seconds)
+
+	// Benchmark configuration
+	BenchmarkEnabled        bool          // Enable benchmark mode
+	BenchmarkProviders      []string      // List of providers to benchmark (comma-separated string parsed)
+	BenchmarkModels         []string      // List of models to benchmark (comma-separated string parsed)
+	BenchmarkIterations     int           // Number of iterations per scenario
+	BenchmarkTimeout        time.Duration // Timeout for benchmark requests
+	BenchmarkParallel       int           // Number of parallel benchmark executions
+	BenchmarkWarmupRuns     int           // Number of warmup runs before measurement
+	BenchmarkCooldownDelay  time.Duration // Delay between benchmark runs
+	BenchmarkScenarioFilter []string      // Filter to run only specific scenarios
+	BenchmarkComplexity     string        // Filter by complexity: simple, medium, complex, all
+	BenchmarkOutputFormat   string        // Output format: json, csv, markdown, table
+	BenchmarkOutputFile     string        // File to write benchmark results
+	BenchmarkVerbose        bool          // Verbose benchmark logging
+	BenchmarkEnableQuality  bool          // Enable quality evaluation
+	BenchmarkEnableCost     bool          // Enable cost tracking
 }
 
 // UIColorRoles defines terminal color roles and gradient palette for consistent UI styling.
@@ -300,6 +317,23 @@ func LoadConfig() *Config {
 		AutoDetectMaxTokens:   getEnvArg("QU_AUTO_DETECT_MAX_TOKENS_ENABLE", true).(bool),
 		ModelMetadataCacheTTL: time.Duration(getEnvArg("QU_MODEL_METADATA_CACHE_TTL", 3600).(int)) * time.Second, // 1 hour default
 		ModelMetadataTimeout:  time.Duration(getEnvArg("QU_MODEL_METADATA_TIMEOUT", 10).(int)) * time.Second,
+
+		// Benchmark configuration
+		BenchmarkEnabled:        getEnvArg("QU_BENCHMARK_ENABLED", false).(bool),
+		BenchmarkProviders:      getEnvArg("QU_BENCHMARK_PROVIDERS", []string{"openai", "anthropic", "google", "ollama"}).([]string),
+		BenchmarkModels:         getEnvArg("QU_BENCHMARK_MODELS", []string{"gpt-4o-mini", "claude-3-haiku", "gemini-2.5-flash", "llama3.1"}).([]string),
+		BenchmarkIterations:     getEnvArg("QU_BENCHMARK_ITERATIONS", 3).(int),
+		BenchmarkTimeout:        time.Duration(getEnvArg("QU_BENCHMARK_TIMEOUT", 120).(int)) * time.Second,
+		BenchmarkParallel:       getEnvArg("QU_BENCHMARK_PARALLEL", 1).(int),
+		BenchmarkWarmupRuns:     getEnvArg("QU_BENCHMARK_WARMUP_RUNS", 1).(int),
+		BenchmarkCooldownDelay:  time.Duration(getEnvArg("QU_BENCHMARK_COOLDOWN_DELAY", 1000).(int)) * time.Millisecond,
+		BenchmarkScenarioFilter: getEnvArg("QU_BENCHMARK_SCENARIO_FILTER", []string{}).([]string),
+		BenchmarkComplexity:     getEnvArg("QU_BENCHMARK_COMPLEXITY", "all").(string),
+		BenchmarkOutputFormat:   getEnvArg("QU_BENCHMARK_OUTPUT_FORMAT", "table").(string),
+		BenchmarkOutputFile:     getEnvArg("QU_BENCHMARK_OUTPUT_FILE", "").(string),
+		BenchmarkVerbose:        getEnvArg("QU_BENCHMARK_VERBOSE", false).(bool),
+		BenchmarkEnableQuality:  getEnvArg("QU_BENCHMARK_ENABLE_QUALITY", true).(bool),
+		BenchmarkEnableCost:     getEnvArg("QU_BENCHMARK_ENABLE_COST", true).(bool),
 
 		// Prompt templates
 		KubectlStartPrompt:       getEnvArg("QU_KUBECTL_SYSTEM_PROMPT", defaultKubectlStartPrompt).(string),
@@ -670,7 +704,7 @@ var defaultAllowedTools = []string{"*"}
 
 var defaultDeniedTools = []string{}
 
-var defaultDuckASCIIArt = `4qCA4qCA4qCA4qKA4qOE4qKA4qO04qC/4qCf4qCb4qCb4qCb4qCb4qCb4qC34qK24qOE4qGA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKiv+Khv+Kgg+KggOKggOKggOKggOKggOKggOKggOKggOKhgOKiqeKjt+KhhOKggOKggOKggOKggOKggOKggOKggArioIDioIDioIDiorDiopbiob/ioIHioIDioIDioIDioIDiooLio6bio4TioIDioIBv4qGH4qK44qO34qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKjvOKgg+KggOKggOKggOKggOKggOKggG/ioZvioIDioIDioJDioJDioJLiorvioYbioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qO/4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qKA4qO04qG+4qC/4qC/4qK/4qG/4qK34qOk4qOA4qGA4qCA4qCA4qCACuKggOKggOKggOKggOKjv+KhgOKggOKggOKggOKggOKggOKggOKisOKjv+KgieKggOKguuKgh+KgmOKgg+KggOKgieKgmeKgm+Kit+KjhOKggArioIDioIDioIDioIDioLjioJ/ioIPioIDioIDiorjioYfioIDioIDiorjio4fio6Dio4TioIDioIDioIDioIDioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qOg4qO/4qO34qG24qCA4qCY4qC74qC/4qCb4qCB4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKggOKggOKggOKgieKggeKgieKgieKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggAo=`
+var defaultDuckASCIIArt = `4qCA4qCA4qCA4qKA4qOE4qKA4qO04qC/4qCf4qCb4qCb4qCb4qCb4qCb4qC34qK24qOE4qGA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKiv+Khv+Kgg+KggOKggOKggOKggOKggOKggOKggOKggOKhgOKiqeKjt+KhhOKggOKggOKggOKggOKggOKggOKggArioIDioIDioIDiorDiopbiob/ioIHioIDioIDioIDioIDiooLio6bio4TioIDioIBv4qGH4qK44qO34qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKjvOKgg+KggOKggOKggOKggOKggOKggG/ioZvioIDioIDioJDioJDioJLiorvioYbioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qO/4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qKA4qO04qG+4qC/4qC/4qK/4qG/4qK34qOk4qOA4qGA4qCA4qCA4qCACuKggOKggOKggOKggOKjv+KhgOKggOKggOKggOKggOKggOKggOKisOKjv+KgieKggOKguuKgh+KgmOKgg+KggOKgieKgmeKgm+Kit+KjhOKggArioIDioIDioIDioIDioLjioJ/ioIPioIDioIDiorjioYfioIDioIDiorjio4fio6Dio4TioIDioIDioIDioIDioIDioIDioIDioIDioIDioIAK4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qOg4qO/4qO34qG24qCA4qCY4qC74qC/4qCb4qCB4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCA4qCACuKggOKggOKggOKggOKggOKggOKggOKggOKgieKggeKgieKgieKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggOKggAo=`
 
 // Default prompt templates
 var defaultKubectlStartPrompt = `You are an expert Kubernetes administrator specializing in cluster diagnostics.
@@ -710,15 +744,15 @@ var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
 
 `
 
-// EnhanceConfigWithAutoDetection attempts to auto-detect and enhance config values using model metadata
-func (cfg *Config) EnhanceConfigWithAutoDetection() {
+// ConfigDetectMaxTokens attempts to auto-detect and enhance config values using model metadata
+func (cfg *Config) ConfigDetectMaxTokens() {
 	// Skip if auto-detection is disabled
 	if !cfg.AutoDetectMaxTokens {
 		return
 	}
 
-	// Only attempt auto-detection for OpenAI provider
-	if cfg.Provider != "openai" {
+	// Only attempt auto-detection for supported providers
+	if cfg.Provider != "openai" && cfg.Provider != "google" && cfg.Provider != "anthropic" && cfg.Provider != "ollama" {
 		return
 	}
 
@@ -730,17 +764,33 @@ func (cfg *Config) EnhanceConfigWithAutoDetection() {
 	// Create metadata service
 	metadataService := metadata.NewMetadataService(cfg.ModelMetadataTimeout, cfg.ModelMetadataCacheTTL)
 
-	// Determine base URL for the API call
-	baseURL := os.Getenv("QU_OPENAI_BASE_URL")
-
-	// If no base URL specified, try to infer from model name for OpenRouter models
-	if baseURL == "" {
-		if strings.Contains(cfg.Model, "/") || strings.Contains(cfg.Model, "openrouter") {
-			// This looks like an OpenRouter model, use OpenRouter's base URL
-			baseURL = "https://openrouter.ai/api/v1"
-		} else {
-			// Standard OpenAI model, use default OpenAI base URL
-			baseURL = "https://api.openai.com"
+	// Determine base URL for the API call depending on provider
+	var baseURL string
+	if cfg.Provider == "openai" {
+		baseURL = os.Getenv("QU_OPENAI_BASE_URL")
+		if baseURL == "" {
+			if strings.Contains(cfg.Model, "/") || strings.Contains(cfg.Model, "openrouter") {
+				// This looks like an OpenRouter model, use OpenRouter's base URL
+				baseURL = "https://openrouter.ai/api/v1"
+			} else {
+				// Standard OpenAI model, use default OpenAI base URL
+				baseURL = "https://api.openai.com"
+			}
+		}
+	} else if cfg.Provider == "google" {
+		baseURL = os.Getenv("QU_GOOGLE_BASE_URL")
+		if baseURL == "" {
+			baseURL = "https://generativelanguage.googleapis.com"
+		}
+	} else if cfg.Provider == "anthropic" {
+		baseURL = os.Getenv("QU_ANTHROPIC_BASE_URL")
+		if baseURL == "" {
+			baseURL = "https://api.anthropic.com"
+		}
+	} else if cfg.Provider == "ollama" {
+		baseURL = cfg.OllamaApiURL
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
 		}
 	}
 

@@ -161,13 +161,13 @@ func isErrorContent(line string) bool {
 		"see '",
 		"usage:",
 	}
-	
+
 	for _, pattern := range errorPatterns {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -177,12 +177,12 @@ func ColorizeKVOrFallback(line string, keyColor *color.Color, valueColor *color.
 	if ok {
 		return colored
 	}
-	
+
 	// Check if this line contains error content and colorize accordingly
 	if isErrorContent(line) {
 		return config.Colors.Error.Sprint(line)
 	}
-	
+
 	return fallback.Sprint(line)
 }
 
@@ -261,4 +261,38 @@ func ColorizeJSONKeyValueLine(line string, keyColor *color.Color, valueColor *co
 	coloredVal := valueColor.Sprint(valuePart)
 	colored := indent + coloredKey + preColon + ":" + postColon[:spaceAfter] + coloredVal + commaSuffix
 	return colored, true
+}
+
+// RenderTerminalWindow renders a modern terminal-like window around the given content.
+// Content is line-trimmed and truncated with a centered ellipsis block when exceeding maxLines.
+// Colors and accents are sourced from config.Colors to ensure consistent theming.
+func RenderTerminalWindow(title string, content string, maxLines int, maxLineLen int) string {
+	// Title bar with macOS-like traffic lights and gradient title
+
+	header := config.Colors.Border.Sprint("╭─ ") + config.Colors.Accent.Sprint(title)
+
+	// Prepare body via existing RenderBlock processing (handles trimming and truncation nicely)
+	rb := &RenderBlock{
+		Title:      "",
+		Sections:   []RenderSection{{Label: "", Content: content}},
+		MaxLineLen: maxLineLen,
+		MaxLines:   maxLines,
+	}
+	processed := rb.processContent(content)
+
+	// Compose window with vertical borders
+	var b strings.Builder
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, header)
+	for _, ln := range strings.Split(processed, "\n") {
+		if strings.TrimSpace(ln) == "" {
+			// Keep empty lines visually minimal but aligned with border
+			fmt.Fprintln(&b, config.Colors.Border.Sprint("│ "))
+			continue
+		}
+		colored := ColorizeKVOrFallback(ln, config.Colors.Gradient[0], NextMono(config.Colors.Gradient, 0), config.Colors.Output)
+		fmt.Fprintln(&b, config.Colors.Border.Sprint("│ ")+colored)
+	}
+	fmt.Fprintln(&b, config.Colors.Border.Sprint("╰"))
+	return b.String()
 }
