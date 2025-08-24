@@ -140,8 +140,60 @@ func (m *MockLLMClient) Reset() {
 
 // MockRequestFunc creates a mock version of the Request function
 func MockRequestFunc(responses []MockResponse) RequestFunc {
+	currentIndex := 0
 	return func(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
-		// Simulate Chat-like retry behavior within a single request using the provided sequence
+		// If we run out of responses, cycle back to the first one
+		if currentIndex >= len(responses) {
+			currentIndex = 0
+		}
+
+		if len(responses) == 0 {
+			return "Mock response", nil
+		}
+
+		response := responses[currentIndex]
+		currentIndex++
+
+		// Simulate rate limiting
+		if response.SimulateRateLimit {
+			return "", fmt.Errorf("rate limit exceeded (429): please try again later")
+		}
+
+		// Return error if specified
+		if response.Error != nil {
+			return "", response.Error
+		}
+
+		// Simulate streaming by printing chunks when requested
+		if stream && len(response.StreamingChunks) > 0 {
+			for _, chunk := range response.StreamingChunks {
+				fmt.Fprint(os.Stdout, chunk)
+				if response.StreamingDelay > 0 {
+					time.Sleep(response.StreamingDelay)
+				}
+			}
+		}
+
+		// Print final content to stdout (tests capture this)
+		if response.Content != "" {
+			fmt.Fprintln(os.Stdout, response.Content)
+		}
+
+		// Update history if requested
+		if history {
+			cfg.ChatMessages = append(cfg.ChatMessages, llms.HumanChatMessage{Content: prompt})
+			cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response.Content})
+		}
+
+		return response.Content, nil
+	}
+}
+
+// MockRequestFuncWithRetries creates a mock that simulates retry behavior within a single request
+// This is useful for testing retry logic where multiple responses represent retries within one call
+func MockRequestFuncWithRetries(responses []MockResponse) RequestFunc {
+	return func(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
+		// Simulate retry behavior within a single request using the provided sequence
 		var finalContent string
 		var lastErr error
 		for i := 0; i < len(responses); i++ {
@@ -165,9 +217,13 @@ func MockRequestFunc(responses []MockResponse) RequestFunc {
 		}
 
 		// Simulate streaming by printing chunks when requested
-		if stream {
-			for _, chunk := range responses[len(responses)-1].StreamingChunks {
+		if stream && len(responses) > 0 {
+			lastResponse := responses[len(responses)-1]
+			for _, chunk := range lastResponse.StreamingChunks {
 				fmt.Fprint(os.Stdout, chunk)
+				if lastResponse.StreamingDelay > 0 {
+					time.Sleep(lastResponse.StreamingDelay)
+				}
 			}
 		}
 
@@ -341,6 +397,7 @@ func CreateTestConfig() *config.Config {
 		MinInputTokenReserve:      1024,
 		MinOutputTokens:           512,
 		MCPClientEnabled:          false, // Disable MCP for basic tests
+		SkipWaits:                 true,  // Skip delays in tests
 		LastOutgoingTokens:        0,
 		LastIncomingTokens:        0,
 	}

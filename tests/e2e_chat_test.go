@@ -417,7 +417,7 @@ func runE2EStep(t *testing.T, cfg *config.Config, step E2EStep) {
 	// Mock LLM responses if provided
 	if len(step.MockResponses) > 0 {
 		originalRequest := llm.Request
-		llm.Request = llm.MockRequestFunc(step.MockResponses)
+		llm.Request = llm.MockRequestFuncWithRetries(step.MockResponses)
 		defer func() {
 			llm.Request = originalRequest
 		}()
