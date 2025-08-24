@@ -488,7 +488,8 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 			fmt.Println("MCP client: disabled")
 		}
 		return true, "mcp"
-	case "/model":
+	case "/model", "/models":
+		// Show current model if no arguments, or launch interactive selector
 		prov := strings.ToUpper(strings.TrimSpace(cfg.Provider))
 		if prov == "" {
 			prov = "DEFAULT"
@@ -497,7 +498,31 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		if m == "" {
 			m = "auto"
 		}
-		fmt.Printf("%s/%s\n", prov, m)
+		
+		// Check if there are any additional arguments (for future extension)
+		// For now, always launch the interactive selector
+		fmt.Printf("Current: %s/%s\n", prov, m)
+		fmt.Println("Launching interactive model selector...")
+		
+		// Create model selector and launch interactive selection
+		selector := lib.NewModelSelector(cfg)
+		selectedModel, err := selector.SelectModel()
+		if err != nil {
+			if strings.Contains(err.Error(), "cancelled") {
+				fmt.Println("Model selection cancelled.")
+			} else {
+				fmt.Printf("Error selecting model: %v\n", err)
+			}
+			return true, "model"
+		}
+		
+		// Update configuration with selected model
+		cfg.Model = selectedModel
+		fmt.Printf("Model updated to: %s\n", selectedModel)
+		
+		// Auto-detect max tokens for the new model
+		cfg.ConfigDetectMaxTokens()
+		
 		return true, "model"
 	case "/servers":
 		if cfg.MCPClientEnabled {

@@ -821,9 +821,9 @@ func defaultSlashCommands() []SlashCommand {
 			Description: "Show version information",
 		},
 		{
-			Commands:    []string{"/model"},
+			Commands:    []string{"/model", "/models"},
 			Primary:     "/model",
-			Description: "Show current LLM model",
+			Description: "Interactive model selector for current provider",
 		},
 		{
 			Commands:    []string{"/reset"},

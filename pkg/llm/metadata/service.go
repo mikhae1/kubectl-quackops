@@ -100,6 +100,26 @@ func (ms *MetadataService) GetModelContextLength(provider, model, baseURL string
 	return metadata.ContextLength, nil
 }
 
+// GetModelList retrieves a list of available models from the provider
+func (ms *MetadataService) GetModelList(provider, baseURL string) ([]*ModelMetadata, error) {
+	switch provider {
+	case "openai":
+		if isOpenRouterURL(baseURL) {
+			return ms.fetchOpenRouterModelList(baseURL)
+		} else {
+			return ms.fetchOpenAIModelList(baseURL)
+		}
+	case "google":
+		return ms.fetchGoogleModelList(baseURL)
+	case "anthropic":
+		return ms.fetchAnthropicModelList(baseURL)
+	case "ollama":
+		return ms.fetchOllamaModelList(baseURL)
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", provider)
+	}
+}
+
 // fetchOpenRouterMetadata fetches model metadata from OpenRouter API
 func (ms *MetadataService) fetchOpenRouterMetadata(model, baseURL string) (*ModelMetadata, error) {
 	// Handle case where baseURL already includes /api/v1
@@ -475,4 +495,313 @@ func (ms *MetadataService) fetchOllamaMetadata(model, baseURL string) (*ModelMet
 // isOpenRouterURL checks if the base URL belongs to OpenRouter
 func isOpenRouterURL(baseURL string) bool {
 	return strings.Contains(strings.ToLower(baseURL), "openrouter.ai")
+}
+
+// fetchOpenRouterModelList fetches the list of available models from OpenRouter
+func (ms *MetadataService) fetchOpenRouterModelList(baseURL string) ([]*ModelMetadata, error) {
+	var apiURL string
+	if strings.HasSuffix(baseURL, "/api/v1") {
+		apiURL = strings.TrimSuffix(baseURL, "/") + "/models"
+	} else {
+		apiURL = strings.TrimSuffix(baseURL, "/") + "/api/v1/models"
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var response OpenRouterModelsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	var models []*ModelMetadata
+	for _, modelData := range response.Data {
+		models = append(models, &ModelMetadata{
+			ID:                  modelData.ID,
+			ContextLength:       modelData.ContextLength,
+			MaxCompletionTokens: modelData.MaxCompletionTokens,
+		})
+	}
+
+	return models, nil
+}
+
+// fetchOpenAIModelList fetches the list of available models from OpenAI
+func (ms *MetadataService) fetchOpenAIModelList(baseURL string) ([]*ModelMetadata, error) {
+	if baseURL == "" {
+		baseURL = "https://api.openai.com"
+	}
+
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1/models"
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var response OpenAIModelsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	var models []*ModelMetadata
+	for _, modelData := range response.Data {
+		models = append(models, &ModelMetadata{
+			ID:            modelData.ID,
+			ContextLength: modelData.MaxTokens,
+			MaxTokens:     modelData.MaxTokens,
+		})
+	}
+
+	return models, nil
+}
+
+// fetchGoogleModelList fetches the list of available models from Google
+func (ms *MetadataService) fetchGoogleModelList(baseURL string) ([]*ModelMetadata, error) {
+	if baseURL == "" {
+		baseURL = "https://generativelanguage.googleapis.com"
+	}
+
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1beta/models"
+
+	if apiKey := os.Getenv("GOOGLE_API_KEY"); apiKey != "" {
+		if strings.Contains(apiURL, "?") {
+			apiURL += "&key=" + apiKey
+		} else {
+			apiURL += "?key=" + apiKey
+		}
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Google returns a different structure for the models list
+	var response struct {
+		Models []GoogleModelResponse `json:"models"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	var models []*ModelMetadata
+	for _, model := range response.Models {
+		contextLen := model.InputTokenLimit
+		if contextLen == 0 {
+			contextLen = model.OutputTokenLimit
+		}
+		if contextLen == 0 {
+			contextLen = 128000
+		}
+
+		// Extract model ID from name (e.g., "models/gemini-pro" -> "gemini-pro")
+		modelID := model.Name
+		if strings.HasPrefix(modelID, "models/") {
+			modelID = strings.TrimPrefix(modelID, "models/")
+		}
+
+		models = append(models, &ModelMetadata{
+			ID:            modelID,
+			ContextLength: contextLen,
+			MaxTokens:     contextLen,
+		})
+	}
+
+	return models, nil
+}
+
+// fetchAnthropicModelList fetches the list of available models from Anthropic
+func (ms *MetadataService) fetchAnthropicModelList(baseURL string) ([]*ModelMetadata, error) {
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1/models"
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+		req.Header.Set("x-api-key", apiKey)
+	}
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var r anthropicModelsResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	var models []*ModelMetadata
+	for _, m := range r.Data {
+		ctx := m.ContextWindow
+		if ctx == 0 {
+			if m.InputTokenLimit > 0 {
+				ctx = m.InputTokenLimit
+			} else if m.OutputTokenLimit > 0 {
+				ctx = m.OutputTokenLimit
+			}
+		}
+		if ctx == 0 {
+			ctx = 200000
+		}
+
+		models = append(models, &ModelMetadata{
+			ID:            m.ID,
+			ContextLength: ctx,
+			MaxTokens:     ctx,
+		})
+	}
+
+	return models, nil
+}
+
+// OllamaModelsResponse represents the Ollama API models list response
+type OllamaModelsResponse struct {
+	Models []struct {
+		Name         string `json:"name"`
+		Model        string `json:"model"`
+		ModifiedAt   string `json:"modified_at"`
+		Size         int64  `json:"size"`
+		Digest       string `json:"digest"`
+		Details      map[string]interface{} `json:"details"`
+	} `json:"models"`
+}
+
+// fetchOllamaModelList fetches the list of available models from Ollama
+func (ms *MetadataService) fetchOllamaModelList(baseURL string) ([]*ModelMetadata, error) {
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+	serverURL := strings.TrimSuffix(baseURL, "/api")
+	apiURL := strings.TrimSuffix(serverURL, "/") + "/api/tags"
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var r OllamaModelsResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	var models []*ModelMetadata
+	for _, m := range r.Models {
+		// Use a reasonable default context length for Ollama models
+		ctx := 4096
+		
+		// Try to get context length from model details if available
+		if m.Details != nil {
+			for k, v := range m.Details {
+				lk := strings.ToLower(k)
+				if strings.Contains(lk, "num_ctx") || strings.Contains(lk, "context") {
+					switch t := v.(type) {
+					case float64:
+						if int(t) > ctx {
+							ctx = int(t)
+						}
+					case string:
+						if n, err := strconv.Atoi(t); err == nil && n > ctx {
+							ctx = n
+						}
+					}
+				}
+			}
+		}
+
+		models = append(models, &ModelMetadata{
+			ID:            m.Name,
+			ContextLength: ctx,
+			MaxTokens:     ctx,
+		})
+	}
+
+	return models, nil
 }

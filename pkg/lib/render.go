@@ -106,6 +106,12 @@ func TrimLine(s string, maxRunes int) string {
 	if RuneCount(s) <= maxRunes {
 		return s
 	}
+
+	// Don't trim error lines - show them in full
+	if isErrorContent(s) {
+		return s
+	}
+
 	runes := []rune(s)
 	if len(runes) > maxRunes {
 		runes = runes[:maxRunes]
@@ -158,8 +164,12 @@ func isErrorContent(line string) bool {
 		"invalid",
 		"unknown flag:",
 		"unknown command",
-		"see '",
 		"usage:",
+		"ai still returning error",
+		"unexpected status code:",
+		"provider returned error",
+		"status code: 4", // 400-499 client errors
+		"status code: 5", // 500-599 server errors
 	}
 
 	for _, pattern := range errorPatterns {
