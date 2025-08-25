@@ -20,7 +20,7 @@ func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool, histo
 	}
 
 	// Support custom OpenAI-compatible base URL
-	if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
+	if baseURL := config.GetOpenAIBaseURL(); baseURL != "" {
 		llmOptions = append(llmOptions, openai.WithBaseURL(baseURL))
 		// Disable streaming for custom base URLs to improve compatibility with non-standard SSE implementations
 		stream = false

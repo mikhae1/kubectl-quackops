@@ -203,6 +203,20 @@ func initUIColorRoles() *UIColorRoles {
 	}
 }
 
+// GetOpenAIBaseURL returns the OpenAI base URL from environment variables
+// Supports both QU_OPENAI_BASE_URL and OPENAI_BASE_URL (as alias)
+func GetOpenAIBaseURL() string {
+	// Check QU_OPENAI_BASE_URL first (primary)
+	if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
+		return baseURL
+	}
+	// Check OPENAI_BASE_URL as alias
+	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+		return baseURL
+	}
+	return ""
+}
+
 // LoadConfig initializes the application configuration
 func LoadConfig() *Config {
 	// Load configuration from config file first
@@ -767,7 +781,7 @@ func (cfg *Config) ConfigDetectMaxTokens() {
 	// Determine base URL for the API call depending on provider
 	var baseURL string
 	if cfg.Provider == "openai" {
-		baseURL = os.Getenv("QU_OPENAI_BASE_URL")
+		baseURL = GetOpenAIBaseURL()
 		if baseURL == "" {
 			if strings.Contains(cfg.Model, "/") || strings.Contains(cfg.Model, "openrouter") {
 				// This looks like an OpenRouter model, use OpenRouter's base URL

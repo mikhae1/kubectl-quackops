@@ -135,7 +135,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 func (ms *ModelSelector) getBaseURL() string {
 	switch ms.cfg.Provider {
 	case "openai":
-		if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
+		if baseURL := config.GetOpenAIBaseURL(); baseURL != "" {
 			return baseURL
 		}
 		if strings.Contains(ms.cfg.Model, "/") || strings.Contains(ms.cfg.Model, "openrouter") {

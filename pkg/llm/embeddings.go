@@ -62,7 +62,7 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 			openaiOpts := []openai.Option{
 				openai.WithModel(cfg.EmbeddingModel), // Use the configured embedding model
 			}
-			if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
+			if baseURL := config.GetOpenAIBaseURL(); baseURL != "" {
 				openaiOpts = append(openaiOpts, openai.WithBaseURL(baseURL))
 			}
 			embedClient, err := openai.New(openaiOpts...)
@@ -147,7 +147,7 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 	// 1. Try OpenAI's dedicated embedding model as primary fallback
 	if os.Getenv("OPENAI_API_KEY") != "" {
 		openaiOpts := []openai.Option{openai.WithModel(cfg.EmbeddingModel)}
-		if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
+		if baseURL := config.GetOpenAIBaseURL(); baseURL != "" {
 			openaiOpts = append(openaiOpts, openai.WithBaseURL(baseURL))
 		}
 		embedClient, err := openai.New(openaiOpts...)
