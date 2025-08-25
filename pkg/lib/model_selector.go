@@ -49,7 +49,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 	// Create readline instance with custom completer
 	completer := &modelCompleter{models: models}
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:       "Type to search models: ",
+		Prompt:       "Type to search models (or press Tab): ",
 		AutoComplete: completer,
 		EOFPrompt:    "exit",
 	})
