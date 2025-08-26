@@ -35,6 +35,40 @@ func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool, histo
 	return Chat(cfg, client, prompt, stream, history)
 }
 
+// azOpenAIRequestWithChat sends a request to Azure OpenAI
+func azOpenAIRequestWithChat(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
+	// Set Azure OpenAI client options
+	llmOptions := []openai.Option{
+		openai.WithAPIType(openai.APITypeAzure),
+		openai.WithModel(cfg.Model),
+	}
+
+	// Support custom Azure OpenAI base URL
+	if baseURL := config.GetAzOpenAIBaseURL(); baseURL != "" {
+		llmOptions = append(llmOptions, openai.WithBaseURL(baseURL))
+		// Disable streaming for custom base URLs to improve compatibility with non-standard SSE implementations
+		stream = false
+	}
+
+	// Support custom Azure OpenAI API key
+	if apiKey := config.GetAzOpenAIAPIKey(); apiKey != "" {
+		llmOptions = append(llmOptions, openai.WithToken(apiKey))
+	}
+
+	// Azure OpenAI requires embedding model when using Azure API
+	if cfg.EmbeddingModel != "" {
+		llmOptions = append(llmOptions, openai.WithEmbeddingModel(cfg.EmbeddingModel))
+	}
+
+	// Create Azure OpenAI client
+	client, err := openai.New(llmOptions...)
+	if err != nil {
+		return "", fmt.Errorf("failed to create Azure OpenAI client: %w", err)
+	}
+
+	return Chat(cfg, client, prompt, stream, history)
+}
+
 // anthropicRequestWithChat sends a request to Anthropic
 func anthropicRequestWithChat(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
 	// Create Anthropic client

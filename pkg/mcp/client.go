@@ -890,9 +890,6 @@ func discoverAndCacheToolInfos(session *sdkmcp.ClientSession, serverName string)
 		var schema *jsonschema.Schema
 		if tool.InputSchema != nil {
 			schema = tool.InputSchema
-			logger.Log("debug", "[MCP] Tool %s has input schema", tool.Name)
-		} else {
-			logger.Log("debug", "[MCP] Tool %s has no input schema", tool.Name)
 		}
 
 		toolInfo := ToolInfo{

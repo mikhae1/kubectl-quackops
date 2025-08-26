@@ -80,14 +80,25 @@ func FormatCompactNumber(value int) string {
 
 	var scaled float64
 	var suffix string
+	
+	// Check for rounding up to next unit when >= 999.5
 	switch {
 	case n >= 1_000_000_000_000:
+		scaled = float64(n) / 1_000_000_000_000.0
+		suffix = "T"
+	case n >= 999_500_000_000: // Round up to T when >= 999.5B
 		scaled = float64(n) / 1_000_000_000_000.0
 		suffix = "T"
 	case n >= 1_000_000_000:
 		scaled = float64(n) / 1_000_000_000.0
 		suffix = "B"
+	case n >= 999_500_000: // Round up to B when >= 999.5M
+		scaled = float64(n) / 1_000_000_000.0
+		suffix = "B"
 	case n >= 1_000_000:
+		scaled = float64(n) / 1_000_000.0
+		suffix = "M"
+	case n >= 999_500: // Round up to M when >= 999.5k
 		scaled = float64(n) / 1_000_000.0
 		suffix = "M"
 	case n >= 1_000:
@@ -265,4 +276,51 @@ func CalculateExponentialBackoff(attempt int, initialBackoff float64, backoffFac
 	backoffTime := initialBackoff * math.Pow(backoffFactor, float64(attempt-1))
 	jitter := (0.5 + rand.Float64())
 	return time.Duration(backoffTime * jitter * float64(time.Second))
+}
+
+// TrimText truncates long text to fit within the specified width.
+// If maxWidth is not provided, it attempts to detect terminal width automatically.
+func TrimText(text string, maxWidth ...int) string {
+	var width int
+	if len(maxWidth) > 0 && maxWidth[0] > 0 {
+		width = maxWidth[0]
+	} else {
+		width = getTerminalWidth()
+	}
+	
+	if len(text) <= width {
+		return text
+	}
+	
+	// Find the last space before maxWidth
+	cutoff := width
+	for i := width - 1; i >= width-20 && i >= 0; i-- {
+		if text[i] == ' ' {
+			cutoff = i
+			break
+		}
+	}
+	
+	// If no suitable space found, just truncate
+	if cutoff == width && len(text) > width {
+		cutoff = width - 3
+	}
+	
+	if cutoff < len(text) {
+		return text[:cutoff] + "..."
+	}
+	return text
+}
+
+// getTerminalWidth detects the terminal width, defaulting to 80 if detection fails
+func getTerminalWidth() int {
+	fd := int(os.Stdout.Fd())
+	if term.IsTerminal(fd) {
+		width, _, err := term.GetSize(fd)
+		if err == nil && width > 20 {
+			// Leave some margin for indentation and formatting
+			return width - 10
+		}
+	}
+	return 80 // Default width
 }

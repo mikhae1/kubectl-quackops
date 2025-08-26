@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/chzyer/readline"
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
 )
@@ -62,6 +61,8 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 	fmt.Println("Type to search, or press Tab to see all models. Press Ctrl+C to cancel.")
 	fmt.Println()
 
+	var lastPartialMatches []*metadata.ModelMetadata
+
 	for {
 		line, err := rl.Readline()
 		if err != nil { // This includes Ctrl+C, EOF
@@ -73,9 +74,13 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 			continue
 		}
 
-		// Check if user typed a number (for direct selection)
-		if num, err := strconv.Atoi(line); err == nil && num >= 1 && num <= len(models) {
-			return ms.selectModel(models[num-1])
+		// Check if user typed a number (for direct selection from last displayed list)
+		if num, err := strconv.Atoi(line); err == nil {
+			if len(lastPartialMatches) > 0 && num >= 1 && num <= len(lastPartialMatches) {
+				return ms.selectModel(lastPartialMatches[num-1])
+			} else if num >= 1 && num <= len(models) {
+				return ms.selectModel(models[num-1])
+			}
 		}
 
 		lowerCleaned := strings.ToLower(line)
@@ -119,12 +124,31 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 			return ms.selectModel(partialMatches[0])
 		}
 		if len(partialMatches) > 1 {
-			fmt.Printf("Multiple matches found:\n")
+			lastPartialMatches = partialMatches // Store for numeric selection
+			fmt.Printf("%s\n", config.Colors.Info.Sprint("Multiple matches found:"))
 			for i, model := range partialMatches {
-				fmt.Printf("  %d. %s (context: %s)\n", i+1, model.ID, FormatCompactNumber(model.ContextLength))
+				// Format the number with accent color
+				numStr := config.Colors.Accent.Sprintf("%d.", i+1)
+
+				// Format model ID with info color
+				modelStr := config.Colors.Magenta.Sprint(model.ID)
+
+				// Format context with dim color
+				contextStr := config.Colors.Ok.Sprintf("· %s", FormatCompactNumber(model.ContextLength))
+
+				if model.Description != "" {
+					// Wrap long descriptions
+					description := TrimText(model.Description, 80)
+					descStr := config.Colors.Dim.Sprint(" - " + description)
+					fmt.Printf("  %s %s %s%s\n", numStr, modelStr, contextStr, descStr)
+				} else {
+					fmt.Printf("  %s %s %s\n", numStr, modelStr, contextStr)
+				}
 			}
-			fmt.Printf("Please be more specific or type a number to select.\n")
+			fmt.Printf("%s\n", config.Colors.Dim.Sprint("Please be more specific or type a number to select."))
 			continue
+		} else {
+			lastPartialMatches = nil // Clear if no partial matches
 		}
 
 		fmt.Printf("No model found matching '%s'. Try a different search or press Tab to see all models.\n", line)
@@ -142,6 +166,12 @@ func (ms *ModelSelector) getBaseURL() string {
 			return "https://openrouter.ai/api/v1"
 		}
 		return "https://api.openai.com"
+	case "azopenai":
+		if baseURL := config.GetAzOpenAIBaseURL(); baseURL != "" {
+			return baseURL
+		}
+		// Azure OpenAI requires a configured endpoint - no default
+		return ""
 	case "google":
 		if baseURL := os.Getenv("QU_GOOGLE_BASE_URL"); baseURL != "" {
 			return baseURL
@@ -164,7 +194,17 @@ func (ms *ModelSelector) getBaseURL() string {
 
 // selectModel prints selection info and returns the model ID
 func (ms *ModelSelector) selectModel(model *metadata.ModelMetadata) (string, error) {
-	fmt.Printf("Selected: %s (context: %s)\n", model.ID, FormatCompactNumber(model.ContextLength))
+	// Format with colors
+	selectedStr := config.Colors.Ok.Sprint("Selected:")
+	modelStr := config.Colors.Accent.Sprint(model.ID)
+	contextStr := config.Colors.Dim.Sprintf("(context: %s)", FormatCompactNumber(model.ContextLength))
+
+	if model.Description != "" {
+		descStr := config.Colors.Label.Sprint(" - " + model.Description)
+		fmt.Printf("%s %s %s%s\n", selectedStr, modelStr, contextStr, descStr)
+	} else {
+		fmt.Printf("%s %s %s\n", selectedStr, modelStr, contextStr)
+	}
 	return model.ID, nil
 }
 
@@ -179,7 +219,7 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 
 	// If line is empty, show numbered list of all models
 	if lineStr == "" {
-		return mc.formatCompletions(mc.models[:min(20, len(mc.models))], false), 0
+		return mc.formatCompletions(mc.models[:min(20, len(mc.models))], true), 0
 	}
 
 	// Find models that start with the typed text (prefix matches)
@@ -225,8 +265,7 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 
 // formatCompletion formats a single completion with context info
 func (mc *modelCompleter) formatCompletion(modelText string, contextLength int) string {
-	dimmed := color.New(color.FgHiBlack)
-	contextInfo := dimmed.Sprintf("·%s", FormatCompactNumber(contextLength))
+	contextInfo := config.Colors.Dim.Sprintf("·%s", FormatCompactNumber(contextLength))
 	return modelText + contextInfo
 }
 

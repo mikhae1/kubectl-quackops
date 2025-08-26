@@ -58,12 +58,12 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	generateOptions := []llms.CallOption{}
 
 	// Use default temperature values - no configuration needed
-	if cfg.Provider == "openai" && strings.Contains(cfg.Model, "gpt-5") {
+	if strings.Contains(cfg.Model, "gpt-5") {
 		// gpt-5 models require temperature 1.0
 		generateOptions = append(generateOptions, llms.WithTemperature(1.0))
 	} else {
 		// All other models use temperature 0.0 for deterministic responses
-		generateOptions = append(generateOptions, llms.WithTemperature(0.0))
+		// generateOptions = append(generateOptions, llms.WithTemperature(0.0))
 	}
 
 	var mcpToolReserve int = 0
@@ -113,7 +113,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Color("green", "bold")
 	s.Writer = os.Stderr
-	s.Suffix = fmt.Sprintf(" 🤖 Waiting for %s/%s response... [↑%s tokens]",
+	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response... [↑%s tokens]",
 		cfg.Provider, cfg.Model, config.Colors.Dim.Sprint(lib.FormatCompactNumber(outgoingTokens)))
 
 	var stopOnce sync.Once
@@ -247,6 +247,26 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 					break
 				}
 				choice := resp.Choices[0]
+
+				// Display any text content that comes with tool calls on the first iteration
+				if choice.Content != "" {
+					stopOnce.Do(func() {
+						s.Stop()
+						fmt.Fprint(os.Stderr, "\r\033[2K")
+						fmt.Fprint(os.Stdout, "\n")
+					})
+
+					if cfg.DisableMarkdownFormat {
+						fmt.Fprintln(os.Stdout, choice.Content)
+					} else {
+						w := formatter.NewStreamingWriter(os.Stdout)
+						_, _ = w.Write([]byte(choice.Content))
+						_ = w.Flush()
+						_ = w.Close()
+					}
+					fmt.Fprintln(os.Stdout)
+				}
+
 				if len(choice.ToolCalls) > 0 {
 					if toolCallCount >= maxToolCalls {
 						logger.Log("warn", "Maximum MCP tool call limit (%d) reached, stopping tool execution", maxToolCalls)
@@ -255,7 +275,28 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 					logger.Log("info", "Processing MCP tool call: iteration %d of %d...", toolCallCount+1, maxToolCalls)
 
+					// Append the assistant message containing tool_calls so providers can match tool_call_id
+					assistantParts := make([]llms.ContentPart, 0, len(choice.ToolCalls))
+					for i := range choice.ToolCalls {
+						tc := choice.ToolCalls[i]
+						if tc.FunctionCall == nil {
+							logger.Log("warn", "Tool call %s has no function call data", tc.ID)
+							continue
+						}
+						if tc.ID == "" {
+							tc.ID = fmt.Sprintf("tool_%s_%d", tc.FunctionCall.Name, time.Now().UnixNano())
+							logger.Log("debug", "Generated missing tool call ID: %s", tc.ID)
+						}
+						assistantParts = append(assistantParts, tc)
+						choice.ToolCalls[i] = tc
+					}
+					if len(assistantParts) > 0 {
+						assistantMsg := llms.MessageContent{Role: llms.ChatMessageTypeAI, Parts: assistantParts}
+						messages = append(messages, assistantMsg)
+					}
+
 					for _, tc := range choice.ToolCalls {
+						logger.Log("debug", "Processing tool call: ID=%q, FunctionCall=%v", tc.ID, tc.FunctionCall != nil)
 						if tc.FunctionCall == nil {
 							logger.Log("warn", "Tool call %s has no function call data", tc.ID)
 							continue

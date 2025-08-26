@@ -25,6 +25,7 @@ QuackOps goes beyond simple question-and-answer functionality, offering natural 
   - **[Ollama](https://ollama.com/):** Run LLMs locally for maximum privacy.
   - **[Google Gemini](https://gemini.google.com/):** Handle massive outputs with large context windows.
   - **[OpenAI](https://openai.com/):** Leverage the latest models for cutting-edge diagnostics.
+  - **[Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/):** Enterprise-grade OpenAI on Azure.
   - **[Anthropic](https://anthropic.com/):** Get reliable, technically sound analysis.
 
 - **Model Context Protocol (MCP) for Tooling:**
@@ -247,6 +248,32 @@ For users seeking the most advanced AI capabilities.
    kubectl quackops -p openai -m gpt-5-mini
    ```
 
+### Azure OpenAI: Enterprise-grade OpenAI on Azure
+
+**Benefits:**
+
+- Enterprise compliance and data residency on Azure
+- Private networking and RBAC with Azure resource controls
+- OpenAI-compatible API surface via Azure deployments
+
+**Getting Started:**
+
+1. Create an Azure OpenAI resource and deploy a model (e.g., a deployment of GPT-4o-mini).
+2. Set environment variables:
+   ```sh
+   export QU_AZ_OPENAI_API_KEY=<YOUR-AZURE-OPENAI-API-KEY>
+   export QU_AZ_OPENAI_BASE_URL="https://<your-resource-name>.openai.azure.com"
+   ```
+   - Aliases supported: `OPENAI_API_KEY` and `OPENAI_BASE_URL` can also be used.
+3. Run QuackOps with the Azure provider, using your deployment name as the model:
+   ```sh
+   kubectl quackops -p azopenai -m <your-deployment-name>
+   ```
+
+Notes:
+- If you use embeddings, set `QU_EMBEDDING_MODEL` to your Azure embedding deployment name.
+- When a custom base URL is set, streaming is automatically disabled for compatibility.
+
 ### Google: Large Contexts
 
 For users requiring extensive context analysis and handling large command outputs.
@@ -328,8 +355,8 @@ QU_MCP_CLIENT=true
 | `QU_OPENAI_BASE_URL` | string |  | Custom base URL for OpenAI-compatible APIs (e.g., for DeepSeek, local OpenAI-compatible servers). When set, streaming is automatically disabled for OpenAI to improve compatibility with non-standard SSE implementations. |
 | `GOOGLE_API_KEY` | string |  | Google AI API key (required for `google` provider) |
 | `ANTHROPIC_API_KEY` | string |  | Anthropic API key (required for `anthropic` provider) |
-| `QU_LLM_PROVIDER` | string | `ollama` | LLM model provider (`ollama`, `openai`, `google`, `anthropic`) |
-| `QU_LLM_MODEL` | string | provider-dependent | LLM model to use. Defaults: `lla3.1` (ollama), `gpt-5-mini` (openai), `gemini-2.5-flash-preview-04-17` (google), `claude-3-7-sonnet-latest` (anthropic) |
+| `QU_LLM_PROVIDER` | string | `ollama` | LLM model provider (`ollama`, `openai`, `azopenai`, `google`, `anthropic`) |
+| `QU_LLM_MODEL` | string | provider-dependent | LLM model to use. Defaults: `lla3.1` (ollama), `gpt-5-mini` (openai), `gpt-4o-mini` (azopenai), `gemini-2.5-flash-preview-04-17` (google), `claude-3-7-sonnet-latest` (anthropic) |
 | `QU_OLLAMA_BASE_URL` | string | `http://localhost:11434` | Ollama server base URL (used with `ollama` provider) |
 | `QU_SAFE_MODE` | bool | `false` | Require confirmation before executing commands |
 | `QU_RETRIES` | int | `3` | Number of retries for kubectl commands |
@@ -375,7 +402,7 @@ QU_MCP_CLIENT=true
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-p, --provider` | LLM model provider (e.g., 'ollama', 'openai', 'google', 'anthropic') | `ollama` |
+| `-p, --provider` | LLM model provider (e.g., 'ollama', 'openai', 'azopenai', 'google', 'anthropic') | `ollama` |
 | `-m, --model` | LLM model to use | Provider-dependent |
 | `-u, --api-url` | URL for LLM API (used with 'ollama' provider) | `http://localhost:11434` |
 | `-s, --safe-mode` | Enable safe mode to prevent executing commands without confirmation | `false` |

@@ -38,7 +38,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai', 'google', 'anthropic')")
+	cmd.Flags().StringVarP(&cfg.Provider, "provider", "p", cfg.Provider, "LLM model provider (e.g., 'ollama', 'openai', 'azopenai', 'google', 'anthropic')")
 	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "LLM model to use")
 	cmd.Flags().StringVarP(&cfg.OllamaApiURL, "api-url", "u", cfg.OllamaApiURL, "URL for LLM API, used with 'ollama' provider")
 	cmd.Flags().BoolVarP(&cfg.SafeMode, "safe-mode", "s", cfg.SafeMode, "Enable safe mode to prevent executing commands without confirmation")
@@ -498,12 +498,12 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		if m == "" {
 			m = "auto"
 		}
-		
+
 		// Check if there are any additional arguments (for future extension)
 		// For now, always launch the interactive selector
 		fmt.Printf("Current: %s/%s\n", prov, m)
 		fmt.Println("Launching interactive model selector...")
-		
+
 		// Create model selector and launch interactive selection
 		selector := lib.NewModelSelector(cfg)
 		selectedModel, err := selector.SelectModel()
@@ -515,14 +515,14 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 			}
 			return true, "model"
 		}
-		
+
 		// Update configuration with selected model
 		cfg.Model = selectedModel
-		fmt.Printf("Model updated to: %s\n", selectedModel)
-		
+		fmt.Printf("Model updated to: %s\n", config.Colors.Magenta.Sprint(selectedModel))
+
 		// Auto-detect max tokens for the new model
 		cfg.ConfigDetectMaxTokens()
-		
+
 		return true, "model"
 	case "/servers":
 		if cfg.MCPClientEnabled {
@@ -1013,11 +1013,8 @@ func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
 
 	mcpContext.WriteString("**Instructions for Tool Usage:**\n")
 	mcpContext.WriteString("- These tools can be called automatically to gather real-time diagnostics\n")
-	mcpContext.WriteString("- When analyzing cluster issues, use relevant MCP tools to get current state information\n")
+	mcpContext.WriteString("- When analyzing Kubernetes issues, use relevant MCP tools to get current state information\n")
 	mcpContext.WriteString("- Tool results will be automatically fed back into the analysis\n")
-	if cfg.MCPStrict {
-		mcpContext.WriteString("- Operating in strict MCP mode - no local fallbacks\n")
-	}
 	mcpContext.WriteString("\n")
 
 	mcpContext.WriteString("---\n\n")

@@ -217,6 +217,34 @@ func GetOpenAIBaseURL() string {
 	return ""
 }
 
+// GetAzOpenAIBaseURL returns the Azure OpenAI base URL from environment variables
+// Supports both QU_AZ_OPENAI_BASE_URL and OPENAI_BASE_URL (as alias)
+func GetAzOpenAIBaseURL() string {
+	// Check QU_AZ_OPENAI_BASE_URL first (primary)
+	if baseURL := os.Getenv("QU_AZ_OPENAI_BASE_URL"); baseURL != "" {
+		return baseURL
+	}
+	// Check OPENAI_BASE_URL as alias
+	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+		return baseURL
+	}
+	return ""
+}
+
+// GetAzOpenAIAPIKey returns the Azure OpenAI API key from environment variables
+// Supports both QU_AZ_OPENAI_API_KEY and OPENAI_API_KEY (as alias)
+func GetAzOpenAIAPIKey() string {
+	// Check QU_AZ_OPENAI_API_KEY first (primary)
+	if apiKey := os.Getenv("QU_AZ_OPENAI_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	// Check OPENAI_API_KEY as alias
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	return ""
+}
+
 // LoadConfig initializes the application configuration
 func LoadConfig() *Config {
 	// Load configuration from config file first
@@ -240,6 +268,11 @@ func LoadConfig() *Config {
 		// https://platform.openai.com/docs/models/gpt-4o-mini
 		defaultMaxTokens = 128000
 		defaultModel = "gpt-5-mini"
+		defaultEmbeddingModel = "text-embedding-3-small"
+	} else if provider == "azopenai" {
+		// Azure OpenAI defaults - similar to OpenAI but requires deployment names
+		defaultMaxTokens = 128000
+		defaultModel = "gpt-4o-mini"
 		defaultEmbeddingModel = "text-embedding-3-small"
 	} else if provider == "anthropic" {
 		defaultMaxTokens = 200000
@@ -334,7 +367,7 @@ func LoadConfig() *Config {
 
 		// Benchmark configuration
 		BenchmarkEnabled:        getEnvArg("QU_BENCHMARK_ENABLED", false).(bool),
-		BenchmarkProviders:      getEnvArg("QU_BENCHMARK_PROVIDERS", []string{"openai", "anthropic", "google", "ollama"}).([]string),
+		BenchmarkProviders:      getEnvArg("QU_BENCHMARK_PROVIDERS", []string{"openai", "azopenai", "anthropic", "google", "ollama"}).([]string),
 		BenchmarkModels:         getEnvArg("QU_BENCHMARK_MODELS", []string{"gpt-4o-mini", "claude-3-haiku", "gemini-2.5-flash", "llama3.1"}).([]string),
 		BenchmarkIterations:     getEnvArg("QU_BENCHMARK_ITERATIONS", 3).(int),
 		BenchmarkTimeout:        time.Duration(getEnvArg("QU_BENCHMARK_TIMEOUT", 120).(int)) * time.Second,
@@ -746,7 +779,7 @@ var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
 
 %s
 
-## Task
+## User Task
 %s
 
 ## Guidelines
@@ -766,7 +799,7 @@ func (cfg *Config) ConfigDetectMaxTokens() {
 	}
 
 	// Only attempt auto-detection for supported providers
-	if cfg.Provider != "openai" && cfg.Provider != "google" && cfg.Provider != "anthropic" && cfg.Provider != "ollama" {
+	if cfg.Provider != "openai" && cfg.Provider != "azopenai" && cfg.Provider != "google" && cfg.Provider != "anthropic" && cfg.Provider != "ollama" {
 		return
 	}
 
@@ -790,6 +823,13 @@ func (cfg *Config) ConfigDetectMaxTokens() {
 				// Standard OpenAI model, use default OpenAI base URL
 				baseURL = "https://api.openai.com"
 			}
+		}
+	} else if cfg.Provider == "azopenai" {
+		baseURL = GetAzOpenAIBaseURL()
+		if baseURL == "" {
+			// Azure OpenAI requires a custom endpoint, cannot use default
+			fmt.Fprintf(os.Stderr, "Warning: Azure OpenAI requires QU_AZ_OPENAI_BASE_URL or OPENAI_BASE_URL environment variable\n")
+			return
 		}
 	} else if cfg.Provider == "google" {
 		baseURL = os.Getenv("QU_GOOGLE_BASE_URL")

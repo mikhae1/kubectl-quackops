@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,7 @@ type ModelMetadata struct {
 	ContextLength       int    `json:"context_length"`
 	MaxTokens           int    `json:"max_tokens"`
 	MaxCompletionTokens int    `json:"max_completion_tokens"`
+	Description         string `json:"description,omitempty"`
 }
 
 // OpenRouterModelsResponse represents the OpenRouter API models response
@@ -29,6 +31,7 @@ type OpenRouterModelsResponse struct {
 		Name                string `json:"name"`
 		ContextLength       int    `json:"context_length"`
 		MaxCompletionTokens int    `json:"max_completion_tokens"`
+		Description         string `json:"description,omitempty"`
 	} `json:"data"`
 }
 
@@ -43,11 +46,29 @@ type OpenAIModelsResponse struct {
 	} `json:"data"`
 }
 
+// AzureOpenAIModelsResponse represents the Azure OpenAI API models response
+type AzureOpenAIModelsResponse struct {
+	Object string `json:"object"`
+	Data   []struct {
+		ID        string                 `json:"id"`
+		Object    string                 `json:"object"`
+		MaxTokens int                    `json:"max_tokens"`
+		Features  map[string]interface{} `json:"features"` // Azure OpenAI returns features as object, not array
+		Limits    *struct {
+			MaxPromptTokens     int `json:"max_prompt_tokens,omitempty"`
+			MaxTotalTokens      int `json:"max_total_tokens,omitempty"`
+			MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
+		} `json:"limits,omitempty"`
+		Description string `json:"description,omitempty"`
+	} `json:"data"`
+}
+
 // MetadataService provides model metadata detection
 type MetadataService struct {
 	httpClient *http.Client
-	cache      map[string]*ModelMetadata
+	cache      map[string]cacheEntry
 	cacheTTL   time.Duration
+	mu         sync.RWMutex
 }
 
 // NewMetadataService creates a new metadata service
@@ -56,9 +77,34 @@ func NewMetadataService(timeout time.Duration, cacheTTL time.Duration) *Metadata
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
-		cache:    make(map[string]*ModelMetadata),
+		cache:    make(map[string]cacheEntry),
 		cacheTTL: cacheTTL,
 	}
+}
+
+type cacheEntry struct {
+	metadata  *ModelMetadata
+	expiresAt time.Time
+}
+
+func (ms *MetadataService) doRequest(method, url string, body io.Reader, headers map[string]string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(context.Background(), method, url, body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create request: %w", err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
+	}
+	return b, resp.StatusCode, nil
 }
 
 // GetModelContextLength retrieves the context length for a given model
@@ -66,9 +112,15 @@ func (ms *MetadataService) GetModelContextLength(provider, model, baseURL string
 	cacheKey := fmt.Sprintf("%s:%s:%s", provider, model, baseURL)
 
 	// Check cache first
+	ms.mu.RLock()
 	if cached, exists := ms.cache[cacheKey]; exists {
-		return cached.ContextLength, nil
+		if cached.expiresAt.IsZero() || time.Now().Before(cached.expiresAt) {
+			ctx := cached.metadata.ContextLength
+			ms.mu.RUnlock()
+			return ctx, nil
+		}
 	}
+	ms.mu.RUnlock()
 
 	var metadata *ModelMetadata
 	var err error
@@ -80,6 +132,9 @@ func (ms *MetadataService) GetModelContextLength(provider, model, baseURL string
 		} else {
 			metadata, err = ms.fetchOpenAIMetadata(model, baseURL)
 		}
+	case "azopenai":
+		// Azure OpenAI uses the same API structure as OpenAI
+		metadata, err = ms.fetchAzureOpenAIMetadata(model, baseURL)
 	case "google":
 		metadata, err = ms.fetchGoogleMetadata(model, baseURL)
 	case "anthropic":
@@ -95,7 +150,13 @@ func (ms *MetadataService) GetModelContextLength(provider, model, baseURL string
 	}
 
 	// Cache the result
-	ms.cache[cacheKey] = metadata
+	ms.mu.Lock()
+	var exp time.Time
+	if ms.cacheTTL > 0 {
+		exp = time.Now().Add(ms.cacheTTL)
+	}
+	ms.cache[cacheKey] = cacheEntry{metadata: metadata, expiresAt: exp}
+	ms.mu.Unlock()
 
 	return metadata.ContextLength, nil
 }
@@ -109,6 +170,9 @@ func (ms *MetadataService) GetModelList(provider, baseURL string) ([]*ModelMetad
 		} else {
 			return ms.fetchOpenAIModelList(baseURL)
 		}
+	case "azopenai":
+		// Azure OpenAI uses the same API structure as OpenAI
+		return ms.fetchAzureOpenAIModelList(baseURL)
 	case "google":
 		return ms.fetchGoogleModelList(baseURL)
 	case "anthropic":
@@ -130,30 +194,18 @@ func (ms *MetadataService) fetchOpenRouterMetadata(model, baseURL string) (*Mode
 		apiURL = strings.TrimSuffix(baseURL, "/") + "/api/v1/models"
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	headers := map[string]string{"Content-Type": "application/json"}
+	if apiKey := os.Getenv("OPENROUTER_API_KEY"); apiKey != "" {
+		headers["Authorization"] = "Bearer " + apiKey
+	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		headers["Authorization"] = "Bearer " + apiKey
 	}
-
-	// Add authorization if available
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
+	body, status, err := ms.doRequest("GET", apiURL, nil, headers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", status)
 	}
 
 	var response OpenRouterModelsResponse
@@ -183,14 +235,60 @@ func (ms *MetadataService) fetchOpenAIMetadata(model, baseURL string) (*ModelMet
 
 	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1/models"
 
+	headers := map[string]string{"Content-Type": "application/json"}
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		headers["Authorization"] = "Bearer " + apiKey
+	}
+	body, status, err := ms.doRequest("GET", apiURL, nil, headers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", status)
+	}
+
+	var response OpenAIModelsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Find the requested model
+	for _, modelData := range response.Data {
+		if modelData.ID == model {
+			return &ModelMetadata{
+				ID:            modelData.ID,
+				ContextLength: modelData.MaxTokens,
+				MaxTokens:     modelData.MaxTokens,
+			}, nil
+		}
+	}
+	fallback := getDefaultContextLengthForModel(model)
+	if fallback > 0 {
+		return &ModelMetadata{ID: model, ContextLength: fallback, MaxTokens: fallback}, nil
+	}
+	return nil, fmt.Errorf("model %s not found", model)
+}
+
+// fetchAzureOpenAIMetadata fetches model metadata from Azure OpenAI API
+func (ms *MetadataService) fetchAzureOpenAIMetadata(model, baseURL string) (*ModelMetadata, error) {
+	if baseURL == "" {
+		return nil, fmt.Errorf("Azure OpenAI requires a base URL")
+	}
+
+	// Azure OpenAI API endpoint format: https://{resource-name}.openai.azure.com/openai/deployments/{deployment-name}/models
+	// But for getting model info, we can use the general models endpoint
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/openai/models?api-version=2023-05-15"
+
 	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Add authorization if available
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+	// Azure OpenAI uses api-key header instead of Authorization Bearer
+	if apiKey := os.Getenv("QU_AZ_OPENAI_API_KEY"); apiKey != "" {
+		req.Header.Set("api-key", apiKey)
+	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		req.Header.Set("api-key", apiKey)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -209,23 +307,196 @@ func (ms *MetadataService) fetchOpenAIMetadata(model, baseURL string) (*ModelMet
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	var response OpenAIModelsResponse
+	var response AzureOpenAIModelsResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// Find the requested model
+	// Find the requested model (in Azure OpenAI, this is usually the deployment name)
 	for _, modelData := range response.Data {
 		if modelData.ID == model {
+			// Priority order: limits.max_total_tokens -> limits.max_prompt_tokens -> max_tokens -> fallback
+			contextLength := 0
+			if modelData.Limits != nil {
+				if modelData.Limits.MaxCompletionTokens > 0 {
+					contextLength = modelData.Limits.MaxCompletionTokens
+				} else if modelData.Limits.MaxTotalTokens > 0 {
+					contextLength = modelData.Limits.MaxTotalTokens
+				} else if modelData.Limits.MaxPromptTokens > 0 {
+					contextLength = modelData.Limits.MaxPromptTokens
+				}
+			}
+			if contextLength == 0 && modelData.MaxTokens > 0 {
+				contextLength = modelData.MaxTokens
+			}
+			if contextLength == 0 {
+				contextLength = getDefaultContextLengthForModel(modelData.ID)
+			}
 			return &ModelMetadata{
 				ID:            modelData.ID,
-				ContextLength: modelData.MaxTokens,
-				MaxTokens:     modelData.MaxTokens,
+				ContextLength: contextLength,
+				MaxTokens:     contextLength,
+				Description:   modelData.Description,
 			}, nil
 		}
 	}
 
-	return nil, fmt.Errorf("model %s not found", model)
+	// If not found by exact match, try to use default context length based on known model families
+	contextLength := getDefaultContextLengthForModel(model)
+	return &ModelMetadata{
+		ID:            model,
+		ContextLength: contextLength,
+		MaxTokens:     contextLength,
+		Description:   "", // No description available for fallback case
+	}, nil
+}
+
+// fetchAzureOpenAIModelList fetches the list of available models from Azure OpenAI
+func (ms *MetadataService) fetchAzureOpenAIModelList(baseURL string) ([]*ModelMetadata, error) {
+	if baseURL == "" {
+		return nil, fmt.Errorf("Azure OpenAI requires a base URL")
+	}
+
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/openai/models?api-version=2023-05-15"
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Azure OpenAI uses api-key header instead of Authorization Bearer
+	if apiKey := os.Getenv("QU_AZ_OPENAI_API_KEY"); apiKey != "" {
+		req.Header.Set("api-key", apiKey)
+	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		req.Header.Set("api-key", apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ms.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var response AzureOpenAIModelsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	var models []*ModelMetadata
+	for _, modelData := range response.Data {
+		// Priority order: limits.max_total_tokens -> limits.max_prompt_tokens -> max_tokens -> fallback
+		contextLength := 0
+		if modelData.Limits != nil {
+			if modelData.Limits.MaxTotalTokens > 0 {
+				contextLength = modelData.Limits.MaxTotalTokens
+			} else if modelData.Limits.MaxPromptTokens > 0 {
+				contextLength = modelData.Limits.MaxPromptTokens
+			}
+		}
+		if contextLength == 0 && modelData.MaxTokens > 0 {
+			contextLength = modelData.MaxTokens
+		}
+		if contextLength == 0 {
+			contextLength = getDefaultContextLengthForModel(modelData.ID)
+		}
+		models = append(models, &ModelMetadata{
+			ID:            modelData.ID,
+			ContextLength: contextLength,
+			MaxTokens:     contextLength,
+			Description:   modelData.Description,
+		})
+	}
+
+	return models, nil
+}
+
+// getDefaultContextLengthForModel returns a reasonable default context length based on model name
+func getDefaultContextLengthForModel(model string) int {
+	modelLower := strings.ToLower(strings.TrimSpace(model))
+	// OpenAI - modern families
+	if strings.Contains(modelLower, "gpt-5") {
+		return 128000
+	}
+	if strings.Contains(modelLower, "gpt-4o") || strings.Contains(modelLower, "gpt-4.1") {
+		return 128000
+	}
+	if strings.Contains(modelLower, "gpt-4") {
+		if strings.Contains(modelLower, "32k") {
+			return 32768
+		}
+		if strings.Contains(modelLower, "turbo") || strings.Contains(modelLower, "preview") || strings.Contains(modelLower, "mini") {
+			return 128000
+		}
+		return 8192
+	}
+	if strings.Contains(modelLower, "gpt-3.5") {
+		if strings.Contains(modelLower, "16k") {
+			return 16384
+		}
+		return 4096
+	}
+	// Google Gemini
+	if strings.Contains(modelLower, "gemini") {
+		if strings.Contains(modelLower, "2.5") {
+			return 2000000
+		}
+		if strings.Contains(modelLower, "1.5") {
+			if strings.Contains(modelLower, "pro") {
+				return 2000000
+			}
+			return 1000000
+		}
+		return 1000000
+	}
+	// Anthropic Claude 3.x
+	if strings.Contains(modelLower, "claude") {
+		return 200000
+	}
+	// Meta Llama
+	if strings.Contains(modelLower, "llama") {
+		if strings.Contains(modelLower, "3.2") || strings.Contains(modelLower, "3.1") {
+			return 128000
+		}
+		if strings.Contains(modelLower, "3") {
+			return 8192
+		}
+		return 4096
+	}
+	// Mistral
+	if strings.Contains(modelLower, "mistral") || strings.Contains(modelLower, "mixtral") {
+		if strings.Contains(modelLower, "large") {
+			return 128000
+		}
+		return 32768
+	}
+	// Qwen
+	if strings.Contains(modelLower, "qwen") {
+		return 131072
+	}
+	// GLM (Zhipu/ChatGLM)
+	if strings.Contains(modelLower, "glm") {
+		return 128000
+	}
+	// DeepSeek
+	if strings.Contains(modelLower, "deepseek") {
+		return 131072
+	}
+	// Cohere Command family (via OpenRouter)
+	if strings.Contains(modelLower, "command") {
+		return 128000
+	}
+	// Default for unknown models (modern, conservative)
+	return 32768
 }
 
 // GoogleModelResponse represents a single Google (Gemini) model response
@@ -542,6 +813,7 @@ func (ms *MetadataService) fetchOpenRouterModelList(baseURL string) ([]*ModelMet
 			ID:                  modelData.ID,
 			ContextLength:       modelData.ContextLength,
 			MaxCompletionTokens: modelData.MaxCompletionTokens,
+			Description:         modelData.Description,
 		})
 	}
 
@@ -654,10 +926,7 @@ func (ms *MetadataService) fetchGoogleModelList(baseURL string) ([]*ModelMetadat
 		}
 
 		// Extract model ID from name (e.g., "models/gemini-pro" -> "gemini-pro")
-		modelID := model.Name
-		if strings.HasPrefix(modelID, "models/") {
-			modelID = strings.TrimPrefix(modelID, "models/")
-		}
+		modelID := strings.TrimPrefix(model.Name, "models/")
 
 		models = append(models, &ModelMetadata{
 			ID:            modelID,
@@ -731,12 +1000,12 @@ func (ms *MetadataService) fetchAnthropicModelList(baseURL string) ([]*ModelMeta
 // OllamaModelsResponse represents the Ollama API models list response
 type OllamaModelsResponse struct {
 	Models []struct {
-		Name         string `json:"name"`
-		Model        string `json:"model"`
-		ModifiedAt   string `json:"modified_at"`
-		Size         int64  `json:"size"`
-		Digest       string `json:"digest"`
-		Details      map[string]interface{} `json:"details"`
+		Name       string                 `json:"name"`
+		Model      string                 `json:"model"`
+		ModifiedAt string                 `json:"modified_at"`
+		Size       int64                  `json:"size"`
+		Digest     string                 `json:"digest"`
+		Details    map[string]interface{} `json:"details"`
 	} `json:"models"`
 }
 
@@ -776,7 +1045,7 @@ func (ms *MetadataService) fetchOllamaModelList(baseURL string) ([]*ModelMetadat
 	for _, m := range r.Models {
 		// Use a reasonable default context length for Ollama models
 		ctx := 4096
-		
+
 		// Try to get context length from model details if available
 		if m.Details != nil {
 			for k, v := range m.Details {
