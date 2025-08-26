@@ -2,12 +2,12 @@ package lib
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/chzyer/readline"
+	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
 )
@@ -28,7 +28,7 @@ func NewModelSelector(cfg *config.Config) *ModelSelector {
 
 // SelectModel launches an interactive model selection menu
 func (ms *ModelSelector) SelectModel() (string, error) {
-	baseURL := ms.getBaseURL()
+	baseURL := config.GetProviderBaseURL(ms.cfg)
 
 	// Fetch models from provider
 	models, err := ms.metadataService.GetModelList(ms.cfg.Provider, baseURL)
@@ -48,7 +48,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 	// Create readline instance with custom completer
 	completer := &modelCompleter{models: models}
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:       "Type to search models (or press Tab): ",
+		Prompt:       config.Colors.Info.Sprint("Choose a model") + " (or press Tab): ",
 		AutoComplete: completer,
 		EOFPrompt:    "exit",
 	})
@@ -58,7 +58,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 	defer rl.Close()
 
 	fmt.Printf("\nAvailable models for provider '%s':\n", strings.ToUpper(ms.cfg.Provider))
-	fmt.Println("Type to search, or press Tab to see all models. Press Ctrl+C to cancel.")
+	fmt.Println("Type and press Enter to search, press Tab for auto-complete. Press Ctrl+C to cancel.")
 	fmt.Println()
 
 	var lastPartialMatches []*metadata.ModelMetadata
@@ -128,21 +128,44 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 			fmt.Printf("%s\n", config.Colors.Info.Sprint("Multiple matches found:"))
 			for i, model := range partialMatches {
 				// Format the number with accent color
-				numStr := config.Colors.Accent.Sprintf("%d.", i+1)
+				numStr := config.Colors.Info.Sprintf("%d.", i+1)
 
 				// Format model ID with info color
-				modelStr := config.Colors.Magenta.Sprint(model.ID)
+				modelStr := config.Colors.Model.Sprint(model.ID)
 
-				// Format context with dim color
-				contextStr := config.Colors.Ok.Sprintf("· %s", FormatCompactNumber(model.ContextLength))
+				contextStr := fmt.Sprintf("· %s", FormatCompactNumber(model.ContextLength))
+
+				// Add pricing info if available
+				pricingStr := ""
+				pricing := FormatPricingInfo(model.PromptPrice, model.CompletionPrice, false)
+				if pricing != "" {
+					// Color pricing based on cost level
+					var pricingColor *color.Color
+					if model.PromptPrice > 0.00001 { // >$10/1M tokens
+						pricingColor = config.Colors.Error
+					} else if model.PromptPrice > 0.000001 { // >$1/1M tokens
+						pricingColor = config.Colors.Warn
+					} else {
+						pricingColor = config.Colors.Primary
+					}
+					pricingStr = pricingColor.Sprintf("· %s", pricing)
+				}
 
 				if model.Description != "" {
 					// Wrap long descriptions
 					description := TrimText(model.Description, 80)
 					descStr := config.Colors.Dim.Sprint(" - " + description)
-					fmt.Printf("  %s %s %s%s\n", numStr, modelStr, contextStr, descStr)
+					if pricingStr != "" {
+						fmt.Printf("  %s %s %s %s%s\n", numStr, modelStr, contextStr, pricingStr, descStr)
+					} else {
+						fmt.Printf("  %s %s %s%s\n", numStr, modelStr, contextStr, descStr)
+					}
 				} else {
-					fmt.Printf("  %s %s %s\n", numStr, modelStr, contextStr)
+					if pricingStr != "" {
+						fmt.Printf("  %s %s %s %s\n", numStr, modelStr, contextStr, pricingStr)
+					} else {
+						fmt.Printf("  %s %s %s\n", numStr, modelStr, contextStr)
+					}
 				}
 			}
 			fmt.Printf("%s\n", config.Colors.Dim.Sprint("Please be more specific or type a number to select."))
@@ -155,56 +178,36 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 	}
 }
 
-// getBaseURL determines the base URL for the current provider
-func (ms *ModelSelector) getBaseURL() string {
-	switch ms.cfg.Provider {
-	case "openai":
-		if baseURL := config.GetOpenAIBaseURL(); baseURL != "" {
-			return baseURL
-		}
-		if strings.Contains(ms.cfg.Model, "/") || strings.Contains(ms.cfg.Model, "openrouter") {
-			return "https://openrouter.ai/api/v1"
-		}
-		return "https://api.openai.com"
-	case "azopenai":
-		if baseURL := config.GetAzOpenAIBaseURL(); baseURL != "" {
-			return baseURL
-		}
-		// Azure OpenAI requires a configured endpoint - no default
-		return ""
-	case "google":
-		if baseURL := os.Getenv("QU_GOOGLE_BASE_URL"); baseURL != "" {
-			return baseURL
-		}
-		return "https://generativelanguage.googleapis.com"
-	case "anthropic":
-		if baseURL := os.Getenv("QU_ANTHROPIC_BASE_URL"); baseURL != "" {
-			return baseURL
-		}
-		return "https://api.anthropic.com"
-	case "ollama":
-		if baseURL := ms.cfg.OllamaApiURL; baseURL != "" {
-			return baseURL
-		}
-		return "http://localhost:11434"
-	default:
-		return ""
-	}
-}
+// getBaseURL centralized in config.GetProviderBaseURL
 
 // selectModel prints selection info and returns the model ID
 func (ms *ModelSelector) selectModel(model *metadata.ModelMetadata) (string, error) {
 	// Format with colors
-	selectedStr := config.Colors.Ok.Sprint("Selected:")
+	selectedStr := config.Colors.Info.Sprint("Selected:")
 	modelStr := config.Colors.Accent.Sprint(model.ID)
-	contextStr := config.Colors.Dim.Sprintf("(context: %s)", FormatCompactNumber(model.ContextLength))
+	contextStr := config.Colors.Primary.Sprintf("(context: %s)", FormatCompactNumber(model.ContextLength))
 
 	if model.Description != "" {
-		descStr := config.Colors.Label.Sprint(" - " + model.Description)
+		descStr := " - " + config.Colors.Light.Sprint(model.Description)
 		fmt.Printf("%s %s %s%s\n", selectedStr, modelStr, contextStr, descStr)
 	} else {
 		fmt.Printf("%s %s %s\n", selectedStr, modelStr, contextStr)
 	}
+
+	// Show detailed pricing information if available
+	pricingInfo := FormatPricingInfo(model.PromptPrice, model.CompletionPrice, true)
+	if pricingInfo != "" {
+		var pricingColor *color.Color
+		if model.PromptPrice > 0.00001 { // >$10/1M tokens
+			pricingColor = config.Colors.Warn
+		} else if model.PromptPrice > 0.000001 { // >$1/1M tokens
+			pricingColor = config.Colors.Info
+		} else {
+			pricingColor = config.Colors.Ok
+		}
+		fmt.Printf("%s %s\n", config.Colors.Dim.Sprint("Pricing:"), pricingColor.Sprint(pricingInfo))
+	}
+
 	return model.ID, nil
 }
 
@@ -244,7 +247,7 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 		}
 		remaining := model.ID[len(lineStr):]
 		if remaining != "" {
-			completions = append(completions, []rune(mc.formatCompletion(remaining, model.ContextLength)))
+			completions = append(completions, []rune(mc.formatCompletion(remaining, model.ContextLength, model.PromptPrice, model.CompletionPrice)))
 		}
 	}
 
@@ -253,7 +256,7 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 		if len(completions) >= 15 {
 			break
 		}
-		completions = append(completions, []rune(mc.formatCompletion(model.ID, model.ContextLength)))
+		completions = append(completions, []rune(mc.formatCompletion(model.ID, model.ContextLength, model.PromptPrice, model.CompletionPrice)))
 	}
 
 	if len(completions) >= 15 {
@@ -263,9 +266,17 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 	return completions, len(lineStr)
 }
 
-// formatCompletion formats a single completion with context info
-func (mc *modelCompleter) formatCompletion(modelText string, contextLength int) string {
+// formatCompletion formats a single completion with context and pricing info
+func (mc *modelCompleter) formatCompletion(modelText string, contextLength int, promptPrice, completionPrice float64) string {
 	contextInfo := config.Colors.Dim.Sprintf("·%s", FormatCompactNumber(contextLength))
+
+	// Add pricing info if available
+	pricing := FormatPricingInfo(promptPrice, completionPrice, false)
+	if pricing != "" {
+		pricingInfo := config.Colors.Dim.Sprintf("·%s", pricing)
+		return modelText + contextInfo + pricingInfo
+	}
+
 	return modelText + contextInfo
 }
 
@@ -274,7 +285,7 @@ func (mc *modelCompleter) formatCompletions(models []*metadata.ModelMetadata, wi
 	var completions [][]rune
 	for _, model := range models {
 		if withContext {
-			completions = append(completions, []rune(mc.formatCompletion(model.ID, model.ContextLength)))
+			completions = append(completions, []rune(mc.formatCompletion(model.ID, model.ContextLength, model.PromptPrice, model.CompletionPrice)))
 		} else {
 			completions = append(completions, []rune(model.ID))
 		}

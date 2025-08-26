@@ -17,11 +17,13 @@ import (
 
 // ModelMetadata holds information about a model's capabilities
 type ModelMetadata struct {
-	ID                  string `json:"id"`
-	ContextLength       int    `json:"context_length"`
-	MaxTokens           int    `json:"max_tokens"`
-	MaxCompletionTokens int    `json:"max_completion_tokens"`
-	Description         string `json:"description,omitempty"`
+	ID                  string  `json:"id"`
+	ContextLength       int     `json:"context_length"`
+	MaxTokens           int     `json:"max_tokens"`
+	MaxCompletionTokens int     `json:"max_completion_tokens"`
+	Description         string  `json:"description,omitempty"`
+	PromptPrice         float64 `json:"prompt_price,omitempty"`     // USD per token for input
+	CompletionPrice     float64 `json:"completion_price,omitempty"` // USD per token for output
 }
 
 // OpenRouterModelsResponse represents the OpenRouter API models response
@@ -32,6 +34,10 @@ type OpenRouterModelsResponse struct {
 		ContextLength       int    `json:"context_length"`
 		MaxCompletionTokens int    `json:"max_completion_tokens"`
 		Description         string `json:"description,omitempty"`
+		Pricing             struct {
+			Prompt     string `json:"prompt"`     // USD per token for input
+			Completion string `json:"completion"` // USD per token for output
+		} `json:"pricing,omitempty"`
 	} `json:"data"`
 }
 
@@ -43,6 +49,11 @@ type OpenAIModelsResponse struct {
 		Object    string   `json:"object"`
 		MaxTokens int      `json:"max_tokens"`
 		Features  []string `json:"features"`
+		Pricing   *struct {
+			Unit       string `json:"unit,omitempty"`       // "token"
+			Prompt     string `json:"prompt,omitempty"`     // USD per token for input
+			Completion string `json:"completion,omitempty"` // USD per token for output
+		} `json:"pricing,omitempty"`
 	} `json:"data"`
 }
 
@@ -60,6 +71,11 @@ type AzureOpenAIModelsResponse struct {
 			MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 		} `json:"limits,omitempty"`
 		Description string `json:"description,omitempty"`
+		Pricing     *struct {
+			Unit       string `json:"unit,omitempty"`       // "token"
+			Prompt     string `json:"prompt,omitempty"`     // USD per token for input
+			Completion string `json:"completion,omitempty"` // USD per token for output
+		} `json:"pricing,omitempty"`
 	} `json:"data"`
 }
 
@@ -216,10 +232,16 @@ func (ms *MetadataService) fetchOpenRouterMetadata(model, baseURL string) (*Mode
 	// Find the requested model
 	for _, modelData := range response.Data {
 		if modelData.ID == model || strings.HasSuffix(modelData.ID, "/"+model) {
+			// Parse pricing strings to floats
+			promptPrice, _ := strconv.ParseFloat(modelData.Pricing.Prompt, 64)
+			completionPrice, _ := strconv.ParseFloat(modelData.Pricing.Completion, 64)
+
 			return &ModelMetadata{
 				ID:                  modelData.ID,
 				ContextLength:       modelData.ContextLength,
 				MaxCompletionTokens: modelData.MaxCompletionTokens,
+				PromptPrice:         promptPrice,
+				CompletionPrice:     completionPrice,
 			}, nil
 		}
 	}
@@ -255,16 +277,37 @@ func (ms *MetadataService) fetchOpenAIMetadata(model, baseURL string) (*ModelMet
 	// Find the requested model
 	for _, modelData := range response.Data {
 		if modelData.ID == model {
+			// Parse pricing from API or use fallback
+			var promptPrice, completionPrice float64
+			if modelData.Pricing != nil && modelData.Pricing.Prompt != "" && modelData.Pricing.Completion != "" {
+				// Use API pricing data
+				promptPrice, _ = strconv.ParseFloat(modelData.Pricing.Prompt, 64)
+				completionPrice, _ = strconv.ParseFloat(modelData.Pricing.Completion, 64)
+			} else {
+				// No API pricing available - leave as zero
+				promptPrice, completionPrice = 0.0, 0.0
+			}
+
 			return &ModelMetadata{
-				ID:            modelData.ID,
-				ContextLength: modelData.MaxTokens,
-				MaxTokens:     modelData.MaxTokens,
+				ID:              modelData.ID,
+				ContextLength:   modelData.MaxTokens,
+				MaxTokens:       modelData.MaxTokens,
+				PromptPrice:     promptPrice,
+				CompletionPrice: completionPrice,
 			}, nil
 		}
 	}
 	fallback := getDefaultContextLengthForModel(model)
 	if fallback > 0 {
-		return &ModelMetadata{ID: model, ContextLength: fallback, MaxTokens: fallback}, nil
+		// No API pricing available - leave as zero
+		promptPrice, completionPrice := 0.0, 0.0
+		return &ModelMetadata{
+			ID:              model,
+			ContextLength:   fallback,
+			MaxTokens:       fallback,
+			PromptPrice:     promptPrice,
+			CompletionPrice: completionPrice,
+		}, nil
 	}
 	return nil, fmt.Errorf("model %s not found", model)
 }
@@ -315,7 +358,7 @@ func (ms *MetadataService) fetchAzureOpenAIMetadata(model, baseURL string) (*Mod
 	// Find the requested model (in Azure OpenAI, this is usually the deployment name)
 	for _, modelData := range response.Data {
 		if modelData.ID == model {
-			// Priority order: limits.max_total_tokens -> limits.max_prompt_tokens -> max_tokens -> fallback
+			// Prefer total tokens, then prompt tokens, then (as last resort) completion tokens
 			contextLength := 0
 			if modelData.Limits != nil {
 				if modelData.Limits.MaxCompletionTokens > 0 {
@@ -332,22 +375,42 @@ func (ms *MetadataService) fetchAzureOpenAIMetadata(model, baseURL string) (*Mod
 			if contextLength == 0 {
 				contextLength = getDefaultContextLengthForModel(modelData.ID)
 			}
+
+			// Parse pricing from API or use fallback
+			var promptPrice, completionPrice float64
+			if modelData.Pricing != nil && modelData.Pricing.Prompt != "" && modelData.Pricing.Completion != "" {
+				// Use API pricing data
+				promptPrice, _ = strconv.ParseFloat(modelData.Pricing.Prompt, 64)
+				completionPrice, _ = strconv.ParseFloat(modelData.Pricing.Completion, 64)
+			} else {
+				// No API pricing available - leave as zero
+				promptPrice, completionPrice = 0.0, 0.0
+			}
+
 			return &ModelMetadata{
-				ID:            modelData.ID,
-				ContextLength: contextLength,
-				MaxTokens:     contextLength,
-				Description:   modelData.Description,
+				ID:              modelData.ID,
+				ContextLength:   contextLength,
+				MaxTokens:       contextLength,
+				Description:     modelData.Description,
+				PromptPrice:     promptPrice,
+				CompletionPrice: completionPrice,
 			}, nil
 		}
 	}
 
 	// If not found by exact match, try to use default context length based on known model families
 	contextLength := getDefaultContextLengthForModel(model)
+
+	// No API pricing available - leave as zero
+	promptPrice, completionPrice := 0.0, 0.0
+
 	return &ModelMetadata{
-		ID:            model,
-		ContextLength: contextLength,
-		MaxTokens:     contextLength,
-		Description:   "", // No description available for fallback case
+		ID:              model,
+		ContextLength:   contextLength,
+		MaxTokens:       contextLength,
+		Description:     "", // No description available for fallback case
+		PromptPrice:     promptPrice,
+		CompletionPrice: completionPrice,
 	}, nil
 }
 
@@ -394,13 +457,15 @@ func (ms *MetadataService) fetchAzureOpenAIModelList(baseURL string) ([]*ModelMe
 
 	var models []*ModelMetadata
 	for _, modelData := range response.Data {
-		// Priority order: limits.max_total_tokens -> limits.max_prompt_tokens -> max_tokens -> fallback
+		// Prefer total tokens, then prompt tokens, then completion tokens
 		contextLength := 0
 		if modelData.Limits != nil {
 			if modelData.Limits.MaxTotalTokens > 0 {
 				contextLength = modelData.Limits.MaxTotalTokens
 			} else if modelData.Limits.MaxPromptTokens > 0 {
 				contextLength = modelData.Limits.MaxPromptTokens
+			} else if modelData.Limits.MaxCompletionTokens > 0 {
+				contextLength = modelData.Limits.MaxCompletionTokens
 			}
 		}
 		if contextLength == 0 && modelData.MaxTokens > 0 {
@@ -409,11 +474,25 @@ func (ms *MetadataService) fetchAzureOpenAIModelList(baseURL string) ([]*ModelMe
 		if contextLength == 0 {
 			contextLength = getDefaultContextLengthForModel(modelData.ID)
 		}
+
+		// Parse pricing from API or use fallback
+		var promptPrice, completionPrice float64
+		if modelData.Pricing != nil && modelData.Pricing.Prompt != "" && modelData.Pricing.Completion != "" {
+			// Use API pricing data
+			promptPrice, _ = strconv.ParseFloat(modelData.Pricing.Prompt, 64)
+			completionPrice, _ = strconv.ParseFloat(modelData.Pricing.Completion, 64)
+		} else {
+			// No API pricing available - leave as zero
+			promptPrice, completionPrice = 0.0, 0.0
+		}
+
 		models = append(models, &ModelMetadata{
-			ID:            modelData.ID,
-			ContextLength: contextLength,
-			MaxTokens:     contextLength,
-			Description:   modelData.Description,
+			ID:              modelData.ID,
+			ContextLength:   contextLength,
+			MaxTokens:       contextLength,
+			Description:     modelData.Description,
+			PromptPrice:     promptPrice,
+			CompletionPrice: completionPrice,
 		})
 	}
 
@@ -809,11 +888,17 @@ func (ms *MetadataService) fetchOpenRouterModelList(baseURL string) ([]*ModelMet
 
 	var models []*ModelMetadata
 	for _, modelData := range response.Data {
+		// Parse pricing strings to floats
+		promptPrice, _ := strconv.ParseFloat(modelData.Pricing.Prompt, 64)
+		completionPrice, _ := strconv.ParseFloat(modelData.Pricing.Completion, 64)
+
 		models = append(models, &ModelMetadata{
 			ID:                  modelData.ID,
 			ContextLength:       modelData.ContextLength,
 			MaxCompletionTokens: modelData.MaxCompletionTokens,
 			Description:         modelData.Description,
+			PromptPrice:         promptPrice,
+			CompletionPrice:     completionPrice,
 		})
 	}
 
@@ -860,10 +945,23 @@ func (ms *MetadataService) fetchOpenAIModelList(baseURL string) ([]*ModelMetadat
 
 	var models []*ModelMetadata
 	for _, modelData := range response.Data {
+		// Parse pricing from API or use fallback
+		var promptPrice, completionPrice float64
+		if modelData.Pricing != nil && modelData.Pricing.Prompt != "" && modelData.Pricing.Completion != "" {
+			// Use API pricing data
+			promptPrice, _ = strconv.ParseFloat(modelData.Pricing.Prompt, 64)
+			completionPrice, _ = strconv.ParseFloat(modelData.Pricing.Completion, 64)
+		} else {
+			// No API pricing available - leave as zero
+			promptPrice, completionPrice = 0.0, 0.0
+		}
+
 		models = append(models, &ModelMetadata{
-			ID:            modelData.ID,
-			ContextLength: modelData.MaxTokens,
-			MaxTokens:     modelData.MaxTokens,
+			ID:              modelData.ID,
+			ContextLength:   modelData.MaxTokens,
+			MaxTokens:       modelData.MaxTokens,
+			PromptPrice:     promptPrice,
+			CompletionPrice: completionPrice,
 		})
 	}
 

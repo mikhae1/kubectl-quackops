@@ -518,7 +518,7 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 
 		// Update configuration with selected model
 		cfg.Model = selectedModel
-		fmt.Printf("Model updated to: %s\n", config.Colors.Magenta.Sprint(selectedModel))
+		fmt.Printf("Model updated to: %s\n", config.Colors.Model.Sprint(selectedModel))
 
 		// Auto-detect max tokens for the new model
 		cfg.ConfigDetectMaxTokens()
@@ -616,7 +616,7 @@ func printWelcomeBanner(cfg *config.Config) {
 	info := config.Colors.Info
 	ok := config.Colors.Ok
 	warn := config.Colors.Warn
-	magenta := config.Colors.Magenta
+	magenta := config.Colors.Model
 	accent := config.Colors.Accent
 
 	// (plain title kept for reference but not used)

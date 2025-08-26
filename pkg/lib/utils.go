@@ -114,6 +114,52 @@ func FormatCompactNumber(value int) string {
 	return sign + s + suffix
 }
 
+// FormatPrice formats a price as a per-1M-tokens price string
+// Auto-detects if input is per-token or already per-1M-tokens based on magnitude
+// Examples: 0.00000015 -> "$0.15", 0.000005 -> "$5.00", 0.0 -> "Free"
+func FormatPrice(price float64) string {
+	if price == 0.0 {
+		return "Free"
+	}
+	
+	var pricePerMillion float64
+	// If price is very small (< 0.01), assume it's per-token and convert to per-1M-tokens
+	// If price is larger, assume it's already per-1M-tokens
+	if price < 0.01 {
+		pricePerMillion = price * 1_000_000
+	} else {
+		pricePerMillion = price
+	}
+	
+	if pricePerMillion < 0.01 {
+		return fmt.Sprintf("$%.3f", pricePerMillion)
+	} else if pricePerMillion < 1.0 {
+		return fmt.Sprintf("$%.2f", pricePerMillion)
+	} else if pricePerMillion < 1000.0 {
+		return fmt.Sprintf("$%.1f", pricePerMillion)
+	} else {
+		// For very large prices, use scientific notation or indicate high cost
+		return fmt.Sprintf("$%.0f", pricePerMillion)
+	}
+}
+
+// FormatPricingInfo formats pricing info for display in model selector
+// Returns short form like "$0.15/$0.6" for autocomplete and detailed for selection
+func FormatPricingInfo(promptPrice, completionPrice float64, detailed bool) string {
+	if promptPrice == 0.0 && completionPrice == 0.0 {
+		return ""
+	}
+	
+	promptStr := FormatPrice(promptPrice)
+	completionStr := FormatPrice(completionPrice)
+	
+	if detailed {
+		return fmt.Sprintf("Input: %s/1M tokens, Output: %s/1M tokens", promptStr, completionStr)
+	} else {
+		return fmt.Sprintf("%s/%s", promptStr, completionStr)
+	}
+}
+
 // ConfirmWithSingleKey prompts the user and returns true only for 'y'/'Y'.
 // It accepts ESC as an immediate "no" without requiring Enter. Enter defaults to "no".
 // Falls back to line mode if raw mode is unavailable.

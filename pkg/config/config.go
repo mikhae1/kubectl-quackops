@@ -156,6 +156,7 @@ type Config struct {
 // These are constants (no env overrides) to keep branding and readability consistent.
 type UIColorRoles struct {
 	// Role colors
+	Primary *color.Color
 	Accent  *color.Color
 	Info    *color.Color
 	Dim     *color.Color
@@ -163,8 +164,9 @@ type UIColorRoles struct {
 	Ok      *color.Color
 	Warn    *color.Color
 	Error   *color.Color
-	Magenta *color.Color
+	Model   *color.Color
 	Command *color.Color
+	Light   *color.Color
 
 	// MCP/header specific
 	Header *color.Color
@@ -181,14 +183,18 @@ var Colors = initUIColorRoles()
 
 func initUIColorRoles() *UIColorRoles {
 	return &UIColorRoles{
+		Primary: color.New(color.Reset),
 		Accent:  color.New(color.FgHiCyan, color.Bold),
-		Info:    color.New(color.FgHiWhite),
+		Info:    color.New(color.FgHiWhite, color.Bold),
 		Dim:     color.New(color.FgHiBlack),
 		Shadow:  color.New(color.FgHiBlack, color.Faint),
-		Ok:      color.New(color.FgHiGreen, color.Bold),
-		Warn:    color.New(color.FgHiRed, color.Bold),
-		Error:   color.New(color.FgHiRed, color.Bold),
-		Magenta: color.New(color.FgHiMagenta),
+		Light:   color.New(color.FgHiGreen),
+
+		Ok:    color.New(color.FgHiGreen, color.Bold),
+		Warn:  color.New(color.FgHiYellow, color.Bold),
+		Error: color.New(color.FgHiRed, color.Bold),
+
+		Model:   color.New(color.FgHiMagenta),
 		Command: color.New(color.FgHiBlue),
 
 		Header: color.New(color.FgHiMagenta, color.Bold),
@@ -263,7 +269,7 @@ func LoadConfig() *Config {
 	} else if provider == "ollama" {
 		// https://ai.meta.com/blog/meta-llama-3-1/
 		defaultMaxTokens = 4096
-		defaultModel = "lla3.1"
+		defaultModel = "llama3.1"
 	} else if provider == "openai" {
 		// https://platform.openai.com/docs/models/gpt-4o-mini
 		defaultMaxTokens = 128000
@@ -812,40 +818,11 @@ func (cfg *Config) ConfigDetectMaxTokens() {
 	metadataService := metadata.NewMetadataService(cfg.ModelMetadataTimeout, cfg.ModelMetadataCacheTTL)
 
 	// Determine base URL for the API call depending on provider
-	var baseURL string
-	if cfg.Provider == "openai" {
-		baseURL = GetOpenAIBaseURL()
-		if baseURL == "" {
-			if strings.Contains(cfg.Model, "/") || strings.Contains(cfg.Model, "openrouter") {
-				// This looks like an OpenRouter model, use OpenRouter's base URL
-				baseURL = "https://openrouter.ai/api/v1"
-			} else {
-				// Standard OpenAI model, use default OpenAI base URL
-				baseURL = "https://api.openai.com"
-			}
-		}
-	} else if cfg.Provider == "azopenai" {
-		baseURL = GetAzOpenAIBaseURL()
-		if baseURL == "" {
-			// Azure OpenAI requires a custom endpoint, cannot use default
-			fmt.Fprintf(os.Stderr, "Warning: Azure OpenAI requires QU_AZ_OPENAI_BASE_URL or OPENAI_BASE_URL environment variable\n")
-			return
-		}
-	} else if cfg.Provider == "google" {
-		baseURL = os.Getenv("QU_GOOGLE_BASE_URL")
-		if baseURL == "" {
-			baseURL = "https://generativelanguage.googleapis.com"
-		}
-	} else if cfg.Provider == "anthropic" {
-		baseURL = os.Getenv("QU_ANTHROPIC_BASE_URL")
-		if baseURL == "" {
-			baseURL = "https://api.anthropic.com"
-		}
-	} else if cfg.Provider == "ollama" {
-		baseURL = cfg.OllamaApiURL
-		if baseURL == "" {
-			baseURL = "http://localhost:11434"
-		}
+	baseURL := GetProviderBaseURL(cfg)
+	if cfg.Provider == "azopenai" && baseURL == "" {
+		// Azure OpenAI requires a custom endpoint, cannot use default
+		fmt.Fprintf(os.Stderr, "Warning: Azure OpenAI requires QU_AZ_OPENAI_BASE_URL or OPENAI_BASE_URL environment variable\n")
+		return
 	}
 
 	// Attempt to get context length
@@ -859,6 +836,43 @@ func (cfg *Config) ConfigDetectMaxTokens() {
 	// Update DefaultMaxTokens with auto-detected value
 	logger.Log("info", "Auto-detected max tokens for model %s: %d\n", cfg.Model, contextLength)
 	cfg.DefaultMaxTokens = contextLength
+}
+
+// GetProviderBaseURL returns the base URL for the configured provider, applying env/config defaults
+func GetProviderBaseURL(cfg *Config) string {
+	switch cfg.Provider {
+	case "openai":
+		if baseURL := GetOpenAIBaseURL(); baseURL != "" {
+			return baseURL
+		}
+		if strings.Contains(cfg.Model, "/") || strings.Contains(cfg.Model, "openrouter") {
+			return "https://openrouter.ai/api/v1"
+		}
+		return "https://api.openai.com"
+	case "azopenai":
+		if baseURL := GetAzOpenAIBaseURL(); baseURL != "" {
+			return baseURL
+		}
+		// No sensible default for Azure — must be provided by user
+		return ""
+	case "google":
+		if baseURL := os.Getenv("QU_GOOGLE_BASE_URL"); baseURL != "" {
+			return baseURL
+		}
+		return "https://generativelanguage.googleapis.com"
+	case "anthropic":
+		if baseURL := os.Getenv("QU_ANTHROPIC_BASE_URL"); baseURL != "" {
+			return baseURL
+		}
+		return "https://api.anthropic.com"
+	case "ollama":
+		if cfg.OllamaApiURL != "" {
+			return cfg.OllamaApiURL
+		}
+		return "http://localhost:11434"
+	default:
+		return ""
+	}
 }
 
 // defaultSlashCommands returns the default slash commands configuration
