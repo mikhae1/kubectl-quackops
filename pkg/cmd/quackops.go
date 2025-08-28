@@ -288,23 +288,12 @@ func startChatSession(cfg *config.Config, args []string) error {
 	switchToNormalMode()
 
 	cleanupAndExit := func(message string, exitCode int) {
-		// Show cost estimation if we have pricing data and tokens were used
-		// Only show for normal exits (exitCode 0) to avoid cluttering error exits
-		if exitCode == 0 && (cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0) {
-			showCostEstimation(cfg)
+		cleanupFunc := func() {
+			if rl != nil {
+				rl.Close()
+			}
 		}
-
-		if message != "" {
-			fmt.Println(message)
-		}
-		if rl != nil {
-			rl.Close()
-		}
-		// Explicitly restore cursor visibility
-		fmt.Print("\033[?25h") // ANSI escape sequence to show cursor
-		if exitCode >= 0 {
-			os.Exit(exitCode)
-		}
+		lib.CleanupAndExit(cfg, lib.CleanupOptions{Message: message, ExitCode: exitCode, CleanupFunc: cleanupFunc})
 	}
 
 	defer cleanupAndExit("", -1) // just cleanup
@@ -940,6 +929,11 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		if lib.Is429Error(err) {
 			logger.Log("info", "Rate limit error in interactive mode - continuing chat session")
 			// The error details have already been displayed by the Chat function
+			return nil
+		}
+		// User pressed ESC: keep interactive session alive and skip retries (handled upstream)
+		if lib.IsUserCancel(err) {
+			fmt.Fprintln(os.Stderr, color.YellowString("(cancelled)"))
 			return nil
 		}
 		return fmt.Errorf("error requesting LLM: %w", err)

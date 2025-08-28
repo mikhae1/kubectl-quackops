@@ -17,6 +17,8 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
 	"github.com/tmc/langchaingo/llms"
+	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 // Chat orchestrates a chat completion with the provided llms.Model, handling
@@ -115,7 +117,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Color("green", "bold")
 	s.Writer = os.Stderr
-	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response... [↑%s tokens]",
+	s.Suffix = fmt.Sprintf(" Waiting for %s/%s... [↑%s tokens] (ESC to cancel)",
 		cfg.Provider, cfg.Model, config.Colors.Dim.Sprint(lib.FormatCompactNumber(outgoingTokens)))
 
 	var stopOnce sync.Once
@@ -128,6 +130,80 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	// For MCP-enabled configurations, we need to handle tool calls synchronously
 	// So we disable streaming initially and re-enable it for final responses
 	useStreaming := stream && !cfg.MCPClientEnabled
+
+	// startEscBreaker starts a raw-input watcher to cancel the context on ESC.
+	startEscBreaker := func(ctx context.Context, cancel context.CancelFunc) func() {
+		fd := int(os.Stdin.Fd())
+		if !term.IsTerminal(fd) {
+			return func() {}
+		}
+		oldState, err := term.MakeRaw(fd)
+		if err != nil {
+			return func() {}
+		}
+		stopCh := make(chan struct{})
+		restored := false
+		go func() {
+			defer func() {
+				if !restored {
+					_ = term.Restore(fd, oldState)
+				}
+			}()
+			for {
+				select {
+				case <-stopCh:
+					return
+				case <-ctx.Done():
+					return
+				default:
+				}
+				var readfds unix.FdSet
+				readfds.Set(fd)
+				tv := unix.Timeval{Sec: 0, Usec: 200000}
+				_, selErr := unix.Select(fd+1, &readfds, nil, nil, &tv)
+				if selErr != nil {
+					continue
+				}
+				if readfds.IsSet(fd) {
+					var b [1]byte
+					n, _ := os.Stdin.Read(b[:])
+					if n > 0 {
+						switch b[0] {
+						case 27: // ESC
+							// Update spinner hint and cancel
+							s.Suffix = " Cancelling..."
+							cancel()
+							return
+						case 3: // Ctrl+C -> SIGINT
+							_ = term.Restore(fd, oldState)
+							restored = true
+							lib.CleanupAndExit(cfg, lib.CleanupOptions{ExitCode: -1})
+							_ = unix.Kill(os.Getpid(), unix.SIGINT)
+							return
+						case 26: // Ctrl+Z -> SIGTSTP
+							_ = term.Restore(fd, oldState)
+							restored = true
+							lib.CleanupAndExit(cfg, lib.CleanupOptions{ExitCode: -1})
+							_ = unix.Kill(os.Getpid(), unix.SIGTSTP)
+							return
+						case 28: // Ctrl+\ -> SIGQUIT
+							_ = term.Restore(fd, oldState)
+							restored = true
+							lib.CleanupAndExit(cfg, lib.CleanupOptions{ExitCode: -1})
+							_ = unix.Kill(os.Getpid(), unix.SIGQUIT)
+							return
+						}
+					}
+				}
+			}
+		}()
+		return func() {
+			close(stopCh)
+			if !restored {
+				_ = term.Restore(fd, oldState)
+			}
+		}
+	}
 
 	if useStreaming {
 		onFirstChunk := func() {
@@ -175,7 +251,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 					messageType = "Rate limited"
 					logger.Log("info", "Retrying after parsed rate limit delay: %v (attempt %d/%d)", delay, attempt, maxRetries)
 				} else {
-					// Failed to parse provider delay - fallback to exponential backoff for 429 errors
+					// Failed to parse 429 retry delay - fallback to exponential backoff for 429 errors
 					delay = lib.CalculateExponentialBackoff(attempt, initialBackoff, backoffFactor)
 					messageType = "Rate limited"
 					logger.Log("info", "Failed to parse 429 retry delay, using exponential backoff: %v", parseErr)
@@ -200,8 +276,15 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 			messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, prompt))
 		}
 
-		resp, err := client.GenerateContent(context.Background(), messages, generateOptions...)
+		ctx, cancel := context.WithCancel(context.Background())
+		stopEsc := startEscBreaker(ctx, cancel)
+		resp, err := client.GenerateContent(ctx, messages, generateOptions...)
+		stopEsc()
 		if err != nil {
+			if ctx.Err() == context.Canceled || lib.IsUserCancel(err) {
+				// Map to a unified UserCancelError and stop retries
+				return "", lib.NewUserCancelError("canceled by user")
+			}
 			lastError = err
 			retriesLeft := maxRetries - attempt
 
@@ -361,8 +444,14 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 					// Apply throttling delay for MCP tool call follow-up requests
 					applyThrottleDelayWithSpinner(cfg, s)
 
-					resp, err = client.GenerateContent(context.Background(), messages, generateOptions...)
+					ctxTool, cancelTool := context.WithCancel(context.Background())
+					stopEscTool := startEscBreaker(ctxTool, cancelTool)
+					resp, err = client.GenerateContent(ctxTool, messages, generateOptions...)
+					stopEscTool()
 					if err != nil {
+						if ctxTool.Err() == context.Canceled || lib.IsUserCancel(err) {
+							return "", lib.NewUserCancelError("canceled by user")
+						}
 						if lib.Is429Error(err) {
 							lib.Display429Error(err, cfg, maxRetries)
 						}

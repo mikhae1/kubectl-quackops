@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"errors"
+
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
@@ -133,4 +135,35 @@ func GetErrorMessage(err error) string {
 	}
 
 	return fmt.Sprintf("%s (%d: %s)", errorStr, code, hint)
+}
+
+// UserCancelError indicates that the user explicitly cancelled the in-flight operation (e.g., by pressing ESC)
+type UserCancelError struct {
+	Reason string
+}
+
+func (e *UserCancelError) Error() string {
+	if strings.TrimSpace(e.Reason) != "" {
+		return e.Reason
+	}
+	return "user cancelled request"
+}
+
+// NewUserCancelError creates a new user cancel error with an optional reason
+func NewUserCancelError(reason string) error {
+	return &UserCancelError{Reason: reason}
+}
+
+// IsUserCancel returns true if error is a user cancellation
+func IsUserCancel(err error) bool {
+	if err == nil {
+		return false
+	}
+	var uce *UserCancelError
+	if errors.As(err, &uce) {
+		return true
+	}
+	// Fallback: some providers may return context cancellation messages
+	es := strings.ToLower(err.Error())
+	return strings.Contains(es, "context canceled") || strings.Contains(es, "canceled by user")
 }

@@ -35,7 +35,7 @@ var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, h
 
 	// Create a spinner for LLM response
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-	s.Suffix = fmt.Sprintf(" Waiting for %s/%s response...", cfg.Provider, cfg.Model)
+	s.Suffix = fmt.Sprintf(" Waiting for %s/%s... (press ESC to cancel)", cfg.Provider, cfg.Model)
 	s.Color("green", "bold")
 	s.Start()
 
