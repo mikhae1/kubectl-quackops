@@ -169,11 +169,33 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 					n, _ := os.Stdin.Read(b[:])
 					if n > 0 {
 						switch b[0] {
-						case 27: // ESC
-							// Update spinner hint and cancel
-							s.Suffix = " Cancelling..."
-							cancel()
-							return
+						case 27: // ESC or start of escape sequence
+							// Cancel only on a lone ESC. If bytes follow quickly, it's an escape sequence; swallow it.
+							isLoneEsc := true
+							for {
+								var rfd unix.FdSet
+								rfd.Set(fd)
+								tv2 := unix.Timeval{Sec: 0, Usec: 50000}
+								_, sel2 := unix.Select(fd+1, &rfd, nil, nil, &tv2)
+								if sel2 != nil || !rfd.IsSet(fd) {
+									break
+								}
+								var seq [1]byte
+								n2, _ := os.Stdin.Read(seq[:])
+								if n2 > 0 {
+									isLoneEsc = false
+									// Keep draining until timeout so the full sequence is consumed (e.g., ESC [ A)
+									continue
+								}
+								break
+							}
+							if isLoneEsc {
+								s.Suffix = " Cancelling..."
+								cancel()
+								return
+							}
+							// Not a lone ESC: swallow and continue (arrow keys, etc.)
+							continue
 						case 3: // Ctrl+C -> SIGINT
 							_ = term.Restore(fd, oldState)
 							restored = true
