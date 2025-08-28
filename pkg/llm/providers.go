@@ -22,8 +22,11 @@ func openaiRequestWithChat(cfg *config.Config, prompt string, stream bool, histo
 	// Support custom OpenAI-compatible base URL
 	if baseURL := config.GetOpenAIBaseURL(); baseURL != "" {
 		llmOptions = append(llmOptions, openai.WithBaseURL(baseURL))
-		// Disable streaming for custom base URLs to improve compatibility with non-standard SSE implementations
-		stream = false
+		// Only disable streaming for known problematic endpoints
+		// Keep streaming enabled for standard OpenAI and most OpenAI-compatible providers
+		if strings.Contains(baseURL, "openrouter.ai") {
+			stream = false // Known problematic SSE implementations
+		}
 	}
 
 	// Create OpenAI client
@@ -46,8 +49,8 @@ func azOpenAIRequestWithChat(cfg *config.Config, prompt string, stream bool, his
 	// Support custom Azure OpenAI base URL
 	if baseURL := config.GetAzOpenAIBaseURL(); baseURL != "" {
 		llmOptions = append(llmOptions, openai.WithBaseURL(baseURL))
-		// Disable streaming for custom base URLs to improve compatibility with non-standard SSE implementations
-		stream = false
+		// Azure OpenAI supports streaming, so keep it enabled
+		// Only disable for known problematic custom endpoints if needed
 	}
 
 	// Support custom Azure OpenAI API key

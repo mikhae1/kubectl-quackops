@@ -46,6 +46,11 @@ func TestMarkdownFormatter_ProcessChunk(t *testing.T) {
 			chunks: []string{"Single `code` and double ``co", "de`` here", "\n"},
 			want:   "Single `code` and double ``code`` here\n",
 		},
+		{
+			name:   "think block",
+			chunks: []string{"<think>\n", "This is reasoning\n", "</think>\n", "Final answer\n"},
+			want:   "\n╭─ thinking...\n│ This is reasoning\n╰\nFinal answer\n",
+		},
 	}
 
 	for _, tt := range tests {

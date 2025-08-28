@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -27,7 +28,23 @@ func GenKubectlCmds(cfg *config.Config, prompt string, userMsgCount int) ([]stri
 	}
 
 	// Construct the final prompt with clear instructions
-	augPrompt := kubectlPrompt + "\n\nIssue description: " + prompt + "\n\nProvide commands as a plain list without descriptions or backticks."
+	var augPromptBuilder strings.Builder
+	augPromptBuilder.WriteString(kubectlPrompt)
+	augPromptBuilder.WriteString("\n\nIssue description: ")
+	augPromptBuilder.WriteString(prompt)
+	if cfg.KubectlReturnJSON {
+		augPromptBuilder.WriteString("\n\nRespond ONLY with a JSON array of strings (no prose, no code fences). ")
+		if cfg.KubectlMaxSuggestions > 0 {
+			augPromptBuilder.WriteString(fmt.Sprintf("Return at most %d items.", cfg.KubectlMaxSuggestions))
+		}
+		augPromptBuilder.WriteString(" Example: [\"kubectl get pods -A -o wide\", \"kubectl get events -A -o json\"].")
+	} else {
+		augPromptBuilder.WriteString("\n\nProvide commands as a plain list without descriptions or backticks.")
+		if cfg.KubectlMaxSuggestions > 0 {
+			augPromptBuilder.WriteString(fmt.Sprintf(" Limit to at most %d lines.", cfg.KubectlMaxSuggestions))
+		}
+	}
+	augPrompt := augPromptBuilder.String()
 
 	// Create a spinner for command generation
 	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
@@ -36,44 +53,79 @@ func GenKubectlCmds(cfg *config.Config, prompt string, userMsgCount int) ([]stri
 	s.Start()
 	defer s.Stop()
 
-	// Execute request without updating the conversation history
-	// Preference: ask for commands as plain lines (current behavior). Future: instruct JSON and parse.
-	response, err := Request(cfg, augPrompt, false, false)
+	// Execute request without updating the conversation history, silently
+	response, err := RequestSilent(cfg, augPrompt, false, false)
 
 	if err != nil {
 		return nil, fmt.Errorf("error requesting kubectl diagnostics: %w", err)
 	}
 
-	// Extract valid kubectl commands using regex pattern
-	commandsPattern := strings.Join(cfg.AllowedKubectlCmds, "|")
-	rePattern := `kubectl\s(?:` + commandsPattern + `)\s?[^` + "`" + `%#\n]*`
-	re := regexp.MustCompile(rePattern)
-
-	matches := re.FindAllString(response, -1)
-	if matches == nil {
-		return nil, errors.New("no valid kubectl commands found in response")
+	// Helper to filter, validate and cap results
+	filterAndValidate := func(cmds []string) []string {
+		if len(cmds) == 0 {
+			return cmds
+		}
+		anonCmdRe := regexp.MustCompile(`.*<[A-Za-z_-]+>.*`)
+		var filtered []string
+		for _, c := range cmds {
+			trimCmd := strings.TrimSpace(c)
+			if trimCmd == "" || anonCmdRe.MatchString(trimCmd) || slices.Contains(filtered, trimCmd) {
+				continue
+			}
+			parts := strings.Fields(trimCmd)
+			if len(parts) < 2 || parts[0] != "kubectl" {
+				continue
+			}
+			filtered = append(filtered, trimCmd)
+		}
+		filtered = slices.Compact(filtered)
+		// Gate by allowed verbs
+		if len(filtered) > 0 {
+			commandsPattern := strings.Join(cfg.AllowedKubectlCmds, "|")
+			rePattern := `^kubectl\s(?:` + commandsPattern + `)\b[^` + "`" + `%\n]*`
+			re := regexp.MustCompile(rePattern)
+			valid := make([]string, 0, len(filtered))
+			for _, c := range filtered {
+				if re.MatchString(c) {
+					valid = append(valid, c)
+				}
+			}
+			filtered = valid
+		}
+		if cfg.KubectlMaxSuggestions > 0 && len(filtered) > cfg.KubectlMaxSuggestions {
+			filtered = filtered[:cfg.KubectlMaxSuggestions]
+		}
+		return filtered
 	}
 
-	// Remove template commands with placeholders and duplicates
-	anonCmdRe := regexp.MustCompile(`.*<[A-Za-z_-]+>.*`)
 	var filteredCmds []string
-	for _, match := range matches {
-		trimCmd := strings.TrimSpace(match)
-		// Skip empty commands, commands with placeholders, and duplicates
-		if trimCmd == "" || anonCmdRe.MatchString(trimCmd) || slices.Contains(filteredCmds, trimCmd) {
-			continue
+	if cfg.KubectlReturnJSON {
+		// Try to parse the response as JSON array of strings
+		var arr []string
+		if err := json.Unmarshal([]byte(response), &arr); err != nil {
+			// Try to locate a JSON array in the text
+			start := strings.Index(response, "[")
+			end := strings.LastIndex(response, "]")
+			if start >= 0 && end > start {
+				var arr2 []string
+				sub := response[start : end+1]
+				if err := json.Unmarshal([]byte(sub), &arr2); err == nil {
+					arr = arr2
+				}
+			}
 		}
-		// Extra validation: ensure command has at least kubectl and one argument
-		parts := strings.Fields(trimCmd)
-		if len(parts) >= 2 && parts[0] == "kubectl" {
-			filteredCmds = append(filteredCmds, trimCmd)
-		}
+		filteredCmds = filterAndValidate(arr)
 	}
 
-	// Apply compaction to remove any empty strings and duplicates
-	filteredCmds = slices.Compact(filteredCmds)
+	// Fallback to regex extraction
+	if len(filteredCmds) == 0 {
+		commandsPattern := strings.Join(cfg.AllowedKubectlCmds, "|")
+		rePattern := `kubectl\s(?:` + commandsPattern + `)\s?[^` + "`" + `%#\n]*`
+		re := regexp.MustCompile(rePattern)
+		matches := re.FindAllString(response, -1)
+		filteredCmds = filterAndValidate(matches)
+	}
 
-	// Log and return error if no valid commands found after filtering
 	if len(filteredCmds) == 0 {
 		return nil, errors.New("no valid kubectl commands found after filtering")
 	}

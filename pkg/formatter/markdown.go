@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"regexp"
+	"strings"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
 )
 
 // Regular expressions for inline Markdown elements
@@ -27,6 +30,10 @@ var (
 	// Code block markers (```language)
 	codeBlockMarkerRegex = regexp.MustCompile(`(^|\s)` + "```" + `([a-zA-Z0-9_+-]*)`)
 
+	// Think block markers (<think> and </think>)
+	thinkBlockStartRegex = regexp.MustCompile(`<think>`)
+	thinkBlockEndRegex   = regexp.MustCompile(`</think>`)
+
 	// Numbers and number-letter combinations (like "2m", "500Mi", "(329 days)")
 )
 
@@ -34,7 +41,9 @@ var (
 type MarkdownFormatter struct {
 	buffer       bytes.Buffer // Buffer for accumulating text
 	colorEnabled bool
-	inCodeBlock  bool // Track if we're inside a code block
+	inCodeBlock  bool         // Track if we're inside a code block
+	inThinkBlock bool         // Track if we're inside a think block
+	thinkContent bytes.Buffer // Buffer for accumulating think block content
 }
 
 // FormatterOption represents options for configuring the formatter
@@ -121,24 +130,67 @@ func (f *MarkdownFormatter) Flush() []byte {
 	f.buffer.Reset()
 	// Reset code block state after flush
 	f.inCodeBlock = false
+	f.inThinkBlock = false
+	f.thinkContent.Reset()
 	return result
 }
 
 // formatMarkdown parses and formats Markdown content
 func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
-	if !f.colorEnabled {
-		return content
-	}
 
 	// Use the simplest approach that works: convert full lines
 	lines := bytes.Split(content, []byte("\n"))
 	var result bytes.Buffer
 
+	var lastWasThinkStart bool
 	for i, line := range lines {
+		// Check for think block markers first, before processing empty lines
+		if thinkBlockStartRegex.Match(line) {
+			f.inThinkBlock = true
+			f.thinkContent.Reset() // Start fresh content accumulation
+			lastWasThinkStart = true
+			continue // Skip the opening tag, don't render it
+		} else if thinkBlockEndRegex.Match(line) {
+			f.inThinkBlock = false
+			// Render the complete think block with accumulated content
+			thinkBlockOutput := renderThinkBlock(f.thinkContent.String())
+			// Remove ALL trailing newlines and whitespace from previous content
+			resultStr := result.String()
+			resultStr = strings.TrimRight(resultStr, " \n\t\r")
+			result.Reset()
+			// If there's any content before the think block, ensure proper separation
+			if len(resultStr) > 0 {
+				result.WriteString(resultStr)
+				result.WriteString("\n")
+			}
+			result.WriteString(thinkBlockOutput)
+			f.thinkContent.Reset() // Clear the content buffer
+			lastWasThinkStart = false
+			continue // Skip the closing tag, already handled by renderThinkBlock
+		}
+
+		// Handle empty lines (but skip empty lines around think blocks)
 		if len(line) == 0 && i < len(lines)-1 {
+			// Skip empty lines that come right after think block start
+			if lastWasThinkStart {
+				lastWasThinkStart = false
+				continue
+			}
+			// Look ahead to see if the next non-empty line is a think block end
+			nextNonEmptyIdx := i + 1
+			for nextNonEmptyIdx < len(lines) && len(lines[nextNonEmptyIdx]) == 0 {
+				nextNonEmptyIdx++
+			}
+			// If the next non-empty line is a think block end, skip this empty line
+			if nextNonEmptyIdx < len(lines) && thinkBlockEndRegex.Match(lines[nextNonEmptyIdx]) {
+				continue
+			}
 			result.WriteByte('\n')
 			continue
 		}
+
+		// Reset the lastWasThinkStart flag for any non-empty line
+		lastWasThinkStart = false
 
 		// Check for code block markers (```) with optional language specification
 		if codeBlockMarkerRegex.Match(line) {
@@ -151,13 +203,28 @@ func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
 			continue
 		}
 
-		// If we're inside a code block, don't process Markdown
-		if f.inCodeBlock {
-			result.Write([]byte(color.New(color.Italic).Sprint(string(line))))
+		// If we're inside a think block, accumulate content
+		if f.inThinkBlock {
+			// Accumulate content in the think content buffer
+			if f.thinkContent.Len() > 0 {
+				f.thinkContent.WriteByte('\n')
+			}
+			f.thinkContent.Write(line)
+		} else if f.inCodeBlock {
+			// If we're inside a code block, don't process Markdown
+			if f.colorEnabled {
+				result.Write([]byte(color.New(color.Italic).Sprint(string(line))))
+			} else {
+				result.Write(line)
+			}
 		} else {
 			// Normal Markdown processing
-			formattedLine := f.formatLine(line)
-			result.Write(formattedLine)
+			if f.colorEnabled {
+				formattedLine := f.formatLine(line)
+				result.Write(formattedLine)
+			} else {
+				result.Write(line)
+			}
 		}
 
 		if i < len(lines)-1 {
@@ -363,6 +430,77 @@ func (f *MarkdownFormatter) colorizeQuotedStrings(text []byte) []byte {
 	}
 
 	return result.Bytes()
+}
+
+// renderThinkBlock formats think block content with brown borders and dimmed text
+func renderThinkBlock(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+
+	// Get terminal width for line wrapping
+	maxLineLen := 120 // Default fallback
+	if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 20 {
+		maxLineLen = width - 10 // Leave margin for borders
+	}
+
+	// Brown colors for borders and headers
+	borderColor := color.New(color.FgYellow) // Brown/yellow for borders
+	headerColor := color.New(color.Bold)     // Bold brown for header
+	dimColor := color.New(color.Faint)       // Dimmed text for content
+
+	var result strings.Builder
+
+	// Header with brown styling (no leading newlines)
+	header := borderColor.Sprint("╭─ ") + headerColor.Sprint("thinking...")
+	result.WriteString(header)
+	result.WriteString("\n")
+
+	// Process content with line wrapping and dimming
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Wrap long lines
+		if len(line) > maxLineLen {
+			for len(line) > maxLineLen {
+				// Find a good break point (space before maxLineLen)
+				breakPoint := maxLineLen
+				for i := maxLineLen - 1; i > maxLineLen/2 && i >= 0; i-- {
+					if i < len(line) && line[i] == ' ' {
+						breakPoint = i
+						break
+					}
+				}
+
+				wrappedLine := line[:breakPoint]
+				result.WriteString(borderColor.Sprint("│ "))
+				result.WriteString(dimColor.Sprint(wrappedLine))
+				result.WriteString("\n")
+				line = strings.TrimLeft(line[breakPoint:], " ")
+			}
+			// Handle remaining part
+			if len(line) > 0 {
+				result.WriteString(borderColor.Sprint("│ "))
+				result.WriteString(dimColor.Sprint(line))
+				result.WriteString("\n")
+			}
+		} else {
+			// Line fits within terminal width
+			result.WriteString(borderColor.Sprint("│ "))
+			result.WriteString(dimColor.Sprint(line))
+			result.WriteString("\n")
+		}
+	}
+
+	// Footer
+	result.WriteString(borderColor.Sprint("╰"))
+	result.WriteString("\n")
+
+	return result.String()
 }
 
 // StreamingWriter is a writer that processes Markdown chunks in a streaming manner

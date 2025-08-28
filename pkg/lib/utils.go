@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -80,7 +81,7 @@ func FormatCompactNumber(value int) string {
 
 	var scaled float64
 	var suffix string
-	
+
 	// Check for rounding up to next unit when >= 999.5
 	switch {
 	case n >= 1_000_000_000_000:
@@ -121,7 +122,7 @@ func FormatPrice(price float64) string {
 	if price == 0.0 {
 		return "Free"
 	}
-	
+
 	var pricePerMillion float64
 	// If price is very small (< 0.01), assume it's per-token and convert to per-1M-tokens
 	// If price is larger, assume it's already per-1M-tokens
@@ -130,7 +131,7 @@ func FormatPrice(price float64) string {
 	} else {
 		pricePerMillion = price
 	}
-	
+
 	if pricePerMillion < 0.01 {
 		return fmt.Sprintf("$%.3f", pricePerMillion)
 	} else if pricePerMillion < 1.0 {
@@ -149,10 +150,10 @@ func FormatPricingInfo(promptPrice, completionPrice float64, detailed bool) stri
 	if promptPrice == 0.0 && completionPrice == 0.0 {
 		return ""
 	}
-	
+
 	promptStr := FormatPrice(promptPrice)
 	completionStr := FormatPrice(completionPrice)
-	
+
 	if detailed {
 		return fmt.Sprintf("Input: %s/1M tokens, Output: %s/1M tokens", promptStr, completionStr)
 	} else {
@@ -333,11 +334,11 @@ func TrimText(text string, maxWidth ...int) string {
 	} else {
 		width = getTerminalWidth()
 	}
-	
+
 	if len(text) <= width {
 		return text
 	}
-	
+
 	// Find the last space before maxWidth
 	cutoff := width
 	for i := width - 1; i >= width-20 && i >= 0; i-- {
@@ -346,16 +347,146 @@ func TrimText(text string, maxWidth ...int) string {
 			break
 		}
 	}
-	
+
 	// If no suitable space found, just truncate
 	if cutoff == width && len(text) > width {
 		cutoff = width - 3
 	}
-	
+
 	if cutoff < len(text) {
 		return text[:cutoff] + "..."
 	}
 	return text
+}
+
+// CostSummary holds token usage and cost information for a session
+type CostSummary struct {
+	InputTokens    int
+	OutputTokens   int
+	InputPrice     float64 // USD per token
+	OutputPrice    float64 // USD per token
+	InputCost      float64 // Total input cost in USD
+	OutputCost     float64 // Total output cost in USD
+	TotalCost      float64 // Total cost in USD
+	ModelID        string
+	HasPricingData bool
+}
+
+// CalculateTotalCost calculates the total cost for a session given token counts and per-token prices
+func CalculateTotalCost(inputTokens, outputTokens int, inputPrice, outputPrice float64, modelID string) *CostSummary {
+	summary := &CostSummary{
+		InputTokens:    inputTokens,
+		OutputTokens:   outputTokens,
+		InputPrice:     inputPrice,
+		OutputPrice:    outputPrice,
+		ModelID:        modelID,
+		HasPricingData: inputPrice > 0 || outputPrice > 0,
+	}
+
+	if summary.HasPricingData {
+		summary.InputCost = float64(inputTokens) * inputPrice
+		summary.OutputCost = float64(outputTokens) * outputPrice
+		summary.TotalCost = summary.InputCost + summary.OutputCost
+	}
+
+	return summary
+}
+
+// FormatTotalCostDisplay creates a pretty formatted cost estimation display block
+func FormatTotalCostDisplay(summary *CostSummary) string {
+	if summary == nil || (!summary.HasPricingData || (summary.InputTokens == 0 && summary.OutputTokens == 0)) {
+		return ""
+	}
+
+	// Use existing color scheme
+	border := config.Colors.Dim
+	title := config.Colors.Info
+	inputArrow := config.Colors.Info.Sprint("↑")
+	outputArrow := config.Colors.Accent.Sprint("↓")
+	dim := config.Colors.Dim
+
+	// Format costs with color based on amount
+	formatCostColored := func(cost float64) string {
+		var costStr string
+		if cost >= 0.001 {
+			costStr = fmt.Sprintf("$%.3f", cost)
+		} else if cost >= 0.0001 {
+			costStr = fmt.Sprintf("$%.4f", cost)
+		} else if cost >= 0.00001 {
+			costStr = fmt.Sprintf("$%.5f", cost)
+		} else if cost > 0 {
+			costStr = fmt.Sprintf("$%.6f", cost)
+		} else {
+			costStr = "$0.000"
+		}
+
+		if cost > 0.10 { // > $0.10
+			return config.Colors.Error.Sprint(costStr)
+		} else if cost > 0.01 { // > $0.01
+			return config.Colors.Warn.Sprint(costStr)
+		} else {
+			return config.Colors.Primary.Sprint(costStr)
+		}
+	}
+
+	var lines []string
+	boxWidth := 45
+
+	// Title
+	borderText := config.Colors.Dim.Sprint("│ ")
+	titleText := config.Colors.Accent.Sprint("Session Cost Estimate")
+	lines = append(lines, borderText+titleText)
+
+	if summary.ModelID != "" {
+		modelText := fmt.Sprintf("Model: %s", config.Colors.Model.Sprint(summary.ModelID))
+		lines = append(lines, borderText+modelText)
+	}
+
+	// Input cost line
+	if summary.InputTokens > 0 {
+		tokenCount := FormatCompactNumber(summary.InputTokens)
+		priceStr := FormatPrice(summary.InputPrice * 1_000_000) // Convert to per-1M format
+		costStr := formatCostColored(summary.InputCost)
+
+		// Calculate padding without ANSI codes
+
+		plainLine := fmt.Sprintf("↑ Input: %s tokens × %s → $%.6f", tokenCount, priceStr, summary.InputCost)
+		contentPadding := boxWidth - 2 - len(plainLine)
+		if contentPadding < 0 {
+			contentPadding = 0
+		}
+
+		line := "│ " + inputArrow + fmt.Sprintf(" Input: %s tokens × %s → ", tokenCount, priceStr) + costStr + strings.Repeat(" ", contentPadding)
+		lines = append(lines, line)
+	}
+
+	// Output cost line
+	if summary.OutputTokens > 0 {
+		tokenCount := FormatCompactNumber(summary.OutputTokens)
+		priceStr := FormatPrice(summary.OutputPrice * 1_000_000) // Convert to per-1M format
+		costStr := formatCostColored(summary.OutputCost)
+
+		plainLine := fmt.Sprintf("↓ Output: %s tokens × %s → $%.6f", tokenCount, priceStr, summary.OutputCost)
+		contentPadding := boxWidth - 2 - len(plainLine)
+		if contentPadding < 0 {
+			contentPadding = 0
+		}
+
+		line := "│ " + outputArrow + fmt.Sprintf(" Output: %s tokens × %s → ", tokenCount, priceStr) + costStr + strings.Repeat(" ", contentPadding)
+		lines = append(lines, line)
+	}
+
+	// Total cost line
+	totalText := "Total: "
+	totalLine := borderText + title.Sprint(totalText) + formatCostColored(summary.TotalCost)
+	lines = append(lines, totalLine)
+
+	// Disclaimer
+	disclaimerText := "(Estimate - actual costs may vary)"
+	disclaimerPadding := boxWidth - 2 - len(disclaimerText)
+	lines = append(lines, border.Sprint("│ ")+dim.Sprint(disclaimerText)+strings.Repeat(" ", disclaimerPadding))
+
+	return strings.Join(lines, "\n")
 }
 
 // getTerminalWidth detects the terminal width, defaulting to 80 if detection fails

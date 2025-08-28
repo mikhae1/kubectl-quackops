@@ -15,6 +15,7 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/exec"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm"
+	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
 	"github.com/mikhae1/kubectl-quackops/pkg/version"
@@ -287,6 +288,12 @@ func startChatSession(cfg *config.Config, args []string) error {
 	switchToNormalMode()
 
 	cleanupAndExit := func(message string, exitCode int) {
+		// Show cost estimation if we have pricing data and tokens were used
+		// Only show for normal exits (exitCode 0) to avoid cluttering error exits
+		if exitCode == 0 && (cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0) {
+			showCostEstimation(cfg)
+		}
+
 		if message != "" {
 			fmt.Println(message)
 		}
@@ -294,7 +301,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 			rl.Close()
 		}
 		// Explicitly restore cursor visibility
-		// fmt.Print("\033[?25h") // ANSI escape sequence to show cursor
+		fmt.Print("\033[?25h") // ANSI escape sequence to show cursor
 		if exitCode >= 0 {
 			os.Exit(exitCode)
 		}
@@ -1023,6 +1030,52 @@ func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
 
 	logger.Log("info", "Using MCP tools in prompt with %d tools", len(toolInfos))
 	return mcpContext.String()
+}
+
+// showCostEstimation displays cost estimation information before exit
+func showCostEstimation(cfg *config.Config) {
+	if cfg.Model == "" {
+		return // No model selected
+	}
+
+	// Create metadata service directly
+	metadataService := metadata.NewMetadataService(cfg.ModelMetadataTimeout, cfg.ModelMetadataCacheTTL)
+
+	baseURL := config.GetProviderBaseURL(cfg)
+	models, err := metadataService.GetModelList(cfg.Provider, baseURL)
+	if err != nil {
+		return // Can't fetch pricing data
+	}
+
+	// Find current model in the list
+	var currentModel *metadata.ModelMetadata
+	for _, model := range models {
+		if model.ID == cfg.Model {
+			currentModel = model
+			break
+		}
+	}
+
+	if currentModel == nil || (currentModel.InputPrice == 0 && currentModel.OutputPrice == 0) {
+		return // No pricing data available
+	}
+
+	// Calculate cost summary
+	summary := lib.CalculateTotalCost(
+		cfg.LastOutgoingTokens,
+		cfg.LastIncomingTokens,
+		currentModel.InputPrice,
+		currentModel.OutputPrice,
+		cfg.Model,
+	)
+
+	// Format and display the cost estimation
+	costDisplay := lib.FormatTotalCostDisplay(summary)
+	if costDisplay != "" {
+		fmt.Println()
+		fmt.Println(costDisplay)
+		fmt.Println()
+	}
 }
 
 // printInlineHelp prints quick usage information for interactive mode

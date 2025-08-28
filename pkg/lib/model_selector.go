@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/chzyer/readline"
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
 )
@@ -24,6 +23,51 @@ func NewModelSelector(cfg *config.Config) *ModelSelector {
 		cfg:             cfg,
 		metadataService: metadata.NewMetadataService(cfg.ModelMetadataTimeout, cfg.ModelMetadataCacheTTL),
 	}
+}
+
+// formatPriceColored formats a price with color based on cost level
+func formatPriceColored(price float64) string {
+	if price == 0.0 {
+		return config.Colors.Primary.Sprint("Free")
+	}
+
+	priceStr := FormatPrice(price)
+
+	// Color based on price level
+	if price > 0.00001 { // >$10/1M tokens
+		return config.Colors.Error.Sprint(priceStr)
+	} else if price > 0.000001 { // >$1/1M tokens
+		return config.Colors.Warn.Sprint(priceStr)
+	} else {
+		return config.Colors.Primary.Sprint(priceStr)
+	}
+}
+
+// formatColoredPricingDisplay creates a colored pricing display with fancy colored arrows
+func formatColoredPricingDisplay(inputPrice, outputPrice float64) string {
+	var coloredParts []string
+
+	if inputPrice > 0.0 {
+		// Use cyan/blue for input arrow to represent "input/incoming"
+		fancyInputArrow := config.Colors.Info.Sprint("↑")
+		coloredPrice := formatPriceColored(inputPrice)
+		coloredParts = append(coloredParts, fancyInputArrow+coloredPrice)
+	}
+
+	if outputPrice > 0.0 {
+		// Use magenta/purple for output arrow to represent "output/outgoing"
+		fancyOutputArrow := config.Colors.Accent.Sprint("↓")
+		coloredPrice := formatPriceColored(outputPrice)
+		coloredParts = append(coloredParts, fancyOutputArrow+coloredPrice)
+	}
+
+	if len(coloredParts) == 0 {
+		return ""
+	}
+
+	// Use dim color for the separator slash to keep it subtle
+	separator := config.Colors.Dim.Sprint("/")
+	return strings.Join(coloredParts, separator)
 }
 
 // SelectModel launches an interactive model selection menu
@@ -137,18 +181,11 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 
 				// Add pricing info if available
 				pricingStr := ""
-				pricing := FormatPricingInfo(model.PromptPrice, model.CompletionPrice, false)
-				if pricing != "" {
-					// Color pricing based on cost level
-					var pricingColor *color.Color
-					if model.PromptPrice > 0.00001 { // >$10/1M tokens
-						pricingColor = config.Colors.Error
-					} else if model.PromptPrice > 0.000001 { // >$1/1M tokens
-						pricingColor = config.Colors.Warn
-					} else {
-						pricingColor = config.Colors.Primary
+				if model.PricePretty != "" && model.PricePretty != "Free" {
+					coloredPricing := formatColoredPricingDisplay(model.InputPrice, model.OutputPrice)
+					if coloredPricing != "" {
+						pricingStr = fmt.Sprintf("· %s", coloredPricing)
 					}
-					pricingStr = pricingColor.Sprintf("· %s", pricing)
 				}
 
 				if model.Description != "" {
@@ -195,17 +232,22 @@ func (ms *ModelSelector) selectModel(model *metadata.ModelMetadata) (string, err
 	}
 
 	// Show detailed pricing information if available
-	pricingInfo := FormatPricingInfo(model.PromptPrice, model.CompletionPrice, true)
-	if pricingInfo != "" {
-		var pricingColor *color.Color
-		if model.PromptPrice > 0.00001 { // >$10/1M tokens
-			pricingColor = config.Colors.Warn
-		} else if model.PromptPrice > 0.000001 { // >$1/1M tokens
-			pricingColor = config.Colors.Info
-		} else {
-			pricingColor = config.Colors.Ok
+	if model.PricePretty != "" && model.PricePretty != "Free" {
+		// Create detailed pricing format with individual colored prices
+		var priceParts []string
+		if model.InputPrice > 0 {
+			inputColored := formatPriceColored(model.InputPrice)
+			priceParts = append(priceParts, fmt.Sprintf("Input: %s/1M tokens", inputColored))
 		}
-		fmt.Printf("%s %s\n", config.Colors.Dim.Sprint("Pricing:"), pricingColor.Sprint(pricingInfo))
+		if model.OutputPrice > 0 {
+			outputColored := formatPriceColored(model.OutputPrice)
+			priceParts = append(priceParts, fmt.Sprintf("Output: %s/1M tokens", outputColored))
+		}
+
+		if len(priceParts) > 0 {
+			detailedPricing := strings.Join(priceParts, ", ")
+			fmt.Printf("%s %s\n", config.Colors.Accent.Sprint("Pricing:"), detailedPricing)
+		}
 	}
 
 	return model.ID, nil
@@ -247,7 +289,7 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 		}
 		remaining := model.ID[len(lineStr):]
 		if remaining != "" {
-			completions = append(completions, []rune(mc.formatCompletion(remaining, model.ContextLength, model.PromptPrice, model.CompletionPrice)))
+			completions = append(completions, []rune(mc.formatCompletion(remaining, model.ContextLength, model.PricePretty)))
 		}
 	}
 
@@ -256,7 +298,7 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 		if len(completions) >= 15 {
 			break
 		}
-		completions = append(completions, []rune(mc.formatCompletion(model.ID, model.ContextLength, model.PromptPrice, model.CompletionPrice)))
+		completions = append(completions, []rune(mc.formatCompletion(model.ID, model.ContextLength, model.PricePretty)))
 	}
 
 	if len(completions) >= 15 {
@@ -267,13 +309,12 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 }
 
 // formatCompletion formats a single completion with context and pricing info
-func (mc *modelCompleter) formatCompletion(modelText string, contextLength int, promptPrice, completionPrice float64) string {
+func (mc *modelCompleter) formatCompletion(modelText string, contextLength int, pricePretty string) string {
 	contextInfo := config.Colors.Dim.Sprintf("·%s", FormatCompactNumber(contextLength))
 
 	// Add pricing info if available
-	pricing := FormatPricingInfo(promptPrice, completionPrice, false)
-	if pricing != "" {
-		pricingInfo := config.Colors.Dim.Sprintf("·%s", pricing)
+	if pricePretty != "" {
+		pricingInfo := config.Colors.Dim.Sprintf("·%s", pricePretty)
 		return modelText + contextInfo + pricingInfo
 	}
 
@@ -285,7 +326,7 @@ func (mc *modelCompleter) formatCompletions(models []*metadata.ModelMetadata, wi
 	var completions [][]rune
 	for _, model := range models {
 		if withContext {
-			completions = append(completions, []rune(mc.formatCompletion(model.ID, model.ContextLength, model.PromptPrice, model.CompletionPrice)))
+			completions = append(completions, []rune(mc.formatCompletion(model.ID, model.ContextLength, model.PricePretty)))
 		} else {
 			completions = append(completions, []rune(model.ID))
 		}

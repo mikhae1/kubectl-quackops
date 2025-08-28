@@ -79,6 +79,10 @@ type Config struct {
 	MarkdownFormatPrompt     string
 	PlainFormatPrompt        string
 
+	// Kubectl command suggestion controls
+	KubectlMaxSuggestions int  // Maximum number of kubectl commands the LLM should suggest
+	KubectlReturnJSON     bool // Prefer JSON array output for command suggestions
+
 	KubectlPrompts       []KubectlPrompt
 	StoredUserCmdResults []CmdRes
 	SlashCommands        []SlashCommand
@@ -156,17 +160,18 @@ type Config struct {
 // These are constants (no env overrides) to keep branding and readability consistent.
 type UIColorRoles struct {
 	// Role colors
-	Primary *color.Color
-	Accent  *color.Color
-	Info    *color.Color
-	Dim     *color.Color
-	Shadow  *color.Color
-	Ok      *color.Color
-	Warn    *color.Color
-	Error   *color.Color
-	Model   *color.Color
-	Command *color.Color
-	Light   *color.Color
+	Primary  *color.Color
+	Accent   *color.Color
+	Info     *color.Color
+	Dim      *color.Color
+	Shadow   *color.Color
+	Ok       *color.Color
+	Warn     *color.Color
+	Error    *color.Color
+	Provider *color.Color
+	Model    *color.Color
+	Command  *color.Color
+	Light    *color.Color
 
 	// MCP/header specific
 	Header *color.Color
@@ -194,8 +199,9 @@ func initUIColorRoles() *UIColorRoles {
 		Warn:  color.New(color.FgHiYellow, color.Bold),
 		Error: color.New(color.FgHiRed, color.Bold),
 
-		Model:   color.New(color.FgHiMagenta),
-		Command: color.New(color.FgHiBlue),
+		Provider: color.New(color.FgHiMagenta),
+		Model:    color.New(color.FgMagenta),
+		Command:  color.New(color.FgHiBlue),
 
 		Header: color.New(color.FgHiMagenta, color.Bold),
 		Border: color.New(color.FgHiBlack),
@@ -395,6 +401,10 @@ func LoadConfig() *Config {
 		DiagnosticAnalysisPrompt: getEnvArg("QU_DIAGNOSTIC_ANALYSIS_PROMPT", defaultDiagnosticAnalysisPrompt).(string),
 		MarkdownFormatPrompt:     getEnvArg("QU_MARKDOWN_FORMAT_PROMPT", "Format your response using Markdown, including headings, lists, and code blocks for improved readability in a terminal environment.").(string),
 		PlainFormatPrompt:        getEnvArg("QU_PLAIN_FORMAT_PROMPT", "Provide a clear, concise analysis that is easy to read in a terminal environment.").(string),
+
+		// Kubectl suggestions
+		KubectlMaxSuggestions: getEnvArg("QU_KUBECTL_MAX_SUGGESTIONS", 12).(int),
+		KubectlReturnJSON:     getEnvArg("QU_KUBECTL_RETURN_JSON", true).(bool),
 
 		SlashCommands: defaultSlashCommands(),
 
@@ -774,11 +784,10 @@ Task: Analyze the user's issue and provide appropriate kubectl commands for diag
 
 var defaultKubectlFormatPrompt = `
 ## Output format:
-- Provide only the exact commands to run (no markdown formatting)
-- One command per line
-- Do not include explanations or descriptions
-- Use only actual resource names, not placeholders
+- Return a JSON array of strings. Each element must be a full command starting with "kubectl "
+- Use only actual resource names in the cluster; do not use placeholders like <namespace>
 - Never include destructive commands that modify cluster state
+- Prefer the most information-dense variants (e.g., -o wide, --show-labels)
 `
 
 var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
@@ -792,6 +801,8 @@ var defaultDiagnosticAnalysisPrompt = `# Kubernetes Diagnostic Analysis
 - You are an experienced Kubernetes administrator with deep expertise in diagnostics
 - Analyze the context above and provide insights on the issue
 - Identify potential problems or anomalies in the cluster state
+- Support claims with concrete evidence from the provided context
+- Be concise and prioritize highest-impact findings first
 - Suggest next steps or additional commands if needed
 - %s
 

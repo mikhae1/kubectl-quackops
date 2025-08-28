@@ -50,8 +50,10 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 		messages = append(messages, llms.TextParts(role, content))
 	}
 
-	// Ensure the current prompt is included even when history is disabled
-	messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, prompt))
+	// Include the current prompt only when history is disabled to avoid duplication
+	if !history {
+		messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, prompt))
+	}
 
 	logger.Log("info", "Sending request to %s/%s with %d messages in history", cfg.Provider, cfg.Model, len(messages))
 
@@ -121,7 +123,10 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 	var callbackFn func(ctx context.Context, chunk []byte) error
 	var cleanupFn func()
+	var contentAlreadyDisplayed bool
 
+	// For MCP-enabled configurations, we need to handle tool calls synchronously
+	// So we disable streaming initially and re-enable it for final responses
 	useStreaming := stream && !cfg.MCPClientEnabled
 
 	if useStreaming {
@@ -248,14 +253,13 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 				}
 				choice := resp.Choices[0]
 
-				// Display any text content that comes with tool calls on the first iteration
-				if choice.Content != "" {
+				// Display content if available and not already displayed
+				if choice.Content != "" && !contentAlreadyDisplayed {
 					stopOnce.Do(func() {
 						s.Stop()
 						fmt.Fprint(os.Stderr, "\r\033[2K")
 						fmt.Fprint(os.Stdout, "\n")
 					})
-
 					if cfg.DisableMarkdownFormat {
 						fmt.Fprintln(os.Stdout, choice.Content)
 					} else {
@@ -264,7 +268,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 						_ = w.Flush()
 						_ = w.Close()
 					}
-					fmt.Fprintln(os.Stdout)
+					contentAlreadyDisplayed = true
 				}
 
 				if len(choice.ToolCalls) > 0 {
@@ -412,23 +416,35 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 	if !useStreaming {
 		tokenMeter.AddIncoming(lib.EstimateTokens(cfg, responseContent))
-		// Always display output in non-streaming mode, regardless of original stream setting
-		s.Stop()
-		fmt.Fprint(os.Stderr, "\r\033[2K")
-		fmt.Fprint(os.Stdout, "\n")
-		if len(bufferedToolBlocks) > 0 {
-			for _, b := range bufferedToolBlocks {
-				fmt.Fprint(os.Stdout, b)
+		// Only display output if not already displayed during MCP processing
+		if !contentAlreadyDisplayed {
+			s.Stop()
+			fmt.Fprint(os.Stderr, "\r\033[2K")
+			fmt.Fprint(os.Stdout, "\n")
+			if len(bufferedToolBlocks) > 0 {
+				for _, b := range bufferedToolBlocks {
+					fmt.Fprint(os.Stdout, b)
+				}
 			}
-		}
-		if cfg.DisableMarkdownFormat {
-			fmt.Fprintln(os.Stdout, responseContent)
-			fmt.Fprintln(os.Stdout)
+			if cfg.DisableMarkdownFormat {
+				fmt.Fprintln(os.Stdout, responseContent)
+				fmt.Fprintln(os.Stdout)
+			} else {
+				w := formatter.NewStreamingWriter(os.Stdout)
+				_, _ = w.Write([]byte(responseContent))
+				_ = w.Flush()
+				_ = w.Close()
+				fmt.Fprintln(os.Stdout)
+			}
 		} else {
-			w := formatter.NewStreamingWriter(os.Stdout)
-			_, _ = w.Write([]byte(responseContent))
-			_ = w.Flush()
-			_ = w.Close()
+			// Content already displayed, just ensure spinner is stopped and add buffered tool blocks
+			s.Stop()
+			fmt.Fprint(os.Stderr, "\r\033[2K")
+			if len(bufferedToolBlocks) > 0 {
+				for _, b := range bufferedToolBlocks {
+					fmt.Fprint(os.Stdout, b)
+				}
+			}
 			fmt.Fprintln(os.Stdout)
 		}
 	}

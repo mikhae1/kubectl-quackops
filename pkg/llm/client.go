@@ -228,3 +228,14 @@ func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner, meter
 
 	return callback, cleanup
 }
+
+// RequestSilent suppresses any printing while returning the model's response
+func RequestSilent(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
+	// Force non-streaming and temporarily disable markdown formatting to avoid writes
+	origDisableMD := cfg.DisableMarkdownFormat
+	cfg.DisableMarkdownFormat = true
+	defer func() { cfg.DisableMarkdownFormat = origDisableMD }()
+
+	// Run normal request path with stream=false (no streaming callback prints)
+	return Request(cfg, prompt, false, history)
+}
