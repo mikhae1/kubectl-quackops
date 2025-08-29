@@ -289,10 +289,18 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 			// Apply the retry delay with countdown
 			applyRetryDelayWithCountdown(s, cfg, delay, attempt, maxRetries, outgoingTokens, messageType)
 			s.Suffix = originalSuffix
+			// Ensure spinner is running after retry delay
+			if !s.Active() {
+				s.Start()
+			}
 		}
 
 		// Apply throttling delay before making the request (including retries)
 		applyThrottleDelayWithSpinner(cfg, s)
+		// Ensure spinner is running after throttling delay
+		if !s.Active() {
+			s.Start()
+		}
 
 		if len(messages) == 0 {
 			messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, prompt))
@@ -508,6 +516,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 		if responseContent == "" {
 			if attempt < maxRetries {
 				logger.Log("warn", "Received empty content from %s/%s", cfg.Provider, cfg.Model)
+				lastError = fmt.Errorf("no content generated from %s", cfg.Provider)
 				continue // This will trigger the backoff and retry
 			}
 		}
