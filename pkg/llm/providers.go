@@ -44,6 +44,7 @@ func azOpenAIRequestWithChat(cfg *config.Config, prompt string, stream bool, his
 	llmOptions := []openai.Option{
 		openai.WithAPIType(openai.APITypeAzure),
 		openai.WithModel(cfg.Model),
+		openai.WithAPIVersion(cfg.AzOpenAIAPIVersion),
 	}
 
 	// Support custom Azure OpenAI base URL

@@ -263,6 +263,7 @@ For users seeking the most advanced AI capabilities.
    ```sh
    export QU_AZ_OPENAI_API_KEY=<YOUR-AZURE-OPENAI-API-KEY>
    export QU_AZ_OPENAI_BASE_URL="https://<your-resource-name>.openai.azure.com"
+   export QU_AZ_OPENAI_API_VERSION="2025-05-01"  # Optional, defaults to 2025-05-01
    ```
    - Aliases supported: `OPENAI_API_KEY` and `OPENAI_BASE_URL` can also be used.
 3. Run QuackOps with the Azure provider, using your deployment name as the model:
@@ -421,7 +422,7 @@ QU_MCP_CLIENT=true
 | `--mcp-tool-timeout` | Timeout for MCP tools (seconds) | `30` |
 | `--mcp-strict` | Strict MCP mode (no fallback) | `false` |
 
-### MCP Configuration (YAML)
+### MCP Configuration (JSON)
 
 Create `~/.quackops/mcp.json`:
 

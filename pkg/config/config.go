@@ -44,12 +44,13 @@ type Config struct {
 	AllowedKubectlCmds []string
 	BlockedKubectlCmds []string
 
-	DuckASCIIArt string
-	Provider     string
-	Model        string
-	OllamaApiURL string
-	Retries      int
-	Timeout      int
+	DuckASCIIArt       string
+	Provider           string
+	Model              string
+	OllamaApiURL       string
+	AzOpenAIAPIVersion string
+	Retries            int
+	Timeout            int
 	// Token window configuration
 	DefaultMaxTokens      int // Provider/model default or auto-detected context window
 	UserMaxTokens         int // Explicit user override via env/flag; >0 disables auto-detect
@@ -215,46 +216,73 @@ func initUIColorRoles() *UIColorRoles {
 	}
 }
 
+// envFirst returns the first non-empty value among provided environment variable keys
+func envFirst(keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// ProviderDefaults groups default values per provider
+type ProviderDefaults struct {
+	DefaultMaxTokens      int
+	DefaultModel          string
+	DefaultEmbeddingModel string
+}
+
+var providerDefaults = map[string]ProviderDefaults{
+	"google": {
+		DefaultMaxTokens:      128000,
+		DefaultModel:          "gemini-2.5-flash-preview-04-17",
+		DefaultEmbeddingModel: "models/text-embedding-004",
+	},
+	"ollama": {
+		DefaultMaxTokens:      4096,
+		DefaultModel:          "llama3.1",
+		DefaultEmbeddingModel: "models/text-embedding-large-exp",
+	},
+	"openai": {
+		DefaultMaxTokens:      128000,
+		DefaultModel:          "gpt-5-mini",
+		DefaultEmbeddingModel: "text-embedding-3-small",
+	},
+	"azopenai": {
+		DefaultMaxTokens:      128000,
+		DefaultModel:          "gpt-4o-mini",
+		DefaultEmbeddingModel: "text-embedding-3-small",
+	},
+	"anthropic": {
+		DefaultMaxTokens:      200000,
+		DefaultModel:          "claude-3-7-sonnet-latest",
+		DefaultEmbeddingModel: "nomic-embed-text",
+	},
+}
+
+var defaultProviderFallback = ProviderDefaults{
+	DefaultMaxTokens:      16000,
+	DefaultModel:          "llama3.1",
+	DefaultEmbeddingModel: "models/text-embedding-large-exp",
+}
+
 // GetOpenAIBaseURL returns the OpenAI base URL from environment variables
 // Supports both QU_OPENAI_BASE_URL and OPENAI_BASE_URL (as alias)
 func GetOpenAIBaseURL() string {
-	// Check QU_OPENAI_BASE_URL first (primary)
-	if baseURL := os.Getenv("QU_OPENAI_BASE_URL"); baseURL != "" {
-		return baseURL
-	}
-	// Check OPENAI_BASE_URL as alias
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
-		return baseURL
-	}
-	return ""
+	return envFirst("QU_OPENAI_BASE_URL", "OPENAI_BASE_URL")
 }
 
 // GetAzOpenAIBaseURL returns the Azure OpenAI base URL from environment variables
 // Supports both QU_AZ_OPENAI_BASE_URL and OPENAI_BASE_URL (as alias)
 func GetAzOpenAIBaseURL() string {
-	// Check QU_AZ_OPENAI_BASE_URL first (primary)
-	if baseURL := os.Getenv("QU_AZ_OPENAI_BASE_URL"); baseURL != "" {
-		return baseURL
-	}
-	// Check OPENAI_BASE_URL as alias
-	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
-		return baseURL
-	}
-	return ""
+	return envFirst("QU_AZ_OPENAI_BASE_URL", "OPENAI_BASE_URL")
 }
 
 // GetAzOpenAIAPIKey returns the Azure OpenAI API key from environment variables
 // Supports both QU_AZ_OPENAI_API_KEY and OPENAI_API_KEY (as alias)
 func GetAzOpenAIAPIKey() string {
-	// Check QU_AZ_OPENAI_API_KEY first (primary)
-	if apiKey := os.Getenv("QU_AZ_OPENAI_API_KEY"); apiKey != "" {
-		return apiKey
-	}
-	// Check OPENAI_API_KEY as alias
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		return apiKey
-	}
-	return ""
+	return envFirst("QU_AZ_OPENAI_API_KEY", "OPENAI_API_KEY")
 }
 
 // LoadConfig initializes the application configuration
@@ -264,33 +292,15 @@ func LoadConfig() *Config {
 
 	provider := getEnvArg("QU_LLM_PROVIDER", "ollama").(string)
 
-	defaultMaxTokens := 16000
-	defaultModel := "llama3.1"
-	defaultEmbeddingModel := "models/text-embedding-large-exp"
-	if provider == "google" {
-		// https://ai.google.dev/gemini-api/docs/models/gemini
-		defaultMaxTokens = 128000 // best for Gemini exp tier
-		defaultModel = "gemini-2.5-flash-preview-04-17"
-		defaultEmbeddingModel = "models/text-embedding-004"
-	} else if provider == "ollama" {
-		// https://ai.meta.com/blog/meta-llama-3-1/
-		defaultMaxTokens = 4096
-		defaultModel = "llama3.1"
-	} else if provider == "openai" {
-		// https://platform.openai.com/docs/models/gpt-4o-mini
-		defaultMaxTokens = 128000
-		defaultModel = "gpt-5-mini"
-		defaultEmbeddingModel = "text-embedding-3-small"
-	} else if provider == "azopenai" {
-		// Azure OpenAI defaults - similar to OpenAI but requires deployment names
-		defaultMaxTokens = 128000
-		defaultModel = "gpt-4o-mini"
-		defaultEmbeddingModel = "text-embedding-3-small"
-	} else if provider == "anthropic" {
-		defaultMaxTokens = 200000
-		defaultModel = "claude-3-7-sonnet-latest"
-		defaultEmbeddingModel = "nomic-embed-text"
+	// Centralized provider defaults
+	pd, ok := providerDefaults[provider]
+	if !ok {
+		pd = defaultProviderFallback
 	}
+
+	defaultMaxTokens := pd.DefaultMaxTokens
+	defaultModel := pd.DefaultModel
+	defaultEmbeddingModel := pd.DefaultEmbeddingModel
 
 	// Get home directory for history file
 	homeDir, err := os.UserHomeDir()
@@ -308,6 +318,7 @@ func LoadConfig() *Config {
 		Provider:              provider,
 		Model:                 getEnvArg("QU_LLM_MODEL", defaultModel).(string),
 		OllamaApiURL:          getEnvArg("QU_OLLAMA_BASE_URL", "http://localhost:11434").(string),
+		AzOpenAIAPIVersion:    getEnvArg("QU_AZ_OPENAI_API_VERSION", "2025-05-01").(string),
 		SafeMode:              getEnvArg("QU_SAFE_MODE", false).(bool),
 		Retries:               getEnvArg("QU_RETRIES", 3).(int),
 		Timeout:               getEnvArg("QU_TIMEOUT", 30).(int),
@@ -751,7 +762,6 @@ var defaultBlockedKubectlCmds = []string{
 	"port-forward",
 	"proxy",
 	"run",
-	"cp",
 	"wait",
 	"cordon",
 	"uncordon",

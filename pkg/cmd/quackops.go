@@ -628,7 +628,7 @@ func printWelcomeBanner(cfg *config.Config) {
 	// Plain strings are used for computing rainbow offsets; we will use the live cfg values directly
 	apiPlain := ""
 	if cfg.OllamaApiURL != "" {
-		apiPlain = fmt.Sprintf("K8s API: %s", cfg.OllamaApiURL)
+		apiPlain = fmt.Sprintf("LLM API: %s", cfg.OllamaApiURL)
 	}
 	// Safe/history plain strings are not needed directly here
 

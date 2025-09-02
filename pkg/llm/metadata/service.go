@@ -15,15 +15,36 @@ import (
 	"time"
 )
 
+// getAzOpenAIAPIVersion returns the Azure OpenAI API version from environment variables
+func getAzOpenAIAPIVersion() string {
+	if version := os.Getenv("QU_AZ_OPENAI_API_VERSION"); version != "" {
+		return version
+	}
+	return "2025-05-01" // default
+}
+
+// getAzOpenAIAPIKey returns the Azure OpenAI API key from environment variables
+func getAzOpenAIAPIKey() string {
+	// Check QU_AZ_OPENAI_API_KEY first (primary)
+	if apiKey := os.Getenv("QU_AZ_OPENAI_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	// Check OPENAI_API_KEY as alias
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	return ""
+}
+
 // ModelMetadata holds information about a model's capabilities
 type ModelMetadata struct {
 	ID            string  `json:"id"`
 	ContextLength int     `json:"context_length"`
 	MaxTokens     int     `json:"max_tokens"`
 	Description   string  `json:"description,omitempty"`
-	InputPrice    float64 `json:"input_price,omitempty"`    // USD per token for input/prompt
-	OutputPrice   float64 `json:"output_price,omitempty"`   // USD per token for output/completion
-	PricePretty   string  `json:"price_pretty,omitempty"`   // Formatted price string like "↑$1.25/↓$10.0"
+	InputPrice    float64 `json:"input_price,omitempty"`  // USD per token for input/prompt
+	OutputPrice   float64 `json:"output_price,omitempty"` // USD per token for output/completion
+	PricePretty   string  `json:"price_pretty,omitempty"` // Formatted price string like "↑$1.25/↓$10.0"
 }
 
 // OpenRouterModelsResponse represents the OpenRouter API models response
@@ -131,21 +152,21 @@ func formatPricePretty(inputPrice, outputPrice float64) string {
 	if inputPrice == 0.0 && outputPrice == 0.0 {
 		return "Free"
 	}
-	
+
 	var parts []string
-	
+
 	if inputPrice > 0.0 {
 		parts = append(parts, "↑"+formatPrice(inputPrice))
 	}
-	
+
 	if outputPrice > 0.0 {
 		parts = append(parts, "↓"+formatPrice(outputPrice))
 	}
-	
+
 	if len(parts) == 0 {
 		return "Free"
 	}
-	
+
 	return strings.Join(parts, "/")
 }
 
@@ -191,6 +212,33 @@ func (ms *MetadataService) doRequest(method, url string, body io.Reader, headers
 		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
 	}
 	return b, resp.StatusCode, nil
+}
+
+// getJSON performs an HTTP request and unmarshals a successful JSON response into target
+func (ms *MetadataService) getJSON(method, url string, body io.Reader, headers map[string]string, target any) error {
+	b, status, err := ms.doRequest(method, url, body, headers)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("api returned status %d", status)
+	}
+	if err := json.Unmarshal(b, target); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+	return nil
+}
+
+// parsePriceString parses a price string into float64, returning 0 on error or empty input
+func parsePriceString(s string) float64 {
+	if strings.TrimSpace(s) == "" {
+		return 0
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // GetModelContextLength retrieves the context length for a given model
@@ -286,25 +334,17 @@ func (ms *MetadataService) fetchOpenRouterMetadata(model, baseURL string) (*Mode
 	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		headers["Authorization"] = "Bearer " + apiKey
 	}
-	body, status, err := ms.doRequest("GET", apiURL, nil, headers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", status)
-	}
-
 	var response OpenRouterModelsResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &response); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	// Find the requested model
 	for _, modelData := range response.Data {
 		if modelData.ID == model || strings.HasSuffix(modelData.ID, "/"+model) {
 			// Parse pricing strings to floats
-			promptPrice, _ := strconv.ParseFloat(modelData.Pricing.Prompt, 64)
-			completionPrice, _ := strconv.ParseFloat(modelData.Pricing.Completion, 64)
+			promptPrice := parsePriceString(modelData.Pricing.Prompt)
+			completionPrice := parsePriceString(modelData.Pricing.Completion)
 
 			return &ModelMetadata{
 				ID:            modelData.ID,
@@ -332,17 +372,9 @@ func (ms *MetadataService) fetchOpenAIMetadata(model, baseURL string) (*ModelMet
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		headers["Authorization"] = "Bearer " + apiKey
 	}
-	body, status, err := ms.doRequest("GET", apiURL, nil, headers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", status)
-	}
-
 	var response OpenAIModelsResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &response); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	// Find the requested model
@@ -351,12 +383,8 @@ func (ms *MetadataService) fetchOpenAIMetadata(model, baseURL string) (*ModelMet
 			// Parse pricing from API or use fallback
 			var promptPrice, completionPrice float64
 			if modelData.Pricing != nil {
-				if modelData.Pricing.Prompt != "" {
-					promptPrice, _ = strconv.ParseFloat(modelData.Pricing.Prompt, 64)
-				}
-				if modelData.Pricing.Completion != "" {
-					completionPrice, _ = strconv.ParseFloat(modelData.Pricing.Completion, 64)
-				}
+				promptPrice = parsePriceString(modelData.Pricing.Prompt)
+				completionPrice = parsePriceString(modelData.Pricing.Completion)
 			}
 
 			return &ModelMetadata{
@@ -386,45 +414,23 @@ func (ms *MetadataService) fetchOpenAIMetadata(model, baseURL string) (*ModelMet
 
 // fetchAzureOpenAIMetadata fetches model metadata from Azure OpenAI API
 func (ms *MetadataService) fetchAzureOpenAIMetadata(model, baseURL string) (*ModelMetadata, error) {
+	apiVersion := getAzOpenAIAPIVersion()
+
 	if baseURL == "" {
-		return nil, fmt.Errorf("Azure OpenAI requires a base URL")
+		return nil, fmt.Errorf("azure openai requires a base URL")
 	}
 
 	// Azure OpenAI API endpoint format: https://{resource-name}.openai.azure.com/openai/deployments/{deployment-name}/models
 	// But for getting model info, we can use the general models endpoint
-	apiURL := strings.TrimSuffix(baseURL, "/") + "/openai/models?api-version=2023-05-15"
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/openai/models?api-version=" + apiVersion
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	headers := map[string]string{"Content-Type": "application/json"}
+	if apiKey := getAzOpenAIAPIKey(); apiKey != "" {
+		headers["api-key"] = apiKey
 	}
-
-	// Azure OpenAI uses api-key header instead of Authorization Bearer
-	if apiKey := os.Getenv("QU_AZ_OPENAI_API_KEY"); apiKey != "" {
-		req.Header.Set("api-key", apiKey)
-	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		req.Header.Set("api-key", apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	var response AzureOpenAIModelsResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &response); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	// Find the requested model (in Azure OpenAI, this is usually the deployment name)
@@ -441,12 +447,8 @@ func (ms *MetadataService) fetchAzureOpenAIMetadata(model, baseURL string) (*Mod
 			// Parse pricing from API or use fallback
 			var promptPrice, completionPrice float64
 			if modelData.Pricing != nil {
-				if modelData.Pricing.Prompt != "" {
-					promptPrice, _ = strconv.ParseFloat(modelData.Pricing.Prompt, 64)
-				}
-				if modelData.Pricing.Completion != "" {
-					completionPrice, _ = strconv.ParseFloat(modelData.Pricing.Completion, 64)
-				}
+				promptPrice = parsePriceString(modelData.Pricing.Prompt)
+				completionPrice = parsePriceString(modelData.Pricing.Completion)
 			}
 
 			return &ModelMetadata{
@@ -478,43 +480,21 @@ func (ms *MetadataService) fetchAzureOpenAIMetadata(model, baseURL string) (*Mod
 
 // fetchAzureOpenAIModelList fetches the list of available models from Azure OpenAI
 func (ms *MetadataService) fetchAzureOpenAIModelList(baseURL string) ([]*ModelMetadata, error) {
+	apiVersion := getAzOpenAIAPIVersion()
+
 	if baseURL == "" {
-		return nil, fmt.Errorf("Azure OpenAI requires a base URL")
+		return nil, fmt.Errorf("azure openai requires a base URL")
 	}
 
-	apiURL := strings.TrimSuffix(baseURL, "/") + "/openai/models?api-version=2023-05-15"
+	apiURL := strings.TrimSuffix(baseURL, "/") + "/openai/models?api-version=" + apiVersion
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	headers := map[string]string{"Content-Type": "application/json"}
+	if apiKey := getAzOpenAIAPIKey(); apiKey != "" {
+		headers["api-key"] = apiKey
 	}
-
-	// Azure OpenAI uses api-key header instead of Authorization Bearer
-	if apiKey := os.Getenv("QU_AZ_OPENAI_API_KEY"); apiKey != "" {
-		req.Header.Set("api-key", apiKey)
-	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		req.Header.Set("api-key", apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	var response AzureOpenAIModelsResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &response); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	var models []*ModelMetadata
@@ -530,12 +510,8 @@ func (ms *MetadataService) fetchAzureOpenAIModelList(baseURL string) ([]*ModelMe
 		// Parse pricing from API or use fallback
 		var promptPrice, completionPrice float64
 		if modelData.Pricing != nil {
-			if modelData.Pricing.Prompt != "" {
-				promptPrice, _ = strconv.ParseFloat(modelData.Pricing.Prompt, 64)
-			}
-			if modelData.Pricing.Completion != "" {
-				completionPrice, _ = strconv.ParseFloat(modelData.Pricing.Completion, 64)
-			}
+			promptPrice = parsePriceString(modelData.Pricing.Prompt)
+			completionPrice = parsePriceString(modelData.Pricing.Completion)
 		}
 
 		models = append(models, &ModelMetadata{
@@ -661,30 +637,10 @@ func (ms *MetadataService) fetchGoogleMetadata(model, baseURL string) (*ModelMet
 		}
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch model: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
+	headers := map[string]string{"Content-Type": "application/json"}
 	var gm GoogleModelResponse
-	if err := json.Unmarshal(body, &gm); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &gm); err != nil {
+		return nil, fmt.Errorf("failed to fetch model: %w", err)
 	}
 
 	// Derive context length. Prefer explicit input token limit; if zero, try output, else default.
@@ -727,32 +683,16 @@ func (ms *MetadataService) fetchAnthropicMetadata(model, baseURL string) (*Model
 	}
 	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1/models"
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	headers := map[string]string{
+		"Content-Type":      "application/json",
+		"anthropic-version": "2023-06-01",
 	}
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-		req.Header.Set("x-api-key", apiKey)
-	}
-	// Required version header
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		headers["x-api-key"] = apiKey
 	}
 	var r anthropicModelsResponse
-	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &r); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 	// First try exact match
 	for _, m := range r.Data {
@@ -832,27 +772,10 @@ func (ms *MetadataService) fetchOllamaMetadata(model, baseURL string) (*ModelMet
 	payload := map[string]string{"name": model}
 	b, _ := json.Marshal(payload)
 
-	req, err := http.NewRequestWithContext(context.Background(), "POST", apiURL, bytes.NewReader(b))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch model: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
+	headers := map[string]string{"Content-Type": "application/json"}
 	var r ollamaShowResponse
-	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("POST", apiURL, bytes.NewReader(b), headers, &r); err != nil {
+		return nil, fmt.Errorf("failed to fetch model: %w", err)
 	}
 
 	// Try multiple places to determine context length
@@ -909,41 +832,22 @@ func (ms *MetadataService) fetchOpenRouterModelList(baseURL string) ([]*ModelMet
 		apiURL = strings.TrimSuffix(baseURL, "/") + "/api/v1/models"
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	headers := map[string]string{"Content-Type": "application/json"}
+	if apiKey := os.Getenv("OPENROUTER_API_KEY"); apiKey != "" {
+		headers["Authorization"] = "Bearer " + apiKey
+	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		headers["Authorization"] = "Bearer " + apiKey
 	}
-
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	var response OpenRouterModelsResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &response); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	var models []*ModelMetadata
 	for _, modelData := range response.Data {
 		// Parse pricing strings to floats
-		promptPrice, _ := strconv.ParseFloat(modelData.Pricing.Prompt, 64)
-		completionPrice, _ := strconv.ParseFloat(modelData.Pricing.Completion, 64)
+		promptPrice := parsePriceString(modelData.Pricing.Prompt)
+		completionPrice := parsePriceString(modelData.Pricing.Completion)
 
 		models = append(models, &ModelMetadata{
 			ID:            modelData.ID,
@@ -967,34 +871,13 @@ func (ms *MetadataService) fetchOpenAIModelList(baseURL string) ([]*ModelMetadat
 
 	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1/models"
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
+	headers := map[string]string{"Content-Type": "application/json"}
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+		headers["Authorization"] = "Bearer " + apiKey
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	var response OpenAIModelsResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &response); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	var models []*ModelMetadata
@@ -1002,12 +885,8 @@ func (ms *MetadataService) fetchOpenAIModelList(baseURL string) ([]*ModelMetadat
 		// Parse pricing from API or use fallback
 		var promptPrice, completionPrice float64
 		if modelData.Pricing != nil {
-			if modelData.Pricing.Prompt != "" {
-				promptPrice, _ = strconv.ParseFloat(modelData.Pricing.Prompt, 64)
-			}
-			if modelData.Pricing.Completion != "" {
-				completionPrice, _ = strconv.ParseFloat(modelData.Pricing.Completion, 64)
-			}
+			promptPrice = parsePriceString(modelData.Pricing.Prompt)
+			completionPrice = parsePriceString(modelData.Pricing.Completion)
 		}
 
 		models = append(models, &ModelMetadata{
@@ -1039,33 +918,13 @@ func (ms *MetadataService) fetchGoogleModelList(baseURL string) ([]*ModelMetadat
 		}
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
+	headers := map[string]string{"Content-Type": "application/json"}
 	// Google returns a different structure for the models list
 	var response struct {
 		Models []GoogleModelResponse `json:"models"`
 	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &response); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	var models []*ModelMetadata
@@ -1098,32 +957,16 @@ func (ms *MetadataService) fetchAnthropicModelList(baseURL string) ([]*ModelMeta
 	}
 	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1/models"
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	headers := map[string]string{
+		"Content-Type":      "application/json",
+		"anthropic-version": "2023-06-01",
 	}
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-		req.Header.Set("x-api-key", apiKey)
+		headers["x-api-key"] = apiKey
 	}
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	var r anthropicModelsResponse
-	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &r); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	var models []*ModelMetadata
@@ -1170,28 +1013,10 @@ func (ms *MetadataService) fetchOllamaModelList(baseURL string) ([]*ModelMetadat
 	serverURL := strings.TrimSuffix(baseURL, "/api")
 	apiURL := strings.TrimSuffix(serverURL, "/") + "/api/tags"
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := ms.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
+	headers := map[string]string{"Content-Type": "application/json"}
 	var r OllamaModelsResponse
-	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	if err := ms.getJSON("GET", apiURL, nil, headers, &r); err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
 
 	var models []*ModelMetadata
