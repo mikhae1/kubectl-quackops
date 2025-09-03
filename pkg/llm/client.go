@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mikhae1/kubectl-quackops/pkg/animator"
@@ -32,20 +31,7 @@ var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, h
 	logger.Log("llmIn", "[%s/%s]: %s", cfg.Provider, cfg.Model, truncPrompt)
 	logger.Log("llmIn", "History: %v messages, %d tokens", len(cfg.ChatMessages), lib.CountTokens("", cfg.ChatMessages))
 
-	// Create spinner using SpinnerManager
-	spinnerManager := lib.GetSpinnerManager(cfg)
-	message := fmt.Sprintf("Waiting for %s/%s... (press ESC to cancel)", cfg.Provider, cfg.Model)
-	cancelSpinner := spinnerManager.ShowLLM(message)
-
-	// Apply throttling delay with the spinner (before making the request)
-	applyThrottleDelayWithSpinnerManager(cfg, spinnerManager)
-
-	// Stop spinner for streaming mode, keep it running for non-streaming
-	if stream {
-		spinnerManager.Hide()
-	} else {
-		defer cancelSpinner()
-	}
+	// Spinner lifecycle and throttling are managed inside Chat().
 
 	var err error
 	var answer string
@@ -91,7 +77,7 @@ func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage
 
 		// Create spinner for history trimming using SpinnerManager
 		spinnerManager := lib.GetSpinnerManager(cfg)
-		cancelTrimSpinner := spinnerManager.ShowThrottle("Trimming conversation history...", time.Second*2)
+		cancelTrimSpinner := spinnerManager.ShowThrottle("✂️ "+config.Colors.Info.Sprint("Trimming")+" "+config.Colors.Dim.Sprint("conversation history..."), time.Second*2)
 		defer cancelTrimSpinner()
 
 		// Truncate the thread if it exceeds the maximum token length
@@ -120,9 +106,36 @@ func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage
 	logger.Log("info", "\nThread: %d messages, %d tokens", len(chatMessages), lib.CountTokens("", chatMessages))
 }
 
-// createStreamingCallback creates a callback function for streaming LLM responses with optional Markdown formatting
-func createStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerManager, meter *lib.TokenMeter, onFirstChunk func()) (func(ctx context.Context, chunk []byte) error, func()) {
-	var meterStarted sync.Once
+// WriteNormalizedChunk writes chunk to the provided writer while normalizing line breaks.
+// It ensures that intermediate newlines are written as CRLF (\r\n) to keep rendering consistent
+// across different terminal environments, while avoiding an extra newline at the end.
+func WriteNormalizedChunk(w io.Writer, chunk []byte) error {
+	if w == nil || len(chunk) == 0 {
+		return nil
+	}
+
+	chunkStr := string(chunk)
+	if strings.Contains(chunkStr, "\n") {
+		lines := strings.Split(chunkStr, "\n")
+		for i, line := range lines {
+			if i < len(lines)-1 {
+				if _, err := w.Write([]byte(line + "\r\n")); err != nil {
+					return err
+				}
+			} else {
+				if _, err := w.Write([]byte(line)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	_, err := w.Write(chunk)
+	return err
+}
+
+// CreateStreamingCallback creates a callback function for streaming LLM responses with optional Markdown formatting
+func CreateStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerManager, meter *lib.TokenMeter, onFirstChunk func()) (func(ctx context.Context, chunk []byte) error, func()) {
 	var meterTicker *time.Ticker
 	var meterDone chan struct{}
 	var mdWriter *formatter.StreamingWriter
@@ -141,6 +154,7 @@ func createStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerMana
 	if !cfg.DisableMarkdownFormat {
 		// Create a streaming writer that formats Markdown
 		mdWriter = formatter.NewStreamingWriter(outputWriter)
+		outputWriter = mdWriter
 	}
 
 	// Create cleanup function for the writers
@@ -179,23 +193,7 @@ func createStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerMana
 		if onFirstChunk != nil {
 			onFirstChunk()
 		}
-		// Start a background meter renderer on stderr to show live ↓ tokens
-		meterStarted.Do(func() {
-			if meter != nil {
-				meterTicker = time.NewTicker(200 * time.Millisecond)
-				meterDone = make(chan struct{})
-				go func() {
-					for {
-						select {
-						case <-meterDone:
-							return
-						case <-meterTicker.C:
-							meter.Render()
-						}
-					}
-				}()
-			}
-		})
+		// Token meter disabled during streaming to prevent ANSI interference
 
 		// Accumulate incoming tokens silently; if chunk is code block or markdown fence, still count
 		if meter != nil && len(chunk) > 0 {
@@ -205,21 +203,8 @@ func createStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerMana
 			cfg.LastIncomingTokens += delta
 		}
 
-		// Process the chunk with Markdown formatting if enabled
-		if !cfg.DisableMarkdownFormat && mdWriter != nil {
-			_, err := mdWriter.Write(chunk)
-			return err
-		}
-
-		// If Markdown is disabled but animation is enabled
-		if cfg.DisableMarkdownFormat && !cfg.DisableAnimation && animWriter != nil {
-			_, err := animWriter.Write(chunk)
-			return err
-		}
-
-		// Default: write the chunk directly to stdout
-		fmt.Print(string(chunk))
-		return nil
+		// Unified write path using the final outputWriter pipeline
+		return WriteNormalizedChunk(outputWriter, chunk)
 	}
 
 	return callback, cleanup
@@ -230,7 +215,9 @@ func RequestSilent(cfg *config.Config, prompt string, stream bool, history bool)
 	// Force non-streaming and temporarily disable markdown formatting to avoid writes
 	origDisableMD := cfg.DisableMarkdownFormat
 	cfg.DisableMarkdownFormat = true
-	defer func() { cfg.DisableMarkdownFormat = origDisableMD }()
+	origSuppressContentPrint := cfg.SuppressContentPrint
+	cfg.SuppressContentPrint = true
+	defer func() { cfg.DisableMarkdownFormat = origDisableMD; cfg.SuppressContentPrint = origSuppressContentPrint }()
 
 	// Run normal request path with stream=false (no streaming callback prints)
 	return Request(cfg, prompt, false, history)

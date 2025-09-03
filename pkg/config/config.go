@@ -65,6 +65,9 @@ type Config struct {
 	DisableHistory        bool
 	KubectlBinaryPath     string
 
+	// SuppressContentPrint prevents Chat from printing model message bodies
+	SuppressContentPrint bool
+
 	// Test-friendly switch to skip sleeps/backoffs/throttle waits
 	SkipWaits bool
 
@@ -332,6 +335,7 @@ func LoadConfig() *Config {
 		HistoryFile:           getEnvArg("QU_HISTORY_FILE", defaultHistoryFile).(string),
 		DisableHistory:        getEnvArg("QU_DISABLE_HISTORY", false).(bool),
 		KubectlBinaryPath:     getEnvArg("QU_KUBECTL_BINARY", "kubectl").(string),
+		SuppressContentPrint:  false,
 		SkipWaits:             getEnvArg("QU_SKIP_WAITS", false).(bool),
 		SpinnerTimeout:        300,
 		CommandPrefix:         getEnvArg("QU_COMMAND_PREFIX", "$").(string),

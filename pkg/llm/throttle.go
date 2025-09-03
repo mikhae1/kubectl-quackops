@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -16,8 +17,6 @@ var (
 	// Global throttling state
 	throttleMutex     sync.Mutex
 	lastResponseTime  time.Time
-	requestCount      int
-	windowStartTime   time.Time
 	requestTimestamps []time.Time // Track individual request timestamps in the current window
 )
 
@@ -107,41 +106,21 @@ var throttleMessages = []string{
 	"⚖️ Keeping the request-response karma balanced...",
 }
 
-// applyThrottleDelay applies the calculated delay before making an LLM request with cool spinner messages
-func applyThrottleDelay(cfg *config.Config) {
-	applyThrottleDelayWithSpinner(cfg, nil)
-}
-
 // applyThrottleDelayWithSpinner applies throttling delay with enhanced spinner messaging
-func applyThrottleDelayWithSpinner(cfg *config.Config, s *spinner.Spinner) {
-	applyThrottleDelayWithCustomMessage(cfg, s, "")
+func applyThrottleDelayWithSpinner(cfg *config.Config, s *spinner.Spinner) error {
+	return applyThrottleDelayWithCustomMessage(cfg, s, "")
 }
 
 // applyThrottleDelayWithSpinnerManager applies throttling delay using the centralized SpinnerManager
-func applyThrottleDelayWithSpinnerManager(cfg *config.Config, spinnerManager *lib.SpinnerManager) {
-	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
-	if cfg != nil && cfg.SkipWaits {
-		return
-	}
-	delay := calculateThrottleDelay(cfg)
-	if delay > 0 {
-		logger.Log("info", "Applying throttle delay: %v", delay)
-
-		// Pick a random cool throttle message
-		message := throttleMessages[rand.Intn(len(throttleMessages))]
-		cancelThrottle := spinnerManager.ShowWithCountdown(lib.SpinnerThrottle, message, delay)
-		time.Sleep(delay)
-		cancelThrottle()
-
-		// Note: lastResponseTime will be updated separately when the response is received
-	}
+func applyThrottleDelayWithSpinnerManager(cfg *config.Config, spinnerManager *lib.SpinnerManager) error {
+	return applyThrottleDelayWithCustomMessageManager(cfg, spinnerManager, "")
 }
 
 // applyThrottleDelayWithCustomMessageManager applies throttling delay with SpinnerManager and custom message
-func applyThrottleDelayWithCustomMessageManager(cfg *config.Config, spinnerManager *lib.SpinnerManager, customMessage string) {
+func applyThrottleDelayWithCustomMessageManager(cfg *config.Config, spinnerManager *lib.SpinnerManager, customMessage string) error {
 	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
 	if cfg != nil && cfg.SkipWaits {
-		return
+		return nil
 	}
 	delay := calculateThrottleDelay(cfg)
 	if delay > 0 {
@@ -155,19 +134,50 @@ func applyThrottleDelayWithCustomMessageManager(cfg *config.Config, spinnerManag
 			message = throttleMessages[rand.Intn(len(throttleMessages))]
 		}
 
-		cancelThrottle := spinnerManager.ShowWithCountdown(lib.SpinnerThrottle, message, delay)
-		time.Sleep(delay)
-		cancelThrottle()
+		// Start spinner with initial message
+		cancelThrottle := spinnerManager.Show(lib.SpinnerThrottle, message)
+
+		// Apply cancellable delay with countdown and Ctrl-C handling
+		ctx, cancel := context.WithCancel(context.Background())
+		stopEsc := lib.StartEscWatcher(ctx, cancel, spinnerManager, cfg)
+
+		// Manual countdown loop with cancellation support
+		start := time.Now()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		defer stopEsc()
+		defer cancel() // Ensure context is cancelled when function exits
+		defer cancelThrottle()
+
+		for {
+			select {
+			case <-ctx.Done():
+				// User cancelled - clean up and exit
+				lib.CleanupAndExit(cfg, lib.CleanupOptions{ExitCode: -1})
+				return lib.NewUserCancelError("canceled by user")
+			case <-ticker.C:
+				elapsed := time.Since(start)
+				remaining := delay - elapsed
+				if remaining <= 0 {
+					// Countdown finished normally
+					return nil
+				}
+				// Update spinner with countdown
+				countdownMessage := fmt.Sprintf("%s (%.1fs remaining)", message, remaining.Seconds())
+				spinnerManager.Update(countdownMessage)
+			}
+		}
 
 		// Note: lastResponseTime will be updated separately when the response is received
 	}
+	return nil
 }
 
 // applyThrottleDelayWithCustomMessage applies throttling delay with a custom message or random if empty
-func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *spinner.Spinner, customMessage string) {
+func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *spinner.Spinner, customMessage string) error {
 	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
 	if cfg != nil && cfg.SkipWaits {
-		return
+		return nil
 	}
 	delay := calculateThrottleDelay(cfg)
 	if delay > 0 {
@@ -183,28 +193,57 @@ func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *spinner.Spinner,
 			}
 			originalSuffix := s.Suffix
 
+			// Apply cancellable delay with countdown display
+			ctx, cancel := context.WithCancel(context.Background())
+			stopEsc := lib.StartEscWatcher(ctx, cancel, nil, cfg)
+			defer stopEsc()
+			defer cancel()
+			defer func() {
+				s.Suffix = originalSuffix
+			}()
+
 			// Show throttling message with countdown
 			start := time.Now()
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+
 			for {
-				elapsed := time.Since(start)
-				remaining := delay - elapsed
-				if remaining <= 0 {
-					break
+				select {
+				case <-ctx.Done():
+					// User cancelled - clean up and exit
+					lib.CleanupAndExit(cfg, lib.CleanupOptions{ExitCode: -1})
+					return lib.NewUserCancelError("canceled by user")
+				case <-ticker.C:
+					elapsed := time.Since(start)
+					remaining := delay - elapsed
+					if remaining <= 0 {
+						// Countdown finished normally
+						return nil
+					}
+					s.Suffix = fmt.Sprintf(" %s (%.1fs remaining)", message, remaining.Seconds())
 				}
-
-				s.Suffix = fmt.Sprintf(" %s (%.1fs remaining)", message, remaining.Seconds())
-				time.Sleep(100 * time.Millisecond)
 			}
-
-			// Restore original spinner message
-			s.Suffix = originalSuffix
 		} else {
-			// Fallback to simple sleep if no spinner provided
-			time.Sleep(delay)
+			// Fallback: Simple delay with cancellation (no countdown display)
+			ctx, cancel := context.WithCancel(context.Background())
+			stopEsc := lib.StartEscWatcher(ctx, cancel, nil, cfg)
+			defer stopEsc()
+			defer cancel()
+
+			select {
+			case <-time.After(delay):
+				// Normal completion of delay
+				return nil
+			case <-ctx.Done():
+				// User cancelled - clean up and exit
+				lib.CleanupAndExit(cfg, lib.CleanupOptions{ExitCode: -1})
+				return lib.NewUserCancelError("canceled by user")
+			}
 		}
 
 		// Note: lastResponseTime will be updated separately when the response is received
 	}
+	return nil
 }
 
 // updateResponseTime updates the last response timestamp for throttling calculations

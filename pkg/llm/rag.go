@@ -60,7 +60,7 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 		var cancelRAGSpinner func()
 		if !cfg.SafeMode {
 			spinnerManager := lib.GetSpinnerManager(cfg)
-			cancelRAGSpinner = spinnerManager.ShowRAG("Gathering diagnostic information...")
+			cancelRAGSpinner = spinnerManager.ShowRAG("🔍 " + config.Colors.Info.Sprint("Gathering") + " " + config.Colors.Dim.Sprint("diagnostic information..."))
 			defer cancelRAGSpinner()
 		}
 
@@ -112,7 +112,7 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 	}
 
 	// Collect raw outputs for non-baseline commands only
-	var rawBuilder strings.Builder
+	var commandSections []string
 	for _, cmd := range cmdResults {
 		c := strings.TrimSpace(cmd.Cmd)
 		if c == "" || strings.TrimSpace(cmd.Out) == "" {
@@ -130,27 +130,21 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 		}
 
 		// Include only successful outputs or timeouts; skip other errors
-		wroteSection := false
-		rawBuilder.WriteString("Command: ")
-		rawBuilder.WriteString(cmd.Cmd)
-		rawBuilder.WriteString("\n\nOutput:\n")
+		var sb strings.Builder
+		sb.WriteString("Command: ")
+		sb.WriteString(cmd.Cmd)
+		sb.WriteString("\n\nOutput:\n")
 		if cmd.Err != nil {
 			if strings.Contains(cmd.Err.Error(), "timed out") {
-				rawBuilder.WriteString(output)
-				wroteSection = true
+				sb.WriteString(output)
 			} else {
-				// Skip this section entirely for non-timeout errors
-				// Reset the header we just wrote by trimming back to last section boundary if needed
-				// Simpler: overwrite the last header by not appending a separator
+				// Skip non-timeout errors
 				continue
 			}
 		} else {
-			rawBuilder.WriteString(output)
-			wroteSection = true
+			sb.WriteString(output)
 		}
-		if wroteSection {
-			rawBuilder.WriteString("\n\n---\n\n")
-		}
+		commandSections = append(commandSections, sb.String())
 	}
 
 	// Run light-weight analyzers over collected JSON outputs to produce high-signal findings
@@ -247,11 +241,10 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 		fb.WriteString(diag.FormatFindings(findings))
 		sections = append(sections, fb.String())
 	}
-	rawContent := strings.TrimSpace(rawBuilder.String())
-	if rawContent != "" {
-		// Trim trailing section separator if present
-		rawContent = strings.TrimSuffix(rawContent, "\n\n---\n\n")
-		sections = append(sections, "## Command Outputs\n\n"+rawContent)
+	if len(commandSections) > 0 {
+		// Tag the first command section with the common header
+		commandSections[0] = "## Command Outputs\n\n" + commandSections[0]
+		sections = append(sections, commandSections...)
 	}
 	contextData := strings.Join(sections, "\n\n---\n\n")
 

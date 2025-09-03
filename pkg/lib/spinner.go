@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,6 +127,37 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 	sm.activeSpinner.Start()
 	sm.isActive = true
 
+	// Spotlight animation for "waiting for" messages
+	if sm.cfg != nil && !sm.cfg.DisableAnimation {
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "waiting for") {
+			ctx := sm.context.ctx
+			base := message
+			go func() {
+				spot := 0
+				width := 6
+				ticker := time.NewTicker(200 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						formatted, next := spotlightFormatWithStop(base, spot, width, "...")
+						spot = next
+						sm.mutex.Lock()
+						if !sm.isActive || sm.activeSpinner == nil {
+							sm.mutex.Unlock()
+							return
+						}
+						sm.activeSpinner.Suffix = " " + formatted
+						sm.mutex.Unlock()
+					}
+				}
+			}()
+		}
+	}
+
 	logger.Log("debug", "Started %v spinner: %s", spinnerType, message)
 
 	// Return a cancel function that properly cleans up
@@ -239,4 +272,98 @@ func (sm *SpinnerManager) ShowRAG(message string) context.CancelFunc {
 // ShowThrottle is a convenience method for throttling operations with countdown
 func (sm *SpinnerManager) ShowThrottle(message string, duration time.Duration) context.CancelFunc {
 	return sm.ShowWithCountdown(SpinnerThrottle, message, duration)
+}
+
+// stripAnsiColors removes ANSI color codes from a string
+func stripAnsiColors(text string) string {
+	// Regular expression to match ANSI escape sequences
+	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	return ansiRegex.ReplaceAllString(text, "")
+}
+
+// spotlightFormat applies a moving highlight window across the message.
+// Highlighted runes use Info color, the rest are dimmed. Supports wrap-around.
+// Colors are reset before applying spotlight animation to avoid conflicts.
+func spotlightFormat(message string, position int, width int) (string, int) {
+	if message == "" {
+		return message, 0
+	}
+	
+	// Strip existing ANSI color codes to prevent conflicts with spotlight animation
+	cleanMessage := stripAnsiColors(message)
+	return spotlightFormatClean(cleanMessage, position, width)
+}
+
+// spotlightFormatClean applies spotlight formatting to a message that has already been cleaned of ANSI colors
+func spotlightFormatClean(cleanMessage string, position int, width int) (string, int) {
+	if cleanMessage == "" {
+		return cleanMessage, 0
+	}
+	
+	runes := []rune(cleanMessage)
+	n := len(runes)
+	if n == 0 {
+		return cleanMessage, 0
+	}
+	if width <= 0 {
+		width = 1
+	}
+	if width > n {
+		width = n
+	}
+
+	pos := position % n
+	end := pos + width
+
+	var b strings.Builder
+	b.Grow(len(cleanMessage) + 16)
+
+	inWindow := func(i int) bool {
+		if end <= n {
+			return i >= pos && i < end
+		}
+		return i >= pos || i < (end%n)
+	}
+
+	for i := 0; i < n; i++ {
+		ch := string(runes[i])
+		if inWindow(i) {
+			b.WriteString(config.Colors.Info.Sprint(ch))
+		} else {
+			b.WriteString(config.Colors.Primary.Sprint(ch))
+		}
+	}
+
+	next := (pos + 1) % n
+	return b.String(), next
+}
+
+// spotlightFormatWithStop applies spotlight like spotlightFormat but stops coloring at the first occurrence
+// of stopSeq. Everything from stopSeq onward remains unmodified to avoid broken ANSI coloring.
+// Colors are reset only for the animated part, preserving colors in the tail.
+func spotlightFormatWithStop(message string, position int, width int, stopSeq string) (string, int) {
+	if stopSeq == "" {
+		return spotlightFormat(message, position, width)
+	}
+	
+	// Find stop boundary in the original message to preserve tail colors
+	stopIdxByte := strings.Index(message, stopSeq)
+	if stopIdxByte < 0 {
+		return spotlightFormat(message, position, width)
+	}
+
+	stopIdxByte += len(stopSeq)
+
+	// Split into animated and tail parts
+	head := message[:stopIdxByte]
+	tail := message[stopIdxByte:]
+
+	// Strip colors only from the head part for spotlight animation
+	cleanHead := stripAnsiColors(head)
+	
+	// Apply spotlight only to the clean head part
+	headFormatted, next := spotlightFormatClean(cleanHead, position, width)
+	
+	// Preserve original colors in the tail
+	return headFormatted + tail, next
 }

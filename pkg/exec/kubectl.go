@@ -70,14 +70,13 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 
 	// Spinner for progress feedback using SpinnerManager
 	spinnerManager := lib.GetSpinnerManager(cfg)
-	cancelSpinner := spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %d commands...", len(commands)))
+	cancelSpinner := spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %s %s...", config.Colors.Info.Sprint(fmt.Sprintf("%d", len(commands))), "kubectl commands"))
 	defer cancelSpinner()
 
 	// Briefly show the kubectl diagnostics plan as a bullet list (left bullets)
 	// to make execution trace transparent. Only list kubectl commands.
 	spinnerManager.Hide()
 	printKubectlDiagnosticsList(cfg, commands)
-	cancelSpinner = spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %d commands...", len(commands)))
 
 	// In safe mode, ask once for all commands using single-key confirmation (ESC=no)
 	var proceedAll bool = true
@@ -97,7 +96,6 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 			// includes 'n', Enter, ESC, anything else
 			proceedAll = false
 		}
-		cancelSpinner = spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %d commands...", len(commands)))
 	}
 
 	// Start status monitoring goroutine and ensure we wait for it to finish
@@ -117,8 +115,8 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 					}
 				}
 
-				spinnerManager.Update(fmt.Sprintf("Executing %d commands... %d/%d completed",
-					len(commands), completed, len(commands)))
+				spinnerManager.Update(fmt.Sprintf("⚡ Executing %s %s... %s completed",
+					config.Colors.Info.Sprint(fmt.Sprintf("%d", len(commands))), config.Colors.Dim.Sprint("kubectl commands"), config.Colors.Ok.Sprint(fmt.Sprintf("%d/%d", completed, len(commands)))))
 			}
 		}
 	}()
@@ -227,13 +225,13 @@ func promptForCommandConfirmation(command string, index int, statusChan chan<- c
 
 		// Only restart spinner if there are more commands to process
 		if index < cap(statusChan)-1 {
-			spinnerManager.ShowDiagnostic("Executing commands...")
+			spinnerManager.ShowDiagnostic(config.Colors.Info.Sprint("Executing kubectl commands..."))
 		}
 		return false
 	}
 
 	// Restart spinner for command execution
-	spinnerManager.ShowDiagnostic("Executing commands...")
+	spinnerManager.ShowDiagnostic(config.Colors.Info.Sprint("Executing kubectl commands..."))
 	return true
 }
 
@@ -268,7 +266,7 @@ func printKubectlDiagnosticsList(cfg *config.Config, commands []string) {
 
 	// Render using simple Markdown bullets to leverage left-bullet styling downstream
 	fmt.Println()
-	fmt.Println(color.New(color.Bold).Sprint("Diagnostic kubectl commands:"))
+	fmt.Println(color.New(color.Bold).Sprint("Suggested kubectl commands for diagnostics:"))
 	for _, kc := range kubectlCmds {
 		fmt.Printf("- %s\n", kc)
 	}

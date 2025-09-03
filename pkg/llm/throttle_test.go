@@ -11,8 +11,6 @@ func TestFixedDelayMode(t *testing.T) {
 	// Reset global throttling state for test
 	throttleMutex.Lock()
 	lastResponseTime = time.Time{}
-	requestCount = 0
-	windowStartTime = time.Time{}
 	requestTimestamps = nil
 	throttleMutex.Unlock()
 
@@ -34,8 +32,6 @@ func TestBurstMode(t *testing.T) {
 	// Reset global throttling state for test
 	throttleMutex.Lock()
 	lastResponseTime = time.Time{}
-	requestCount = 0
-	windowStartTime = time.Time{}
 	requestTimestamps = nil
 	throttleMutex.Unlock()
 
@@ -63,8 +59,6 @@ func TestThrottlingDisabled(t *testing.T) {
 	// Reset global throttling state for test
 	throttleMutex.Lock()
 	lastResponseTime = time.Time{}
-	requestCount = 0
-	windowStartTime = time.Time{}
 	requestTimestamps = nil
 	throttleMutex.Unlock()
 
@@ -86,13 +80,11 @@ func TestFixedDelayIgnoresBurstSettings(t *testing.T) {
 	// Reset global throttling state
 	throttleMutex.Lock()
 	lastResponseTime = time.Time{}
-	requestCount = 0
-	windowStartTime = time.Time{}
 	requestTimestamps = nil
 	throttleMutex.Unlock()
 
 	cfg := &config.Config{
-		ThrottleRequestsPerMinute: 1000,             // High burst setting
+		ThrottleRequestsPerMinute: 1000,                   // High burst setting
 		ThrottleDelayOverride:     500 * time.Millisecond, // Fixed delay takes precedence
 	}
 
@@ -109,8 +101,6 @@ func TestBurstWindowExpiry(t *testing.T) {
 	// Reset global throttling state
 	throttleMutex.Lock()
 	lastResponseTime = time.Time{}
-	requestCount = 0
-	windowStartTime = time.Time{}
 	requestTimestamps = nil
 	throttleMutex.Unlock()
 
