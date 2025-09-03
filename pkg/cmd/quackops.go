@@ -939,7 +939,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		return fmt.Errorf("error requesting LLM: %w", err)
 	}
 
-	llm.ManageChatThreadContext(cfg.ChatMessages, lib.EffectiveMaxTokens(cfg))
+	llm.ManageChatThreadContext(cfg, cfg.ChatMessages, lib.EffectiveMaxTokens(cfg))
 	return nil
 }
 

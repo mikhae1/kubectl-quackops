@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/briandowns/spinner"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/diag"
 	"github.com/mikhae1/kubectl-quackops/pkg/exec"
@@ -56,15 +55,13 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 	}
 
 	if !(cfg.MCPClientEnabled && cfg.MCPStrict) && len(cmds) > 0 {
-		// Create a spinner for diagnostic information gathering only if we're not in safe mode
+		// Create spinner for diagnostic information gathering only if we're not in safe mode
 		// In safe mode, the spinner will be managed by execDiagCmds for each command
-		var s *spinner.Spinner
+		var cancelRAGSpinner func()
 		if !cfg.SafeMode {
-			s = spinner.New(spinner.CharSets[11], 10*time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-			s.Suffix = " Gathering diagnostic information..."
-			s.Color("cyan", "bold")
-			s.Start()
-			defer s.Stop()
+			spinnerManager := lib.GetSpinnerManager(cfg)
+			cancelRAGSpinner = spinnerManager.ShowRAG("Gathering diagnostic information...")
+			defer cancelRAGSpinner()
 		}
 
 		// Execute the diagnostic commands (no need for slices.Compact as cmds is already filtered)

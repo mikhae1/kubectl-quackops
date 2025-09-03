@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/briandowns/spinner"
 	"github.com/mikhae1/kubectl-quackops/pkg/animator"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
@@ -33,20 +32,19 @@ var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, h
 	logger.Log("llmIn", "[%s/%s]: %s", cfg.Provider, cfg.Model, truncPrompt)
 	logger.Log("llmIn", "History: %v messages, %d tokens", len(cfg.ChatMessages), lib.CountTokens("", cfg.ChatMessages))
 
-	// Create a spinner for LLM response
-	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-	s.Suffix = fmt.Sprintf(" Waiting for %s/%s... (press ESC to cancel)", cfg.Provider, cfg.Model)
-	s.Color("green", "bold")
-	s.Start()
+	// Create spinner using SpinnerManager
+	spinnerManager := lib.GetSpinnerManager(cfg)
+	message := fmt.Sprintf("Waiting for %s/%s... (press ESC to cancel)", cfg.Provider, cfg.Model)
+	cancelSpinner := spinnerManager.ShowLLM(message)
 
 	// Apply throttling delay with the spinner (before making the request)
-	applyThrottleDelayWithSpinner(cfg, s)
+	applyThrottleDelayWithSpinnerManager(cfg, spinnerManager)
 
 	// Stop spinner for streaming mode, keep it running for non-streaming
 	if stream {
-		s.Stop()
+		spinnerManager.Hide()
 	} else {
-		defer s.Stop()
+		defer cancelSpinner()
 	}
 
 	var err error
@@ -81,7 +79,7 @@ func PromptExistsInHistory(messages []llms.ChatMessage, prompt string) bool {
 }
 
 // ManageChatThreadContext manages the context window of the chat thread
-func ManageChatThreadContext(chatMessages []llms.ChatMessage, maxTokens int) {
+func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage, maxTokens int) {
 	if chatMessages == nil {
 		return
 	}
@@ -91,12 +89,10 @@ func ManageChatThreadContext(chatMessages []llms.ChatMessage, maxTokens int) {
 	if threadLen > maxTokens {
 		logger.Log("warn", "Thread should be truncated: %d messages, %d tokens", len(chatMessages), threadLen)
 
-		// Create a spinner for history trimming
-		s := spinner.New(spinner.CharSets[11], 100*time.Millisecond)
-		s.Suffix = " Trimming conversation history..."
-		s.Color("yellow", "bold")
-		s.Start()
-		defer s.Stop()
+		// Create spinner for history trimming using SpinnerManager
+		spinnerManager := lib.GetSpinnerManager(cfg)
+		cancelTrimSpinner := spinnerManager.ShowThrottle("Trimming conversation history...", time.Second*2)
+		defer cancelTrimSpinner()
 
 		// Truncate the thread if it exceeds the maximum token length
 		for lib.CountTokens("", chatMessages) > maxTokens && len(chatMessages) > 0 {
@@ -125,7 +121,7 @@ func ManageChatThreadContext(chatMessages []llms.ChatMessage, maxTokens int) {
 }
 
 // createStreamingCallback creates a callback function for streaming LLM responses with optional Markdown formatting
-func createStreamingCallback(cfg *config.Config, spinner *spinner.Spinner, meter *lib.TokenMeter, onFirstChunk func()) (func(ctx context.Context, chunk []byte) error, func()) {
+func createStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerManager, meter *lib.TokenMeter, onFirstChunk func()) (func(ctx context.Context, chunk []byte) error, func()) {
 	var meterStarted sync.Once
 	var meterTicker *time.Ticker
 	var meterDone chan struct{}

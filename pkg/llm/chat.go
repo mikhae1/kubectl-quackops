@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
@@ -114,14 +113,12 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 	tokenMeter := lib.NewTokenMeter(cfg, outgoingTokens)
 
-	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-	s.Color("green", "bold")
-	s.Writer = os.Stderr
-	s.Suffix = fmt.Sprintf(" Waiting for %s/%s... [↑%s tokens] (ESC to cancel)",
+	spinnerManager := lib.GetSpinnerManager(cfg)
+	message := fmt.Sprintf("Waiting for %s/%s... [↑%s tokens] (ESC to cancel)",
 		cfg.Provider, cfg.Model, config.Colors.Dim.Sprint(lib.FormatCompactNumber(outgoingTokens)))
+	cancelSpinner := spinnerManager.ShowLLM(message)
 
 	var stopOnce sync.Once
-	s.Start()
 
 	var callbackFn func(ctx context.Context, chunk []byte) error
 	var cleanupFn func()
@@ -190,7 +187,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 								break
 							}
 							if isLoneEsc {
-								s.Suffix = " Cancelling..."
+								spinnerManager.Update("Cancelling...")
 								cancel()
 								return
 							}
@@ -230,31 +227,28 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	if useStreaming {
 		onFirstChunk := func() {
 			stopOnce.Do(func() {
-				s.Stop()
-				fmt.Fprint(os.Stderr, "\r\033[2K")
+				spinnerManager.Hide()
 				fmt.Fprint(os.Stdout, "\n")
 			})
 		}
 
-		callbackFn, cleanupFn = createStreamingCallback(cfg, s, nil, onFirstChunk)
+		callbackFn, cleanupFn = createStreamingCallback(cfg, spinnerManager, nil, onFirstChunk)
 		defer cleanupFn()
 
 		defer func() {
 			stopOnce.Do(func() {
-				s.Stop()
-				fmt.Fprint(os.Stderr, "\r\033[2K")
+				spinnerManager.Hide()
 			})
 		}()
 
 		generateOptions = append(generateOptions, llms.WithStreamingFunc(callbackFn))
 	} else {
-		defer s.Stop()
+		defer cancelSpinner()
 	}
 
 	maxRetries := cfg.Retries
 	backoffFactor := 3.0
 	initialBackoff := 10.0
-	originalSuffix := s.Suffix
 	var responseContent string
 	var bufferedToolBlocks []string
 	var lastError error
@@ -287,19 +281,16 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 			}
 
 			// Apply the retry delay with countdown
-			applyRetryDelayWithCountdown(s, cfg, delay, attempt, maxRetries, outgoingTokens, messageType)
-			s.Suffix = originalSuffix
-			// Ensure spinner is running after retry delay
-			if !s.Active() {
-				s.Start()
-			}
+			applyRetryDelayWithCountdown(spinnerManager, cfg, delay, attempt, maxRetries, outgoingTokens, messageType)
+			// Restore original spinner message after retry delay
+			cancelSpinner = spinnerManager.ShowLLM(message)
 		}
 
 		// Apply throttling delay before making the request (including retries)
-		applyThrottleDelayWithSpinner(cfg, s)
-		// Ensure spinner is running after throttling delay
-		if !s.Active() {
-			s.Start()
+		applyThrottleDelayWithSpinnerManager(cfg, spinnerManager)
+		// Ensure LLM spinner is active after throttling delay
+		if !spinnerManager.IsActive() {
+			cancelSpinner = spinnerManager.ShowLLM(message)
 		}
 
 		if len(messages) == 0 {
@@ -369,8 +360,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 				// Display content if available and not already displayed
 				if choice.Content != "" && !contentAlreadyDisplayed {
 					stopOnce.Do(func() {
-						s.Stop()
-						fmt.Fprint(os.Stderr, "\r\033[2K")
+						spinnerManager.Hide()
 						fmt.Fprint(os.Stdout, "\n")
 					})
 					if cfg.DisableMarkdownFormat {
@@ -431,7 +421,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 						// Apply throttling delay before each MCP tool execution with iteration info
 						customMessage := fmt.Sprintf("Processing MCP tool call: %d of %d...", toolCallCount+1, maxToolCalls)
-						applyThrottleDelayWithCustomMessage(cfg, s, customMessage)
+						applyThrottleDelayWithCustomMessageManager(cfg, spinnerManager, customMessage)
 
 						logger.Log("info", "Executing MCP tool: %s with args: %v", tc.FunctionCall.Name, args)
 						toolResult, callErr := mcp.ExecuteTool(cfg, tc.FunctionCall.Name, args)
@@ -472,7 +462,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 					toolCallCount++
 
 					// Apply throttling delay for MCP tool call follow-up requests
-					applyThrottleDelayWithSpinner(cfg, s)
+					applyThrottleDelayWithSpinnerManager(cfg, spinnerManager)
 
 					ctxTool, cancelTool := context.WithCancel(context.Background())
 					stopEscTool := startEscBreaker(ctxTool, cancelTool)
@@ -538,8 +528,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 		tokenMeter.AddIncoming(lib.EstimateTokens(cfg, responseContent))
 		// Only display output if not already displayed during MCP processing
 		if !contentAlreadyDisplayed {
-			s.Stop()
-			fmt.Fprint(os.Stderr, "\r\033[2K")
+			spinnerManager.Hide()
 			fmt.Fprint(os.Stdout, "\n")
 			if len(bufferedToolBlocks) > 0 {
 				for _, b := range bufferedToolBlocks {
@@ -558,8 +547,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 			}
 		} else {
 			// Content already displayed, just ensure spinner is stopped and add buffered tool blocks
-			s.Stop()
-			fmt.Fprint(os.Stderr, "\r\033[2K")
+			spinnerManager.Hide()
 			if len(bufferedToolBlocks) > 0 {
 				for _, b := range bufferedToolBlocks {
 					fmt.Fprint(os.Stdout, b)
@@ -573,21 +561,16 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 }
 
 // applyRetryDelayWithCountdown applies a retry delay with spinner countdown
-func applyRetryDelayWithCountdown(s *spinner.Spinner, cfg *config.Config, delay time.Duration, attempt int, maxRetries int, outgoingTokens int, messageType string) {
+func applyRetryDelayWithCountdown(spinnerManager *lib.SpinnerManager, cfg *config.Config, delay time.Duration, attempt int, maxRetries int, outgoingTokens int, messageType string) {
 	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
 	if cfg != nil && cfg.SkipWaits {
 		return
 	}
-	countdownStart := time.Now()
-	for {
-		elapsed := time.Since(countdownStart)
-		remaining := delay - elapsed
-		if remaining <= 0 {
-			break
-		}
-
-		s.Suffix = fmt.Sprintf(" %s - retrying %s/%s in %.1fs... (attempt %d/%d) [↑%s tokens]",
-			messageType, cfg.Provider, cfg.Model, remaining.Seconds(), attempt, maxRetries, lib.FormatCompactNumber(outgoingTokens))
-		time.Sleep(100 * time.Millisecond)
-	}
+	
+	baseMessage := fmt.Sprintf("%s - retrying %s/%s (attempt %d/%d) [↑%s tokens]",
+		messageType, cfg.Provider, cfg.Model, attempt, maxRetries, lib.FormatCompactNumber(outgoingTokens))
+	
+	cancelRetrySpinner := spinnerManager.ShowWithCountdown(lib.SpinnerThrottle, baseMessage, delay)
+	time.Sleep(delay)
+	cancelRetrySpinner()
 }

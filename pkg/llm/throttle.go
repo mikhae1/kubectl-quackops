@@ -8,6 +8,7 @@ import (
 
 	"github.com/briandowns/spinner"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 )
 
@@ -114,6 +115,52 @@ func applyThrottleDelay(cfg *config.Config) {
 // applyThrottleDelayWithSpinner applies throttling delay with enhanced spinner messaging
 func applyThrottleDelayWithSpinner(cfg *config.Config, s *spinner.Spinner) {
 	applyThrottleDelayWithCustomMessage(cfg, s, "")
+}
+
+// applyThrottleDelayWithSpinnerManager applies throttling delay using the centralized SpinnerManager
+func applyThrottleDelayWithSpinnerManager(cfg *config.Config, spinnerManager *lib.SpinnerManager) {
+	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
+	if cfg != nil && cfg.SkipWaits {
+		return
+	}
+	delay := calculateThrottleDelay(cfg)
+	if delay > 0 {
+		logger.Log("info", "Applying throttle delay: %v", delay)
+
+		// Pick a random cool throttle message
+		message := throttleMessages[rand.Intn(len(throttleMessages))]
+		cancelThrottle := spinnerManager.ShowWithCountdown(lib.SpinnerThrottle, message, delay)
+		time.Sleep(delay)
+		cancelThrottle()
+
+		// Note: lastResponseTime will be updated separately when the response is received
+	}
+}
+
+// applyThrottleDelayWithCustomMessageManager applies throttling delay with SpinnerManager and custom message
+func applyThrottleDelayWithCustomMessageManager(cfg *config.Config, spinnerManager *lib.SpinnerManager, customMessage string) {
+	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
+	if cfg != nil && cfg.SkipWaits {
+		return
+	}
+	delay := calculateThrottleDelay(cfg)
+	if delay > 0 {
+		logger.Log("info", "Applying throttle delay: %v", delay)
+
+		// Use custom message or pick a random cool message
+		var message string
+		if customMessage != "" {
+			message = customMessage
+		} else {
+			message = throttleMessages[rand.Intn(len(throttleMessages))]
+		}
+
+		cancelThrottle := spinnerManager.ShowWithCountdown(lib.SpinnerThrottle, message, delay)
+		time.Sleep(delay)
+		cancelThrottle()
+
+		// Note: lastResponseTime will be updated separately when the response is received
+	}
 }
 
 // applyThrottleDelayWithCustomMessage applies throttling delay with a custom message or random if empty

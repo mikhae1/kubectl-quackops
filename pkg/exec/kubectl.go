@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
@@ -69,23 +68,21 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 	// Status channel to collect execution updates
 	statusChan := make(chan cmdStatus, len(commands))
 
-	// Spinner for progress feedback
-	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-	s.Suffix = fmt.Sprintf(" Executing %d commands...", len(commands))
-	s.Color("cyan", "bold")
-	s.Start()
-	defer s.Stop()
+	// Spinner for progress feedback using SpinnerManager
+	spinnerManager := lib.GetSpinnerManager(cfg)
+	cancelSpinner := spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %d commands...", len(commands)))
+	defer cancelSpinner()
 
 	// Briefly show the kubectl diagnostics plan as a bullet list (left bullets)
 	// to make execution trace transparent. Only list kubectl commands.
-	s.Stop()
+	spinnerManager.Hide()
 	printKubectlDiagnosticsList(cfg, commands)
-	s.Start()
+	cancelSpinner = spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %d commands...", len(commands)))
 
 	// In safe mode, ask once for all commands using single-key confirmation (ESC=no)
 	var proceedAll bool = true
 	if cfg.SafeMode {
-		s.Stop()
+		spinnerManager.Hide()
 		key := lib.ReadSingleKey(fmt.Sprintf("Proceed with executing %d command(s) (y/N/edit)? ", len(commands)))
 		switch key {
 		case 'y':
@@ -100,7 +97,7 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 			// includes 'n', Enter, ESC, anything else
 			proceedAll = false
 		}
-		s.Start()
+		cancelSpinner = spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %d commands...", len(commands)))
 	}
 
 	// Start status monitoring goroutine and ensure we wait for it to finish
@@ -120,8 +117,8 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 					}
 				}
 
-				s.Suffix = fmt.Sprintf(" Executing %d commands... %d/%d completed",
-					len(commands), completed, len(commands))
+				spinnerManager.Update(fmt.Sprintf("Executing %d commands... %d/%d completed",
+					len(commands), completed, len(commands)))
 			}
 		}
 	}()
@@ -138,7 +135,7 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 				statusChan <- cmdStatus{i, true, nil, true}
 			}
 		} else {
-			executeCommandsSequentially(cfg, commands, results, statusChan, &firstCommandCompleted, firstCommandCompletedMutex, s, false)
+			executeCommandsSequentially(cfg, commands, results, statusChan, &firstCommandCompleted, firstCommandCompletedMutex, spinnerManager, false)
 		}
 	} else {
 		executeCommandsParallel(cfg, commands, results, statusChan, &firstCommandCompleted, firstCommandCompletedMutex)
@@ -176,13 +173,13 @@ func executeCommandsSequentially(
 	statusChan chan<- cmdStatus,
 	firstCommandCompleted *bool,
 	firstCommandCompletedMutex *sync.Mutex,
-	s *spinner.Spinner,
+	spinnerManager *lib.SpinnerManager,
 	askPerCommand bool,
 ) {
 	for i, command := range commands {
 		// In safe mode, optionally ask for per-command confirmation
 		if askPerCommand {
-			if !promptForCommandConfirmation(command, i, statusChan, s) {
+			if !promptForCommandConfirmation(command, i, statusChan, spinnerManager) {
 				// Skip this command if not confirmed
 				continue
 			}
@@ -211,9 +208,9 @@ func executeCommandsSequentially(
 }
 
 // promptForCommandConfirmation asks for user confirmation in safe mode
-func promptForCommandConfirmation(command string, index int, statusChan chan<- cmdStatus, s *spinner.Spinner) bool {
+func promptForCommandConfirmation(command string, index int, statusChan chan<- cmdStatus, spinnerManager *lib.SpinnerManager) bool {
 	// Stop spinner to show the confirmation prompt
-	s.Stop()
+	spinnerManager.Hide()
 	fmt.Printf("\nExecute '%s' (y/N)? ", command)
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')
@@ -230,13 +227,13 @@ func promptForCommandConfirmation(command string, index int, statusChan chan<- c
 
 		// Only restart spinner if there are more commands to process
 		if index < cap(statusChan)-1 {
-			s.Start()
+			spinnerManager.ShowDiagnostic("Executing commands...")
 		}
 		return false
 	}
 
 	// Restart spinner for command execution
-	s.Start()
+	spinnerManager.ShowDiagnostic("Executing commands...")
 	return true
 }
 

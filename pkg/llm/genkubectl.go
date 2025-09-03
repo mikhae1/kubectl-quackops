@@ -7,10 +7,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
-	"github.com/briandowns/spinner"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 )
 
@@ -46,12 +45,10 @@ func GenKubectlCmds(cfg *config.Config, prompt string, userMsgCount int) ([]stri
 	}
 	augPrompt := augPromptBuilder.String()
 
-	// Create a spinner for command generation
-	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
-	s.Suffix = " Generating diagnostic commands..."
-	s.Color("blue", "bold")
-	s.Start()
-	defer s.Stop()
+	// Create spinner for command generation using SpinnerManager
+	spinnerManager := lib.GetSpinnerManager(cfg)
+	cancelSpinner := spinnerManager.ShowGeneration("Generating diagnostic commands...")
+	defer cancelSpinner()
 
 	// Execute request without updating the conversation history, silently
 	response, err := RequestSilent(cfg, augPrompt, false, false)
