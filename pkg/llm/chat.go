@@ -128,8 +128,8 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 	useStreaming := stream && !cfg.MCPClientEnabled
 
 	// startEscBreaker starts a raw-input watcher to cancel the context on standalone ESC.
-	startEscBreaker := func(ctx context.Context, cancel context.CancelFunc) func() {
-		return lib.StartEscWatcher(ctx, cancel, spinnerManager, cfg)
+	startEscBreaker := func(cancel func()) func() {
+		return lib.StartEscWatcher(cancel, spinnerManager, cfg)
 	}
 
 	if useStreaming {
@@ -376,7 +376,7 @@ func applyRetryDelayWithCountdown(
 	maxRetries int,
 	outgoingTokens int,
 	messageType string,
-	startEscBreaker func(ctx context.Context, cancel context.CancelFunc) func(),
+	startEscBreaker func(cancel func()) func(),
 ) error {
 	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
 	if cfg != nil && cfg.SkipWaits {
@@ -392,7 +392,7 @@ func applyRetryDelayWithCountdown(
 
 	// Apply cancellable delay with countdown and Ctrl-C handling
 	ctx, cancel := context.WithCancel(context.Background())
-	stopEsc := startEscBreaker(ctx, cancel)
+	stopEsc := startEscBreaker(cancel)
 
 	// Manual countdown loop with cancellation support
 	start := time.Now()
@@ -405,9 +405,7 @@ func applyRetryDelayWithCountdown(
 	for {
 		select {
 		case <-ctx.Done():
-			// User cancelled - clean up and exit
-			lib.CleanupAndExit(cfg, lib.CleanupOptions{ExitCode: -1})
-			return context.Canceled
+			return lib.NewUserCancelError("canceled by user")
 		case <-ticker.C:
 			elapsed := time.Since(start)
 			remaining := delay - elapsed
@@ -433,7 +431,7 @@ func generateWithRetries(
 	spinnerMessage string,
 	outgoingTokens int,
 	maxRetries int,
-	startEscBreaker func(ctx context.Context, cancel context.CancelFunc) func(),
+	startEscBreaker func(cancel func()) func(),
 ) (*llms.ContentResponse, string, error) {
 	backoffFactor := 3.0
 	initialBackoff := 10.0
@@ -489,7 +487,7 @@ func generateWithRetries(
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
-		stopEsc := startEscBreaker(ctx, cancel)
+		stopEsc := startEscBreaker(cancel)
 		r, err := client.GenerateContent(ctx, messages, generateOptions...)
 		stopEsc()
 		if err != nil {

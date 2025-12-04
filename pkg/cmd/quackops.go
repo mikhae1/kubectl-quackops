@@ -904,6 +904,10 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		}
 
 		if err != nil {
+			if lib.IsUserCancel(err) {
+				fmt.Fprintln(os.Stderr, color.YellowString("(cancelled)"))
+				return nil
+			}
 			logger.Log("err", "Error retrieving RAG: %v", err)
 		}
 	}

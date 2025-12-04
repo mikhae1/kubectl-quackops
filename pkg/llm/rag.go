@@ -27,6 +27,9 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 		for i := 0; i < maxAttempts; i++ {
 			cmds, err = GenKubectlCmds(cfg, prompt, userMsgCount)
 			if err != nil {
+				if lib.IsUserCancel(err) {
+					return "", err
+				}
 				logger.Log("warn", "Error retrieving kubectl commands: %v", err)
 				continue
 			}
