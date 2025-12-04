@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/briandowns/spinner"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
@@ -107,7 +106,7 @@ var throttleMessages = []string{
 }
 
 // applyThrottleDelayWithSpinner applies throttling delay with enhanced spinner messaging
-func applyThrottleDelayWithSpinner(cfg *config.Config, s *spinner.Spinner) error {
+func applyThrottleDelayWithSpinner(cfg *config.Config, s *lib.Spinner) error {
 	return applyThrottleDelayWithCustomMessage(cfg, s, "")
 }
 
@@ -174,7 +173,7 @@ func applyThrottleDelayWithCustomMessageManager(cfg *config.Config, spinnerManag
 }
 
 // applyThrottleDelayWithCustomMessage applies throttling delay with a custom message or random if empty
-func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *spinner.Spinner, customMessage string) error {
+func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *lib.Spinner, customMessage string) error {
 	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
 	if cfg != nil && cfg.SkipWaits {
 		return nil

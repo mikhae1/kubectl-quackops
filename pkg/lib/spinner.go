@@ -3,13 +3,14 @@ package lib
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/briandowns/spinner"
+	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 )
@@ -43,10 +44,125 @@ type SpinnerContext struct {
 	startTime time.Time
 }
 
+// Spinner is a minimal terminal spinner with color and suffix support.
+type Spinner struct {
+	Frames   []string
+	Interval time.Duration
+	Suffix   string
+	Writer   io.Writer
+	colorize func(string) string
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	mutex    sync.Mutex
+	running  bool
+	frameIdx int
+}
+
+// NewSpinner creates a new Spinner instance.
+func NewSpinner(charset []string, interval time.Duration) *Spinner {
+	if len(charset) == 0 {
+		charset = []string{"-", "\\", "|", "/"}
+	}
+	s := &Spinner{
+		Frames:   charset,
+		Interval: interval,
+		Writer:   os.Stderr,
+		colorize: func(s string) string { return s },
+		stopCh:   make(chan struct{}),
+		doneCh:   make(chan struct{}),
+	}
+	return s
+}
+
+// Color sets simple color attributes by name using fatih/color. Unknown values are ignored.
+func (s *Spinner) Color(attrs ...string) {
+	var cs []color.Attribute
+	for _, a := range attrs {
+		switch strings.ToLower(strings.TrimSpace(a)) {
+		case "bold":
+			cs = append(cs, color.Bold)
+		case "faint", "dim":
+			cs = append(cs, color.Faint)
+		case "cyan":
+			cs = append(cs, color.FgCyan)
+		case "green":
+			cs = append(cs, color.FgGreen)
+		case "blue":
+			cs = append(cs, color.FgBlue)
+		case "yellow":
+			cs = append(cs, color.FgYellow)
+		case "magenta":
+			cs = append(cs, color.FgMagenta)
+		case "red":
+			cs = append(cs, color.FgRed)
+		default:
+			// ignore unknown
+		}
+	}
+	c := color.New(cs...)
+	s.mutex.Lock()
+	s.colorize = func(str string) string { return c.Sprint(str) }
+	s.mutex.Unlock()
+}
+
+// Start begins rendering the spinner until Stop is called.
+func (s *Spinner) Start() {
+	s.mutex.Lock()
+	if s.running {
+		s.mutex.Unlock()
+		return
+	}
+	// Reinitialize channels to allow restart after Stop
+	s.stopCh = make(chan struct{})
+	s.doneCh = make(chan struct{})
+	s.running = true
+	// Hide cursor while spinner is active
+	_, _ = fmt.Fprint(s.Writer, "\x1b[?25l")
+	s.mutex.Unlock()
+
+	go func() {
+		t := time.NewTicker(s.Interval)
+		defer t.Stop()
+		defer close(s.doneCh)
+		for {
+			select {
+			case <-s.stopCh:
+				return
+			case <-t.C:
+				s.mutex.Lock()
+				frame := s.Frames[s.frameIdx%len(s.Frames)]
+				s.frameIdx++
+				colored := s.colorize(frame)
+				out := "\r" + colored
+				if s.Suffix != "" {
+					out += " " + s.Suffix
+				}
+				_, _ = fmt.Fprint(s.Writer, out)
+				s.mutex.Unlock()
+			}
+		}
+	}()
+}
+
+// Stop stops the spinner. Caller may clear the line if needed.
+func (s *Spinner) Stop() {
+	s.mutex.Lock()
+	if !s.running {
+		s.mutex.Unlock()
+		return
+	}
+	s.running = false
+	close(s.stopCh)
+	s.mutex.Unlock()
+	<-s.doneCh
+	// Show cursor again after spinner stops
+	_, _ = fmt.Fprint(s.Writer, "\x1b[?25h")
+}
+
 // SpinnerManager provides thread-safe, coordinated spinner management
 type SpinnerManager struct {
 	mutex         sync.RWMutex
-	activeSpinner *spinner.Spinner
+	activeSpinner *Spinner
 	context       *SpinnerContext
 	isActive      bool
 	cfg           *config.Config
@@ -106,7 +222,7 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 		spinnerSpeed = time.Duration(float64(spinnerSpeed) * 2.0) // Much slower for throttling
 	}
 
-	sm.activeSpinner = spinner.New(charset, spinnerSpeed)
+	sm.activeSpinner = NewSpinner(charset, spinnerSpeed)
 	sm.activeSpinner.Suffix = " " + message
 	sm.activeSpinner.Writer = os.Stderr
 
@@ -288,7 +404,7 @@ func spotlightFormat(message string, position int, width int) (string, int) {
 	if message == "" {
 		return message, 0
 	}
-	
+
 	// Strip existing ANSI color codes to prevent conflicts with spotlight animation
 	cleanMessage := stripAnsiColors(message)
 	return spotlightFormatClean(cleanMessage, position, width)
@@ -299,7 +415,7 @@ func spotlightFormatClean(cleanMessage string, position int, width int) (string,
 	if cleanMessage == "" {
 		return cleanMessage, 0
 	}
-	
+
 	runes := []rune(cleanMessage)
 	n := len(runes)
 	if n == 0 {
@@ -345,7 +461,7 @@ func spotlightFormatWithStop(message string, position int, width int, stopSeq st
 	if stopSeq == "" {
 		return spotlightFormat(message, position, width)
 	}
-	
+
 	// Find stop boundary in the original message to preserve tail colors
 	stopIdxByte := strings.Index(message, stopSeq)
 	if stopIdxByte < 0 {
@@ -360,10 +476,10 @@ func spotlightFormatWithStop(message string, position int, width int, stopSeq st
 
 	// Strip colors only from the head part for spotlight animation
 	cleanHead := stripAnsiColors(head)
-	
+
 	// Apply spotlight only to the clean head part
 	headFormatted, next := spotlightFormatClean(cleanHead, position, width)
-	
+
 	// Preserve original colors in the tail
 	return headFormatted + tail, next
 }

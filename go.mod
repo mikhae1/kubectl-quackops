@@ -6,7 +6,6 @@ toolchain go1.24.6
 
 require (
 	cloud.google.com/go/ai v0.12.1
-	github.com/briandowns/spinner v1.23.2
 	github.com/chzyer/readline v1.5.1
 	github.com/fatih/color v1.18.0
 	github.com/google/generative-ai-go v0.20.1

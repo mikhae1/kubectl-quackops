@@ -6,19 +6,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briandowns/spinner"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 )
 
 // Helper functions for tests
-func initSpinner(cfg *config.Config, commandCount int) *spinner.Spinner {
-	s := spinner.New(spinner.CharSets[11], time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
+func initSpinner(cfg *config.Config, commandCount int) *lib.Spinner {
+	s := lib.NewSpinner([]string{"-", "\\", "|", "/"}, time.Duration(cfg.SpinnerTimeout)*time.Millisecond)
 	s.Suffix = fmt.Sprintf(" Executing %d commands...", commandCount)
 	s.Color("cyan", "bold")
 	return s
 }
 
-func monitorCommandStatus(statusChan <-chan cmdStatus, s *spinner.Spinner, commandCount int) *struct {
+func monitorCommandStatus(statusChan <-chan cmdStatus, s *lib.Spinner, commandCount int) *struct {
 	completedCount int
 	failedCount    int
 	skippedCount   int
