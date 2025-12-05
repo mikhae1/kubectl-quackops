@@ -9,12 +9,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	gl "cloud.google.com/go/ai/generativelanguage/apiv1beta"
-	glpb "cloud.google.com/go/ai/generativelanguage/apiv1beta/generativelanguagepb"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/pkoukk/tiktoken-go"
 	"github.com/tmc/langchaingo/llms"
-	"google.golang.org/api/option"
+	"google.golang.org/genai"
 )
 
 // tokenEncodingCache caches encoders by name to avoid repeated construction
@@ -273,9 +271,6 @@ func googleGetModelTokenLimits(cfg *config.Config) (int, int, error) {
 	}
 
 	modelName := cfg.Model
-	if !strings.Contains(modelName, "/") {
-		modelName = "models/" + modelName
-	}
 	cacheKey := strings.ToLower(modelName)
 	if v, ok := googleModelLimitsCache.Load(cacheKey); ok {
 		ml := v.(modelLimits)
@@ -283,13 +278,12 @@ func googleGetModelTokenLimits(cfg *config.Config) (int, int, error) {
 	}
 
 	ctx := context.Background()
-	mc, err := gl.NewModelRESTClient(ctx, option.WithAPIKey(apiKey))
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: apiKey, Backend: genai.BackendGeminiAPI})
 	if err != nil {
 		return 0, 0, err
 	}
-	defer mc.Close()
 
-	resp, err := mc.GetModel(ctx, &glpb.GetModelRequest{Name: modelName})
+	resp, err := client.Models.Get(ctx, modelName, nil)
 	if err != nil || resp == nil {
 		if err == nil {
 			err = fmt.Errorf("nil GetModel response")
@@ -313,19 +307,15 @@ func googleCountTokens(cfg *config.Config, text string, messages []llms.ChatMess
 	}
 
 	ctx := context.Background()
-	client, err := gl.NewGenerativeRESTClient(ctx, option.WithAPIKey(apiKey))
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: apiKey, Backend: genai.BackendGeminiAPI})
 	if err != nil {
 		return 0, err
 	}
-	defer client.Close()
 
 	modelName := cfg.Model
-	if !strings.Contains(modelName, "/") {
-		modelName = "models/" + modelName
-	}
 
 	// Build the content list in the same order we send messages to LLM
-	var contents []*glpb.Content
+	var contents []*genai.Content
 	for _, msg := range messages {
 		var role string
 		switch msg.GetType() {
@@ -337,32 +327,24 @@ func googleCountTokens(cfg *config.Config, text string, messages []llms.ChatMess
 		default:
 			role = "user"
 		}
-		contents = append(contents, &glpb.Content{
+		contents = append(contents, &genai.Content{
 			Role: role,
-			Parts: []*glpb.Part{
-				{Data: &glpb.Part_Text{Text: msg.GetContent()}},
+			Parts: []*genai.Part{
+				{Text: msg.GetContent()},
 			},
 		})
 	}
 
 	if includeText && strings.TrimSpace(text) != "" {
-		contents = append(contents, &glpb.Content{
+		contents = append(contents, &genai.Content{
 			Role: "user",
-			Parts: []*glpb.Part{
-				{Data: &glpb.Part_Text{Text: text}},
+			Parts: []*genai.Part{
+				{Text: text},
 			},
 		})
 	}
 
-	req := &glpb.CountTokensRequest{
-		Model: modelName,
-		GenerateContentRequest: &glpb.GenerateContentRequest{
-			Model:    modelName,
-			Contents: contents,
-		},
-	}
-
-	resp, err := client.CountTokens(ctx, req)
+	resp, err := client.Models.CountTokens(ctx, modelName, contents, nil)
 	if err != nil || resp == nil {
 		if err == nil {
 			err = fmt.Errorf("nil count tokens response")

@@ -888,6 +888,9 @@ func GetProviderBaseURL(cfg *Config) string {
 		if baseURL := os.Getenv("QU_GOOGLE_BASE_URL"); baseURL != "" {
 			return baseURL
 		}
+		if baseURL := os.Getenv("GOOGLE_GEMINI_BASE_URL"); baseURL != "" {
+			return baseURL
+		}
 		return "https://generativelanguage.googleapis.com"
 	case "anthropic":
 		if baseURL := os.Getenv("QU_ANTHROPIC_BASE_URL"); baseURL != "" {
