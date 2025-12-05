@@ -418,7 +418,7 @@ QU_MCP_CLIENT=true
 | `--history-file` | Path to the history file | `~/.quackops/history` |
 | `--throttle-rpm` | Maximum number of LLM requests per minute | `60` |
 | `--mcp-client` | Enable MCP client mode | `true` |
-| `--mcp-config` | Path to MCP client YAML | `~/.config/quackops/mcp.json` |
+| `--mcp-config` | Comma-separated MCP client config paths | `~/.config/quackops/mcp.yaml, ~/.quackops/mcp.json` |
 | `--mcp-tool-timeout` | Timeout for MCP tools (seconds) | `30` |
 | `--mcp-strict` | Strict MCP mode (no fallback) | `false` |
 

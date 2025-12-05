@@ -28,11 +28,11 @@ const (
 
 // Modern spinner character sets optimized for terminal rendering
 var spinnerCharSets = map[SpinnerType][]string{
-	SpinnerDiagnostic: {"⢹", "⢺", "⢼", "⣸", "⣇", "⡧", "⡗", "⡏"}, // Braille dots - smooth diagnostic progression
-	SpinnerLLM:        {"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}, // Wave animation for LLM
-	SpinnerGeneration: {"◐", "◑"},                               // Quarter circle rotation for generation
-	SpinnerRAG:        {"◜", "◝", "◞", "◟"},                     // Smooth corners for RAG
-	SpinnerThrottle:   {"⏳", "⌛"},                               // Simple hourglass for throttling
+	SpinnerDiagnostic: {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}, // Modern dots
+	SpinnerLLM:        {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}, // Modern dots
+	SpinnerGeneration: {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}, // Modern dots
+	SpinnerRAG:        {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}, // Modern dots
+	SpinnerThrottle:   {"⏳", "⌛"},                                         // Keep hourglass for throttling
 }
 
 // SpinnerContext represents an active spinner operation
@@ -46,16 +46,17 @@ type SpinnerContext struct {
 
 // Spinner is a minimal terminal spinner with color and suffix support.
 type Spinner struct {
-	Frames   []string
-	Interval time.Duration
-	Suffix   string
-	Writer   io.Writer
-	colorize func(string) string
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	mutex    sync.Mutex
-	running  bool
-	frameIdx int
+	Frames         []string
+	Interval       time.Duration
+	Suffix         string
+	Writer         io.Writer
+	GradientColors []*color.Color
+	colorize       func(string) string
+	stopCh         chan struct{}
+	doneCh         chan struct{}
+	mutex          sync.Mutex
+	running        bool
+	frameIdx       int
 }
 
 // NewSpinner creates a new Spinner instance.
@@ -131,8 +132,17 @@ func (s *Spinner) Start() {
 			case <-t.C:
 				s.mutex.Lock()
 				frame := s.Frames[s.frameIdx%len(s.Frames)]
+
+				var colored string
+				if len(s.GradientColors) > 0 {
+					// Cycle through gradient colors
+					c := s.GradientColors[s.frameIdx%len(s.GradientColors)]
+					colored = c.Sprint(frame)
+				} else {
+					colored = s.colorize(frame)
+				}
+
 				s.frameIdx++
-				colored := s.colorize(frame)
 				out := "\r" + colored
 				if s.Suffix != "" {
 					out += " " + s.Suffix
@@ -195,9 +205,16 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 
 	// If there's an active spinner, transition gracefully
 	if sm.isActive && sm.activeSpinner != nil {
+		if sm.context != nil && sm.context.cancel != nil {
+			// Cancel the old animation context so background goroutines exit
+			sm.context.cancel()
+		}
 		sm.activeSpinner.Stop()
 		// Clear the line for clean transition
 		fmt.Fprint(os.Stderr, "\r\033[2K")
+		sm.isActive = false
+		sm.activeSpinner = nil
+		sm.context = nil
 	}
 
 	// Create context for this spinner operation
@@ -215,9 +232,11 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 	spinnerSpeed := time.Duration(sm.cfg.SpinnerTimeout) * time.Millisecond
 
 	// Adjust speed for different spinner types
+	// For modern spinners with spotlight animation, use fast refresh (80ms)
+	// to ensure smooth text animation without skipped frames.
 	switch spinnerType {
-	case SpinnerLLM:
-		spinnerSpeed = time.Duration(float64(spinnerSpeed) * 1.2) // Slightly slower for LLM
+	case SpinnerLLM, SpinnerDiagnostic, SpinnerGeneration, SpinnerRAG:
+		spinnerSpeed = 80 * time.Millisecond // Fast refresh for smooth animation
 	case SpinnerThrottle:
 		spinnerSpeed = time.Duration(float64(spinnerSpeed) * 2.0) // Much slower for throttling
 	}
@@ -227,15 +246,31 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 	sm.activeSpinner.Writer = os.Stderr
 
 	// Apply colors based on spinner type
+	// Define gradients
+	blueCyanGradient := []*color.Color{
+		color.New(color.FgHiCyan),
+		color.New(color.FgCyan),
+		color.New(color.FgBlue),
+		color.New(color.FgHiBlue),
+	}
+
+	magentaBlueGradient := []*color.Color{
+		color.New(color.FgHiMagenta),
+		color.New(color.FgMagenta),
+		color.New(color.FgHiBlue),
+		color.New(color.FgBlue),
+	}
+
+	// Apply colors based on spinner type
 	switch spinnerType {
 	case SpinnerDiagnostic:
-		sm.activeSpinner.Color("cyan", "bold")
+		sm.activeSpinner.GradientColors = blueCyanGradient
 	case SpinnerLLM:
-		sm.activeSpinner.Color("green", "bold")
+		sm.activeSpinner.GradientColors = magentaBlueGradient
 	case SpinnerGeneration:
-		sm.activeSpinner.Color("blue", "bold")
+		sm.activeSpinner.GradientColors = blueCyanGradient
 	case SpinnerRAG:
-		sm.activeSpinner.Color("cyan", "bold")
+		sm.activeSpinner.GradientColors = blueCyanGradient
 	case SpinnerThrottle:
 		sm.activeSpinner.Color("yellow", "bold")
 	}
@@ -243,30 +278,49 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 	sm.activeSpinner.Start()
 	sm.isActive = true
 
-	// Spotlight animation for "waiting for" messages
+	// Spotlight animation for text
 	if sm.cfg != nil && !sm.cfg.DisableAnimation {
-		lower := strings.ToLower(message)
-		if strings.Contains(lower, "waiting for") {
+		// Apply to all LLM and Diagnostic spinners for a consistent modern feel
+		if spinnerType == SpinnerLLM || spinnerType == SpinnerDiagnostic || spinnerType == SpinnerGeneration || spinnerType == SpinnerRAG {
 			ctx := sm.context.ctx
-			base := message
+			// Use a pointer to the message so we can pick up updates
+			// Note: In this simple implementation, we'll just read the current message from context if available,
+			// but since `base` is captured by value, we need a way to see updates.
+			// The `Update` method changes `sm.context.Message`.
+
 			go func() {
-				spot := 0
-				width := 6
-				ticker := time.NewTicker(200 * time.Millisecond)
+				spotLR := 0 // Left-to-right wave position
+				spotRL := 0 // Right-to-left wave position (starts at 0, moves backward)
+				// Wider window for smoother gradient
+				width := 12
+				// Slower ticker than spinner refresh to ensure each frame is displayed
+				// Spinner refreshes at 80ms; spotlight moves at 100ms for smooth effect
+				ticker := time.NewTicker(100 * time.Millisecond)
 				defer ticker.Stop()
+
 				for {
 					select {
 					case <-ctx.Done():
 						return
 					case <-ticker.C:
-						formatted, next := spotlightFormatWithStop(base, spot, width, "...")
-						spot = next
 						sm.mutex.Lock()
-						if !sm.isActive || sm.activeSpinner == nil {
+						if !sm.isActive || sm.activeSpinner == nil || sm.context == nil {
 							sm.mutex.Unlock()
 							return
 						}
-						sm.activeSpinner.Suffix = " " + formatted
+						// Always use the latest message from context
+						currentMsg := sm.context.Message
+						sm.mutex.Unlock()
+
+						// Calculate next frame with dual waves
+						formatted, nextLR, nextRL := dualWaveFormat(currentMsg, spotLR, spotRL, width)
+						spotLR = nextLR
+						spotRL = nextRL
+
+						sm.mutex.Lock()
+						if sm.isActive && sm.activeSpinner != nil {
+							sm.activeSpinner.Suffix = " " + formatted
+						}
 						sm.mutex.Unlock()
 					}
 				}
@@ -434,6 +488,14 @@ func spotlightFormatClean(cleanMessage string, position int, width int) (string,
 	var b strings.Builder
 	b.Grow(len(cleanMessage) + 16)
 
+	// Gradient spotlight logic:
+	// Background: Dim (Dark Gray)
+	// Edges of window: Primary (White)
+	// Center of window: Info (Bold White)
+
+	// Define window structure: [ ... dim ... | edge | center | edge | ... dim ... ]
+	// Window width should be at least 3 for this effect to work well.
+
 	inWindow := func(i int) bool {
 		if end <= n {
 			return i >= pos && i < end
@@ -441,12 +503,32 @@ func spotlightFormatClean(cleanMessage string, position int, width int) (string,
 		return i >= pos || i < (end%n)
 	}
 
+	// Helper to check if index is in the "center" of the window (inner 50%)
+	inCenter := func(i int) bool {
+		// Calculate relative position within the window
+		rel := i - pos
+		if rel < 0 {
+			rel += n
+		}
+
+		// Center is the middle 30% of the window (narrower center for more fade)
+		margin := width * 35 / 100
+		return rel >= margin && rel < (width-margin)
+	}
+
 	for i := 0; i < n; i++ {
 		ch := string(runes[i])
 		if inWindow(i) {
-			b.WriteString(config.Colors.Info.Sprint(ch))
+			if inCenter(i) {
+				// Center: Bright/Bold
+				b.WriteString(config.Colors.Info.Sprint(ch))
+			} else {
+				// Edges: Normal White
+				b.WriteString(config.Colors.Primary.Sprint(ch))
+			}
 		} else {
-			b.WriteString(config.Colors.Primary.Sprint(ch))
+			// Background: Dimmed
+			b.WriteString(config.Colors.Dim.Sprint(ch))
 		}
 	}
 
@@ -482,4 +564,131 @@ func spotlightFormatWithStop(message string, position int, width int, stopSeq st
 
 	// Preserve original colors in the tail
 	return headFormatted + tail, next
+}
+
+// dualWaveFormat renders a single wave that periodically flips direction to keep
+// the animation feeling dynamic. The second return value is the next position,
+// and the third encodes wave state (direction * stepsRemaining).
+func dualWaveFormat(message string, posLR int, posRL int, width int) (string, int, int) {
+	if message == "" {
+		return message, 0, 0
+	}
+
+	const stopSeq = "(ESC to cancel)"
+
+	// Detect the stop sequence so the wave animation does not color it.
+	// Everything from the stop sequence onward is kept dimmed.
+	stopIdx := strings.Index(message, stopSeq)
+
+	var (
+		cleanMessage string
+		tailDimmed   string
+	)
+
+	if stopIdx >= 0 {
+		head := message[:stopIdx]
+		tail := message[stopIdx:]
+		cleanMessage = stripAnsiColors(head)
+		tailDimmed = config.Colors.Dim.Sprint(stripAnsiColors(tail))
+	} else {
+		cleanMessage = stripAnsiColors(message)
+	}
+
+	runes := []rune(cleanMessage)
+	n := len(runes)
+	if n == 0 {
+		// No animated portion; only return the dimmed tail if present.
+		return tailDimmed, 0, 0
+	}
+	if width <= 0 {
+		width = 1
+	}
+	if width > n {
+		width = n
+	}
+
+	// Direction/state handling: posRL encodes direction * stepsRemaining.
+	const defaultFlipSteps = 40 // ~4s at 100ms tick; keeps motion varied
+	dir := 1
+	stepsRemaining := defaultFlipSteps
+	if posRL != 0 {
+		if posRL < 0 {
+			dir = -1
+		}
+		stepsRemaining = posRL * dir
+		if stepsRemaining == 0 {
+			stepsRemaining = defaultFlipSteps
+		}
+	}
+
+	// Normalize position to avoid unbounded growth
+	pos := posLR % n
+	if pos < 0 {
+		pos += n
+	}
+	end := pos + width
+
+	// Gradient used by the wave
+	colorWave := []*color.Color{
+		color.New(color.FgHiCyan),
+		color.New(color.FgCyan),
+		color.New(color.FgHiMagenta),
+		color.New(color.FgMagenta),
+	}
+
+	var b strings.Builder
+	b.Grow(len(cleanMessage) * 4) // ANSI codes add overhead
+
+	for i := 0; i < n; i++ {
+		ch := string(runes[i])
+		inWindow := func(idx int) bool {
+			if end <= n {
+				return idx >= pos && idx < end
+			}
+			return idx >= pos || idx < (end%n)
+		}
+
+		if inWindow(i) {
+			rel := i - pos
+			if rel < 0 {
+				rel += n
+			}
+			if dir < 0 {
+				rel = width - 1 - rel
+				if rel < 0 {
+					rel += width
+				}
+			}
+			colorIdx := (rel * len(colorWave)) / width
+			if colorIdx >= len(colorWave) {
+				colorIdx = len(colorWave) - 1
+			}
+			b.WriteString(colorWave[colorIdx].Sprint(ch))
+		} else {
+			// Background: Dimmed
+			b.WriteString(config.Colors.Dim.Sprint(ch))
+		}
+	}
+
+	// Advance position and maybe flip direction
+	nextPos := pos + dir
+	if nextPos < 0 {
+		nextPos += n
+	}
+	if nextPos >= n {
+		nextPos %= n
+	}
+
+	stepsRemaining--
+	if stepsRemaining <= 0 {
+		dir *= -1
+		stepsRemaining = defaultFlipSteps
+	}
+	nextState := dir * stepsRemaining
+
+	if stopIdx >= 0 {
+		return b.String() + tailDimmed, nextPos, nextState
+	}
+
+	return b.String(), nextPos, nextState
 }

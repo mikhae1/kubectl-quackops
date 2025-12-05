@@ -2,7 +2,6 @@ package lib
 
 import (
 	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -11,38 +10,24 @@ import (
 	"golang.org/x/term"
 )
 
-// escWatcherState tracks the current ESC watcher to prevent multiple concurrent watchers
-var (
-	escWatcherActive atomic.Bool
-	escWatcherMu     sync.Mutex
-)
-
 // StartEscWatcher starts a raw-input watcher that cancels the context on a standalone ESC key.
 // It ignores ANSI escape sequences (e.g., arrow keys: ESC [ A) and Alt-modified keys (ESC + key).
 // Ctrl-C/Z/\ trigger appropriate signals and immediate exit via CleanupAndExit.
 // Returns a stop function that restores terminal state and stops the watcher.
+// The stop function blocks until the watcher goroutine has fully exited.
 func StartEscWatcher(cancel func(), spinnerManager *SpinnerManager, cfg *config.Config) func() {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return func() {}
 	}
 
-	// Prevent multiple concurrent watchers
-	escWatcherMu.Lock()
-	if escWatcherActive.Load() {
-		escWatcherMu.Unlock()
-		return func() {}
-	}
-	escWatcherActive.Store(true)
-	escWatcherMu.Unlock()
-
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
-		escWatcherActive.Store(false)
 		return func() {}
 	}
 
 	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
 	var stopped atomic.Bool
 	var restored atomic.Bool
 
@@ -53,10 +38,8 @@ func StartEscWatcher(cancel func(), spinnerManager *SpinnerManager, cfg *config.
 	}
 
 	go func() {
-		defer func() {
-			restore()
-			escWatcherActive.Store(false)
-		}()
+		defer close(doneCh)
+		defer restore()
 
 		// Use shorter polling interval (50ms) for more responsive ESC detection
 		const pollInterval = 50 * time.Millisecond
@@ -112,6 +95,8 @@ func StartEscWatcher(cancel func(), spinnerManager *SpinnerManager, cfg *config.
 		if stopped.CompareAndSwap(false, true) {
 			close(stopCh)
 			restore()
+			// Wait for goroutine to exit so next watcher can start immediately
+			<-doneCh
 		}
 	}
 }

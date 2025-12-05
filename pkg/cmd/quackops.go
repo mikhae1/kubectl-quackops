@@ -56,7 +56,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVarP(&cfg.KubectlBinaryPath, "kubectl-path", "k", cfg.KubectlBinaryPath, "Path to kubectl binary")
 	// MCP flags
 	cmd.Flags().BoolVarP(&cfg.MCPClientEnabled, "mcp-client", "", cfg.MCPClientEnabled, "Enable MCP client mode to use external MCP servers for tools")
-	cmd.Flags().StringVarP(&cfg.MCPConfigPath, "mcp-config", "", cfg.MCPConfigPath, "Path to MCP client configuration file (default: ~/.config/quackops/mcp.yaml)")
+	cmd.Flags().StringVarP(&cfg.MCPConfigPath, "mcp-config", "", cfg.MCPConfigPath, "Comma-separated MCP client config paths; tries each in order and falls back to ~/.config/quackops/mcp.yaml then ~/.quackops/mcp.json")
 	cmd.Flags().IntVarP(&cfg.MCPToolTimeout, "mcp-tool-timeout", "", cfg.MCPToolTimeout, "Timeout in seconds for MCP tool calls")
 	cmd.Flags().BoolVarP(&cfg.MCPStrict, "mcp-strict", "", cfg.MCPStrict, "Strict MCP mode: do not fall back to local execution when MCP fails")
 	cmd.Flags().BoolVarP(&cfg.MCPLogEnabled, "mcp-log", "", cfg.MCPLogEnabled, "Enable logging of MCP server stdio to a file (env QU_MCP_LOG)")
@@ -558,7 +558,19 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 			fmt.Println("MCP client: disabled")
 		}
 		return true, "tools"
+	case "/prompts":
+		if cfg.MCPClientEnabled {
+			printMCPPrompts(cfg)
+		} else {
+			fmt.Println("MCP client: disabled")
+		}
+		return true, "prompts"
 	default:
+		if cfg.MCPClientEnabled && strings.HasPrefix(lowered, "/") {
+			if handled := handleMCPDynamicPrompt(cfg, lowered); handled {
+				return true, "prompt"
+			}
+		}
 		fmt.Printf("Unknown command: %s\n", userPrompt)
 		fmt.Println("Type /help for available commands.")
 		return true, "unknown"
@@ -991,6 +1003,85 @@ func printMCPDetails(cfg *config.Config) {
 				desc = desc[:57] + "..."
 			}
 			fmt.Printf("  · %s: %s\n", toolColor.Sprint(tool.Name), descColor.Sprint(desc))
+		}
+	}
+	fmt.Println()
+}
+
+// printMCPPrompts displays MCP prompts with brand-accent styling
+func printMCPPrompts(cfg *config.Config) {
+	accent := config.Colors.Accent
+	descColor := color.New(color.FgHiWhite)
+	serverColor := config.Colors.Label
+
+	promptInfos := mcp.GetPromptInfos(cfg)
+	if len(promptInfos) == 0 {
+		fmt.Println("No MCP prompts discovered")
+		return
+	}
+
+	fmt.Printf("MCP prompts (%d):\n", len(promptInfos))
+	for _, pi := range promptInfos {
+		name := "/" + pi.Name
+		fmt.Printf(" - %s", accent.Sprint(name))
+		if pi.Server != "" {
+			fmt.Printf(" %s", serverColor.Sprint("["+pi.Server+"]"))
+		}
+		if pi.Title != "" {
+			fmt.Printf(" — %s", descColor.Sprint(pi.Title))
+		} else if pi.Description != "" {
+			fmt.Printf(" — %s", descColor.Sprint(pi.Description))
+		}
+		fmt.Println()
+	}
+}
+
+// handleMCPDynamicPrompt shows details for a specific prompt when invoked as /<prompt>
+func handleMCPDynamicPrompt(cfg *config.Config, lowered string) bool {
+	name := strings.TrimPrefix(lowered, "/")
+	if name == "" {
+		return false
+	}
+	promptInfos := mcp.GetPromptInfos(cfg)
+	for _, pi := range promptInfos {
+		if strings.EqualFold(pi.Name, name) {
+			renderPromptDetails(pi)
+			return true
+		}
+	}
+	return false
+}
+
+func renderPromptDetails(pi mcp.PromptInfo) {
+	accent := config.Colors.Accent
+	titleColor := config.Colors.Info
+	descColor := color.New(color.FgHiWhite)
+	labelColor := config.Colors.Label
+	dim := config.Colors.Dim
+
+	fmt.Println()
+	fmt.Printf("%s", accent.Sprint("/"+pi.Name))
+	if pi.Server != "" {
+		fmt.Printf(" %s", labelColor.Sprint("["+pi.Server+"]"))
+	}
+	if pi.Title != "" && !strings.EqualFold(pi.Title, pi.Name) {
+		fmt.Printf(" — %s", titleColor.Sprint(pi.Title))
+	}
+	fmt.Println()
+	if pi.Description != "" {
+		fmt.Println(descColor.Sprint(pi.Description))
+	}
+	if len(pi.Arguments) > 0 {
+		fmt.Println(dim.Sprint("Arguments:"))
+		for _, arg := range pi.Arguments {
+			argLine := fmt.Sprintf("  - %s", labelColor.Sprint(arg.Name))
+			if arg.Required {
+				argLine += dim.Sprint(" (required)")
+			}
+			if arg.Description != "" {
+				argLine += ": " + descColor.Sprint(arg.Description)
+			}
+			fmt.Println(argLine)
 		}
 	}
 	fmt.Println()

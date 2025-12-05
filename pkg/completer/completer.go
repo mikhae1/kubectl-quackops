@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
 )
 
 // execCommand is a variable that allows for mocking exec.Command in tests
@@ -429,13 +430,35 @@ func ParseCommandLine(line string) []string {
 func (c *shellAutoCompleter) CompleteSlashCommands(input string) ([][]rune, int) {
 	// Use slash commands from configuration
 	slashCommands := c.Cfg.SlashCommands
+	var promptInfos []mcp.PromptInfo
+	if c.Cfg.MCPClientEnabled {
+		promptInfos = mcp.GetPromptInfos(c.Cfg)
+	}
 
 	if input == "/" {
 		// Show primary commands when just "/" is typed for cleaner menu
 		var completions [][]rune
+		seen := make(map[string]bool)
 		for _, cmdInfo := range slashCommands {
 			remaining := cmdInfo.Primary[1:] // Remove the leading "/"
-			completions = append(completions, []rune(remaining))
+			if !seen[remaining] {
+				completions = append(completions, []rune(remaining))
+				seen[remaining] = true
+			}
+		}
+		for _, pi := range promptInfos {
+			name := strings.TrimSpace(pi.Name)
+			if name == "" {
+				continue
+			}
+			if seen[name] {
+				continue
+			}
+			completions = append(completions, []rune(name))
+			seen[name] = true
+			if len(completions) >= c.Cfg.MaxCompletions {
+				break
+			}
 		}
 		return completions, 1
 	}
@@ -443,7 +466,7 @@ func (c *shellAutoCompleter) CompleteSlashCommands(input string) ([][]rune, int)
 	// Filter commands that match the input (check all variations)
 	var completions [][]rune
 	seen := make(map[string]bool)
-	
+
 	for _, cmdInfo := range slashCommands {
 		for _, cmd := range cmdInfo.Commands {
 			if strings.HasPrefix(cmd, input) {
@@ -454,6 +477,21 @@ func (c *shellAutoCompleter) CompleteSlashCommands(input string) ([][]rune, int)
 					seen[remaining] = true
 				}
 			}
+		}
+	}
+
+	// Include MCP prompt names as slash completions
+	for _, pi := range promptInfos {
+		promptCmd := "/" + strings.TrimSpace(pi.Name)
+		if strings.HasPrefix(promptCmd, input) {
+			remaining := promptCmd[len(input):]
+			if remaining != "" && !seen[remaining] {
+				completions = append(completions, []rune(remaining))
+				seen[remaining] = true
+			}
+		}
+		if len(completions) >= c.Cfg.MaxCompletions {
+			break
 		}
 	}
 

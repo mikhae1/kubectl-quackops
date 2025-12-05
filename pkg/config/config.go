@@ -353,10 +353,14 @@ func LoadConfig() *Config {
 		// MCP client mode
 		MCPClientEnabled: getEnvArg("QU_MCP_CLIENT", true).(bool),
 		MCPConfigPath: func() string {
-			if homeDir != "" {
-				return fmt.Sprintf("%s/.config/quackops/mcp.yaml", homeDir)
+			if homeDir == "" {
+				return ""
 			}
-			return ""
+			defaultPaths := []string{
+				filepath.Join(homeDir, ".config", "quackops", "mcp.yaml"),
+				filepath.Join(homeDir, ".quackops", "mcp.json"),
+			}
+			return strings.Join(defaultPaths, ",")
 		}(),
 		MCPToolTimeout:  getEnvArg("QU_MCP_TOOL_TIMEOUT", 30).(int),
 		MCPStrict:       getEnvArg("QU_MCP_STRICT", false).(bool),
@@ -942,6 +946,11 @@ func defaultSlashCommands() []SlashCommand {
 			Commands:    []string{"/tools"},
 			Primary:     "/tools",
 			Description: "List MCP tools",
+		},
+		{
+			Commands:    []string{"/prompts"},
+			Primary:     "/prompts",
+			Description: "List MCP prompts",
 		},
 		{
 			Commands:    []string{"/bye", "/exit", "/quit", "/q"},

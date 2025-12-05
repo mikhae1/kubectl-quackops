@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
-	jsonschema "github.com/modelcontextprotocol/go-sdk/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
 )
@@ -49,12 +49,22 @@ type ToolInfo struct {
 	InputSchema *jsonschema.Schema
 }
 
+// PromptInfo represents a discovered MCP prompt and its arguments
+type PromptInfo struct {
+	Name        string
+	Title       string
+	Description string
+	Arguments   []*sdkmcp.PromptArgument
+	Server      string
+}
+
 // ServerConnection represents a connection to an MCP server
 type ServerConnection struct {
 	Spec            *ServerSpec
 	Session         *sdkmcp.ClientSession
 	Tools           []string
 	ToolInfos       []ToolInfo
+	PromptInfos     []PromptInfo
 	Connected       bool
 	LastError       error
 	LastHealthCheck time.Time
@@ -84,20 +94,40 @@ var (
 	mcpLogFormat  string
 )
 
+func gatherMCPConfigPaths(path string) []string {
+	var tryPaths []string
+	seen := make(map[string]struct{})
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		if _, exists := seen[p]; exists {
+			return
+		}
+		seen[p] = struct{}{}
+		tryPaths = append(tryPaths, p)
+	}
+
+	for _, part := range strings.Split(path, ",") {
+		add(part)
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		add(filepath.Join(home, ".config", "quackops", "mcp.yaml"))
+		add(filepath.Join(home, ".quackops", "mcp.json"))
+	}
+
+	return tryPaths
+}
+
 func loadOnce(path string) {
 	if loaded {
 		return
 	}
 	loaded = true
-	// Attempt path provided, then fallback to defaults
-	tryPaths := []string{}
-	if path != "" {
-		tryPaths = append(tryPaths, path)
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		tryPaths = append(tryPaths, filepath.Join(home, ".config", "quackops", "mcp.yaml"))
-		tryPaths = append(tryPaths, filepath.Join(home, ".quackops", "mcp.json"))
-	}
+	// Attempt provided path(s), then fallback to defaults
+	tryPaths := gatherMCPConfigPaths(path)
 	for _, p := range tryPaths {
 		if p == "" {
 			continue
@@ -358,6 +388,19 @@ func (r *ServerRegistry) GetAllToolInfos() []ToolInfo {
 	return allToolInfos
 }
 
+// GetAllPromptInfos returns all available prompts with their descriptions
+func (r *ServerRegistry) GetAllPromptInfos() []PromptInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var allPromptInfos []PromptInfo
+	for _, conn := range r.servers {
+		if conn.Connected {
+			allPromptInfos = append(allPromptInfos, conn.PromptInfos...)
+		}
+	}
+	return allPromptInfos
+}
+
 // GetConnectedServers returns a list of connected server names
 func (r *ServerRegistry) GetConnectedServers() []string {
 	r.mu.RLock()
@@ -542,19 +585,22 @@ func (r *ServerRegistry) attemptReconnect(conn *ServerConnection, cfg *config.Co
 	}
 
 	// Attempt connection
-	transport := sdkmcp.NewCommandTransport(cmd)
+	transport := &sdkmcp.CommandTransport{Command: cmd}
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{
 		Name:    "quackops-mcp-client",
 		Version: "v0.1.0",
 	}, &sdkmcp.ClientOptions{
-		ToolListChangedHandler: func(ctx context.Context, cs *sdkmcp.ClientSession, p *sdkmcp.ToolListChangedParams) {
+		ToolListChangedHandler: func(ctx context.Context, req *sdkmcp.ToolListChangedRequest) {
 			// Refresh tools for this session
-			r.refreshToolsForSession(cs)
+			r.refreshToolsForSession(req.Session)
+		},
+		PromptListChangedHandler: func(ctx context.Context, req *sdkmcp.PromptListChangedRequest) {
+			r.refreshPromptsForSession(req.Session)
 		},
 		KeepAlive: 30 * time.Second,
 	})
 
-	sess, err := client.Connect(ctx, transport)
+	sess, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		logger.Log("warn", "[MCP] Failed to reconnect server %s: %v", name, err)
 		if cfg.MCPLogEnabled {
@@ -582,6 +628,10 @@ func (r *ServerRegistry) attemptReconnect(conn *ServerConnection, cfg *config.Co
 	// Re-discover tools from the server
 	toolInfos := discoverToolInfos(sess)
 	conn.ToolInfos = toolInfos
+
+	// Re-discover prompts from the server
+	promptInfos := discoverAndCachePrompts(sess, name)
+	conn.PromptInfos = promptInfos
 
 	// Extract tool names for backward compatibility
 	var tools []string
@@ -624,6 +674,15 @@ func GetToolInfos(cfg *config.Config) []ToolInfo {
 		return []ToolInfo{}
 	}
 	return registry.GetAllToolInfos()
+}
+
+// GetPromptInfos returns all available prompts with descriptions
+func GetPromptInfos(cfg *config.Config) []PromptInfo {
+	loadOnce(cfg.MCPConfigPath)
+	if registry == nil {
+		return []PromptInfo{}
+	}
+	return registry.GetAllPromptInfos()
 }
 
 // Servers returns configured MCP server names for display
@@ -768,24 +827,26 @@ func startServer(idx int, spec ServerSpec, cfg *config.Config) {
 		})
 	}
 
-	// Create transport using mcp.NewCommandTransport as specified
-	transport := sdkmcp.NewCommandTransport(cmd)
+	// Create transport using command stdio
+	transport := &sdkmcp.CommandTransport{Command: cmd}
 
-	// Create client with enhanced implementation info
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{
 		Name:    "kubectl-quackops-mcp-client",
 		Version: "v0.2.0",
 	}, &sdkmcp.ClientOptions{
-		ToolListChangedHandler: func(ctx context.Context, cs *sdkmcp.ClientSession, p *sdkmcp.ToolListChangedParams) {
+		ToolListChangedHandler: func(ctx context.Context, req *sdkmcp.ToolListChangedRequest) {
 			logger.Log("info", "[MCP] Tool list changed for server %s, refreshing tools", name)
-			// Refresh tools for this session
-			registry.refreshToolsForSession(cs)
+			registry.refreshToolsForSession(req.Session)
+		},
+		PromptListChangedHandler: func(ctx context.Context, req *sdkmcp.PromptListChangedRequest) {
+			logger.Log("info", "[MCP] Prompt list changed for server %s, refreshing prompts", name)
+			registry.refreshPromptsForSession(req.Session)
 		},
 		KeepAlive: 30 * time.Second,
 	})
 
 	// Connect to create ClientSession as specified in requirements
-	sess, err := client.Connect(ctx, transport)
+	sess, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		logger.Log("warn", "[MCP] Failed to connect to server %s: %v", name, err)
 		if cfg.MCPLogEnabled {
@@ -810,6 +871,10 @@ func startServer(idx int, spec ServerSpec, cfg *config.Config) {
 	// ListTools and cache: name, description/title, InputSchema as specified
 	toolInfos := discoverAndCacheToolInfos(sess, name)
 	conn.ToolInfos = toolInfos
+
+	// Discover prompts (best-effort; server may not support prompts)
+	promptInfos := discoverAndCachePrompts(sess, name)
+	conn.PromptInfos = promptInfos
 
 	// Extract tool names for backward compatibility
 	var tools []string
@@ -887,10 +952,7 @@ func discoverAndCacheToolInfos(session *sdkmcp.ClientSession, serverName string)
 		}
 
 		// Validate and cache input schema
-		var schema *jsonschema.Schema
-		if tool.InputSchema != nil {
-			schema = tool.InputSchema
-		}
+		schema := toJSONSchema(tool.InputSchema)
 
 		toolInfo := ToolInfo{
 			Name:        tool.Name,
@@ -905,6 +967,60 @@ func discoverAndCacheToolInfos(session *sdkmcp.ClientSession, serverName string)
 
 	logger.Log("info", "[MCP] Successfully discovered %d tools for server %s", len(tools), serverName)
 	return tools
+}
+
+func toJSONSchema(raw any) *jsonschema.Schema {
+	if raw == nil {
+		return nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(b, &schema); err != nil {
+		return nil
+	}
+	return &schema
+}
+
+// discoverAndCachePrompts discovers prompts exposed by an MCP server.
+// Best-effort: servers may not support prompts.
+func discoverAndCachePrompts(session *sdkmcp.ClientSession, serverName string) []PromptInfo {
+	logger.Log("info", "[MCP] Discovering prompts for server %s", serverName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var prompts []PromptInfo
+	for prompt, err := range session.Prompts(ctx, &sdkmcp.ListPromptsParams{}) {
+		if err != nil {
+			logger.Log("warn", "[MCP] Error during prompt discovery for server %s: %v", serverName, err)
+			break
+		}
+		if prompt == nil {
+			continue
+		}
+
+		desc := prompt.Description
+		if desc == "" {
+			desc = prompt.Title
+		}
+		if desc == "" {
+			desc = fmt.Sprintf("Prompt: %s", prompt.Name)
+		}
+
+		prompts = append(prompts, PromptInfo{
+			Name:        prompt.Name,
+			Title:       prompt.Title,
+			Description: desc,
+			Arguments:   prompt.Arguments,
+			Server:      serverName,
+		})
+	}
+
+	logger.Log("info", "[MCP] Successfully discovered %d prompts for server %s", len(prompts), serverName)
+	return prompts
 }
 
 // discoverToolInfos attempts to discover available tools with descriptions from an MCP server
@@ -942,6 +1058,24 @@ func (r *ServerRegistry) refreshToolsForSession(session *sdkmcp.ClientSession) {
 	r.mu.Unlock()
 
 	logger.Log("info", "[MCP] Refreshed tools for server %s: %d tool(s)", conn.Spec.Name, len(conn.Tools))
+}
+
+// refreshPromptsForSession re-discovers prompts for a given session and updates the connection cache.
+func (r *ServerRegistry) refreshPromptsForSession(session *sdkmcp.ClientSession) {
+	r.mu.Lock()
+	conn, ok := r.sessionToServer[session]
+	r.mu.Unlock()
+	if !ok || conn == nil {
+		return
+	}
+
+	promptInfos := discoverAndCachePrompts(session, conn.Spec.Name)
+
+	r.mu.Lock()
+	conn.PromptInfos = promptInfos
+	r.mu.Unlock()
+
+	logger.Log("info", "[MCP] Refreshed prompts for server %s: %d prompt(s)", conn.Spec.Name, len(conn.PromptInfos))
 }
 
 // Stop shuts down all MCP client resources
