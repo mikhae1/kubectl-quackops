@@ -384,7 +384,13 @@ func startChatSession(cfg *config.Config, args []string) error {
 		}
 
 		// Unified history saving: store all prompts and commands with prefixes in main history file
-		if !strings.HasPrefix(originalUserPrompt, "/") && !cfg.DisableHistory && cfg.HistoryFile != "" {
+		// Also save MCP prompts with queries (e.g., "/code-mode check issues")
+		isMCPPromptQuery := false
+		if cfg.MCPClientEnabled && strings.HasPrefix(originalUserPrompt, "/") {
+			_, query, isPrompt := completer.IsMCPPrompt(cfg, originalUserPrompt)
+			isMCPPromptQuery = isPrompt && query != ""
+		}
+		if (!strings.HasPrefix(originalUserPrompt, "/") || isMCPPromptQuery) && !cfg.DisableHistory && cfg.HistoryFile != "" {
 			var entryToSave string
 
 			if wasCommand {
@@ -452,6 +458,11 @@ func startChatSession(cfg *config.Config, args []string) error {
 }
 
 // Centralized slash command handler
+// Returns (handled, action, promptName, userQuery) where:
+//   - handled: true if this was a slash command that was fully processed
+//   - action: the action type (e.g., "help", "clear", "prompt_query")
+//   - For MCP prompts with queries, returns (false, "prompt_query", promptName, userQuery)
+//     to indicate the caller should process as an MCP prompt injection
 func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 	lowered := strings.ToLower(strings.TrimSpace(userPrompt))
 	if !strings.HasPrefix(lowered, "/") {
@@ -468,6 +479,7 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 	case "/reset":
 		cfg.ChatMessages = nil
 		cfg.StoredUserCmdResults = nil
+		cfg.SelectedPrompt = ""
 		fmt.Println("Context reset")
 		return true, "reset"
 	case "/clear", "/clean":
@@ -475,6 +487,7 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		cfg.StoredUserCmdResults = nil
 		cfg.LastOutgoingTokens = 0
 		cfg.LastIncomingTokens = 0
+		cfg.SelectedPrompt = ""
 		fmt.Println("🦆 Context cleared!")
 		return true, "clear"
 	case "/mcp":
@@ -566,9 +579,20 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		}
 		return true, "prompts"
 	default:
+		// Check for MCP prompt with user query (e.g., "/code-mode check issues")
 		if cfg.MCPClientEnabled && strings.HasPrefix(lowered, "/") {
-			if handled := handleMCPDynamicPrompt(cfg, lowered); handled {
-				return true, "prompt"
+			promptName, userQuery, isPrompt := completer.IsMCPPrompt(cfg, userPrompt)
+			if isPrompt {
+				if userQuery != "" {
+					// This is a prompt with a query - don't handle it here,
+					// let processUserPrompt handle the injection
+					cfg.SelectedPrompt = promptName
+					return false, "prompt_query"
+				}
+				// Just the prompt name, show details
+				if handled := handleMCPDynamicPrompt(cfg, lowered); handled {
+					return true, "prompt"
+				}
 			}
 		}
 		fmt.Printf("Unknown command: %s\n", userPrompt)
@@ -881,8 +905,66 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	var err error
 
 	// Centralized slash command handling
-	if handled, _ := handleSlashCommand(cfg, userPrompt); handled {
+	handled, action := handleSlashCommand(cfg, userPrompt)
+	if handled {
 		return nil
+	}
+
+	// Check if this is an MCP prompt with a user query
+	var mcpPromptContent string
+	var actualUserQuery string
+	if action == "prompt_query" && cfg.SelectedPrompt != "" {
+		// Extract the user query part (after the prompt name)
+		_, actualUserQuery, _ = completer.IsMCPPrompt(cfg, userPrompt)
+		serverName := completer.GetMCPPromptServer(cfg, userPrompt)
+
+		logger.Log("debug", "[MCP Prompt] Detected prompt: '%s' from server '%s'", cfg.SelectedPrompt, serverName)
+		logger.Log("debug", "[MCP Prompt] User query: '%s'", actualUserQuery)
+
+		// Display with yellow background highlighting for the prompt part (/$server/$prompt)
+		fmt.Println(lib.FormatInputWithPrompt(userPrompt, cfg.SelectedPrompt, serverName))
+
+		// Check if prompt has arguments and log them
+		promptArgs := mcp.GetPromptArgs(cfg, cfg.SelectedPrompt)
+		if len(promptArgs) > 0 {
+			logger.Log("debug", "[MCP Prompt] Prompt '%s' defines %d arguments:", cfg.SelectedPrompt, len(promptArgs))
+			for _, arg := range promptArgs {
+				reqStr := "optional"
+				if arg.Required {
+					reqStr = "required"
+				}
+				logger.Log("debug", "[MCP Prompt]   - %s (%s): %s", arg.Name, reqStr, arg.Description)
+			}
+		} else {
+			logger.Log("debug", "[MCP Prompt] Prompt '%s' has no arguments defined", cfg.SelectedPrompt)
+		}
+
+		// Fetch the prompt content from MCP server
+		// Pass the user query so it can be injected into prompt arguments per MCP spec
+		logger.Log("debug", "[MCP Prompt] Calling GetPrompt for '%s' with userQuery='%s'", cfg.SelectedPrompt, actualUserQuery)
+		promptMessages, err := mcp.GetPromptContent(cfg, cfg.SelectedPrompt, nil, actualUserQuery)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", color.YellowString("Warning: Failed to fetch prompt content: %v", err))
+			logger.Log("debug", "[MCP Prompt] Error fetching prompt: %v", err)
+		} else {
+			// Build prompt content from MCP messages
+			var promptBuilder strings.Builder
+			logger.Log("debug", "[MCP Prompt] Received %d messages from prompt", len(promptMessages))
+			for i, msg := range promptMessages {
+				logger.Log("debug", "[MCP Prompt]   Message %d: role=%s, content_len=%d", i+1, msg.Role, len(msg.Content))
+				if msg.Content != "" {
+					promptBuilder.WriteString(msg.Content)
+					promptBuilder.WriteString("\n")
+				}
+			}
+			mcpPromptContent = strings.TrimSpace(promptBuilder.String())
+			logger.Log("debug", "[MCP Prompt] Final prompt content length: %d chars", len(mcpPromptContent))
+			logger.Log("info", "Injected MCP prompt '%s' content (%d chars)", cfg.SelectedPrompt, len(mcpPromptContent))
+		}
+
+		// Use the actual user query for processing
+		userPrompt = actualUserQuery
+		cfg.SelectedPrompt = "" // Clear after use
 	}
 
 	// Edit mode: treat input as command without requiring '$' prefix
@@ -926,6 +1008,11 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 	if augPrompt == "" {
 		augPrompt = userPrompt
+	}
+
+	// Inject MCP prompt content at the beginning if present
+	if mcpPromptContent != "" {
+		augPrompt = mcpPromptContent + "\n\n## User Query\n" + augPrompt
 	}
 
 	// Print a minimal verbose trace for tests when verbose is enabled
@@ -1022,29 +1109,41 @@ func printMCPPrompts(cfg *config.Config) {
 
 	fmt.Printf("MCP prompts (%d):\n", len(promptInfos))
 	for _, pi := range promptInfos {
-		name := "/" + pi.Name
-		fmt.Printf(" - %s", accent.Sprint(name))
-		if pi.Server != "" {
-			fmt.Printf(" %s", serverColor.Sprint("["+pi.Server+"]"))
-		}
+		// Format: /$server/$prompt
+		promptPath := "/" + pi.Server + "/" + pi.Name
+		fmt.Printf(" - %s", accent.Sprint(promptPath))
 		if pi.Title != "" {
 			fmt.Printf(" — %s", descColor.Sprint(pi.Title))
 		} else if pi.Description != "" {
 			fmt.Printf(" — %s", descColor.Sprint(pi.Description))
 		}
+		fmt.Printf(" %s", serverColor.Sprint("["+pi.Server+"]"))
 		fmt.Println()
 	}
 }
 
-// handleMCPDynamicPrompt shows details for a specific prompt when invoked as /<prompt>
+// handleMCPDynamicPrompt shows details for a specific prompt when invoked as /$server/$prompt
 func handleMCPDynamicPrompt(cfg *config.Config, lowered string) bool {
-	name := strings.TrimPrefix(lowered, "/")
-	if name == "" {
+	path := strings.TrimPrefix(lowered, "/")
+	if path == "" {
 		return false
 	}
+
+	// Parse /$server/$prompt format
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 {
+		return false
+	}
+
+	serverName := parts[0]
+	promptName := parts[1]
+	if serverName == "" || promptName == "" {
+		return false
+	}
+
 	promptInfos := mcp.GetPromptInfos(cfg)
 	for _, pi := range promptInfos {
-		if strings.EqualFold(pi.Name, name) {
+		if strings.EqualFold(pi.Server, serverName) && strings.EqualFold(pi.Name, promptName) {
 			renderPromptDetails(pi)
 			return true
 		}
@@ -1058,12 +1157,14 @@ func renderPromptDetails(pi mcp.PromptInfo) {
 	descColor := color.New(color.FgHiWhite)
 	labelColor := config.Colors.Label
 	dim := config.Colors.Dim
+	reqColor := color.New(color.FgHiYellow)
+	optColor := color.New(color.FgHiBlack)
+
+	// Format: /$server/$prompt
+	promptPath := "/" + pi.Server + "/" + pi.Name
 
 	fmt.Println()
-	fmt.Printf("%s", accent.Sprint("/"+pi.Name))
-	if pi.Server != "" {
-		fmt.Printf(" %s", labelColor.Sprint("["+pi.Server+"]"))
-	}
+	fmt.Printf("%s", accent.Sprint(promptPath))
 	if pi.Title != "" && !strings.EqualFold(pi.Title, pi.Name) {
 		fmt.Printf(" — %s", titleColor.Sprint(pi.Title))
 	}
@@ -1071,18 +1172,47 @@ func renderPromptDetails(pi mcp.PromptInfo) {
 	if pi.Description != "" {
 		fmt.Println(descColor.Sprint(pi.Description))
 	}
+	fmt.Println(dim.Sprint("Server: ") + labelColor.Sprint(pi.Server))
 	if len(pi.Arguments) > 0 {
 		fmt.Println(dim.Sprint("Arguments:"))
 		for _, arg := range pi.Arguments {
+			if arg == nil {
+				continue
+			}
 			argLine := fmt.Sprintf("  - %s", labelColor.Sprint(arg.Name))
 			if arg.Required {
-				argLine += dim.Sprint(" (required)")
+				argLine += " " + reqColor.Sprint("(required)")
+			} else {
+				argLine += " " + optColor.Sprint("(optional)")
 			}
 			if arg.Description != "" {
 				argLine += ": " + descColor.Sprint(arg.Description)
 			}
 			fmt.Println(argLine)
 		}
+		// Show usage hint with arguments
+		fmt.Println()
+		fmt.Print(dim.Sprint("Usage: "))
+		usageLine := accent.Sprint(promptPath) + " "
+		for i, arg := range pi.Arguments {
+			if arg == nil {
+				continue
+			}
+			if i > 0 {
+				usageLine += " "
+			}
+			if arg.Required {
+				usageLine += reqColor.Sprintf("<%s>", arg.Name)
+			} else {
+				usageLine += optColor.Sprintf("[%s]", arg.Name)
+			}
+		}
+		fmt.Println(usageLine)
+	} else {
+		// No arguments - show simple usage
+		fmt.Println()
+		fmt.Print(dim.Sprint("Usage: "))
+		fmt.Println(accent.Sprint(promptPath) + " " + dim.Sprint("<your query>"))
 	}
 	fmt.Println()
 }
@@ -1107,6 +1237,29 @@ func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
 		mcpContext.WriteString(fmt.Sprintf("**Connected MCP Servers:** %s\n\n", strings.Join(connectedServers, ", ")))
 	}
 
+	// Try to fetch and include type definitions (like global.d.ts)
+	typeDefContent, err := mcp.GetTypeDefinitions(cfg)
+	if err != nil {
+		logger.Log("debug", "Failed to get type definitions: %v", err)
+	}
+	if typeDefContent != "" {
+		mcpContext.WriteString("## MCP Type Definitions\n")
+		mcpContext.WriteString("The following type definitions describe the available tools and their parameters:\n\n")
+		mcpContext.WriteString("```typescript\n")
+		mcpContext.WriteString(typeDefContent)
+		mcpContext.WriteString("\n```\n\n")
+		logger.Log("info", "Included MCP type definitions (%d bytes)", len(typeDefContent))
+	}
+
+	// List available resources
+	resourceInfos := mcp.GetResourceInfos(cfg)
+	if len(resourceInfos) > 0 {
+		logger.Log("debug", "[MCP] Available resources (%d):", len(resourceInfos))
+		for _, ri := range resourceInfos {
+			logger.Log("debug", "[MCP]   - %s (URI: %s, MIME: %s, Server: %s)", ri.Name, ri.URI, ri.MIMEType, ri.Server)
+		}
+	}
+
 	mcpContext.WriteString("**Instructions for Tool Usage:**\n")
 	mcpContext.WriteString("- These tools can be called automatically to gather real-time diagnostics\n")
 	mcpContext.WriteString("- When analyzing Kubernetes issues, use relevant MCP tools to get current state information\n")
@@ -1117,7 +1270,7 @@ func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
 	mcpContext.WriteString("## User Query\n")
 	mcpContext.WriteString(prompt)
 
-	logger.Log("info", "Using MCP tools in prompt with %d tools", len(toolInfos))
+	logger.Log("info", "Enhanced prompt with MCP tool information (%d tools, %d resources)", len(toolInfos), len(resourceInfos))
 	return mcpContext.String()
 }
 

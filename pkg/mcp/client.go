@@ -58,6 +58,15 @@ type PromptInfo struct {
 	Server      string
 }
 
+// ResourceInfo represents a discovered MCP resource
+type ResourceInfo struct {
+	Name        string
+	URI         string
+	Description string
+	MIMEType    string
+	Server      string
+}
+
 // ServerConnection represents a connection to an MCP server
 type ServerConnection struct {
 	Spec            *ServerSpec
@@ -65,6 +74,7 @@ type ServerConnection struct {
 	Tools           []string
 	ToolInfos       []ToolInfo
 	PromptInfos     []PromptInfo
+	ResourceInfos   []ResourceInfo
 	Connected       bool
 	LastError       error
 	LastHealthCheck time.Time
@@ -401,6 +411,19 @@ func (r *ServerRegistry) GetAllPromptInfos() []PromptInfo {
 	return allPromptInfos
 }
 
+// GetAllResourceInfos returns all available resources with their descriptions
+func (r *ServerRegistry) GetAllResourceInfos() []ResourceInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var allResourceInfos []ResourceInfo
+	for _, conn := range r.servers {
+		if conn.Connected {
+			allResourceInfos = append(allResourceInfos, conn.ResourceInfos...)
+		}
+	}
+	return allResourceInfos
+}
+
 // GetConnectedServers returns a list of connected server names
 func (r *ServerRegistry) GetConnectedServers() []string {
 	r.mu.RLock()
@@ -685,6 +708,316 @@ func GetPromptInfos(cfg *config.Config) []PromptInfo {
 	return registry.GetAllPromptInfos()
 }
 
+// GetResourceInfos returns all available resources with descriptions
+func GetResourceInfos(cfg *config.Config) []ResourceInfo {
+	loadOnce(cfg.MCPConfigPath)
+	if registry == nil {
+		return []ResourceInfo{}
+	}
+	return registry.GetAllResourceInfos()
+}
+
+// ReadResource reads the content of a specific resource from an MCP server
+func ReadResource(cfg *config.Config, uri string) (string, error) {
+	logger.Log("debug", "[MCP] ReadResource called for URI: %s", uri)
+
+	loadOnce(cfg.MCPConfigPath)
+	if registry == nil {
+		return "", fmt.Errorf("MCP client not initialized")
+	}
+
+	// Find which server has this resource
+	registry.mu.RLock()
+	var targetConn *ServerConnection
+	for _, conn := range registry.servers {
+		if !conn.Connected {
+			continue
+		}
+		for _, ri := range conn.ResourceInfos {
+			if ri.URI == uri {
+				targetConn = conn
+				break
+			}
+		}
+		if targetConn != nil {
+			break
+		}
+	}
+	registry.mu.RUnlock()
+
+	if targetConn == nil || targetConn.Session == nil {
+		return "", fmt.Errorf("resource '%s' not found on any connected MCP server", uri)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.MCPToolTimeout)*time.Second)
+	defer cancel()
+
+	logger.Log("debug", "[MCP] Sending ReadResource request for URI: %s", uri)
+
+	res, err := targetConn.Session.ReadResource(ctx, &sdkmcp.ReadResourceParams{
+		URI: uri,
+	})
+	if err != nil {
+		logger.Log("debug", "[MCP] ReadResource failed: %v", err)
+		return "", fmt.Errorf("failed to read resource '%s': %w", uri, err)
+	}
+
+	// Collect text content from all parts
+	var content strings.Builder
+	for i, c := range res.Contents {
+		if c.Text != "" {
+			content.WriteString(c.Text)
+			logger.Log("debug", "[MCP]   Content[%d]: len=%d, mimeType=%s", i, len(c.Text), c.MIMEType)
+		}
+	}
+
+	result := content.String()
+	logger.Log("debug", "[MCP] ReadResource returned %d bytes", len(result))
+	return result, nil
+}
+
+// GetTypeDefinitions finds and returns type definition resources (like global.d.ts)
+func GetTypeDefinitions(cfg *config.Config) (string, error) {
+	resources := GetResourceInfos(cfg)
+	if len(resources) == 0 {
+		logger.Log("debug", "[MCP] No resources discovered from MCP servers")
+		return "", nil
+	}
+
+	logger.Log("debug", "[MCP] Checking %d resources for type definitions", len(resources))
+
+	// Look for type definition files
+	var typeDefContent strings.Builder
+	for _, ri := range resources {
+		// Check for common type definition patterns
+		isTypeDef := strings.HasSuffix(ri.URI, ".d.ts") ||
+			strings.HasSuffix(ri.Name, ".d.ts") ||
+			strings.Contains(ri.URI, "global.d.ts") ||
+			strings.Contains(ri.Name, "types") ||
+			ri.MIMEType == "application/typescript" ||
+			ri.MIMEType == "text/typescript"
+
+		if isTypeDef {
+			logger.Log("debug", "[MCP] Found type definition resource: %s (URI: %s, MIME: %s)", ri.Name, ri.URI, ri.MIMEType)
+			content, err := ReadResource(cfg, ri.URI)
+			if err != nil {
+				logger.Log("warn", "[MCP] Failed to read type definition '%s': %v", ri.URI, err)
+				continue
+			}
+			if content != "" {
+				if typeDefContent.Len() > 0 {
+					typeDefContent.WriteString("\n\n")
+				}
+				typeDefContent.WriteString(fmt.Sprintf("// Source: %s\n", ri.URI))
+				typeDefContent.WriteString(content)
+				logger.Log("info", "[MCP] Loaded type definition from '%s' (%d bytes)", ri.URI, len(content))
+			}
+		}
+	}
+
+	return typeDefContent.String(), nil
+}
+
+// GetPromptByName looks up prompt info by name (case-insensitive)
+func GetPromptByName(cfg *config.Config, name string) (PromptInfo, bool) {
+	loadOnce(cfg.MCPConfigPath)
+	if registry == nil {
+		return PromptInfo{}, false
+	}
+	for _, pi := range registry.GetAllPromptInfos() {
+		if strings.EqualFold(pi.Name, name) {
+			return pi, true
+		}
+	}
+	return PromptInfo{}, false
+}
+
+// GetPromptContent retrieves the actual prompt content from the MCP server.
+// It calls the server's GetPrompt endpoint with the given arguments.
+// If userQuery is provided and the prompt has a single required argument,
+// it will be used as that argument's value (MCP spec: argument injection).
+func GetPromptContent(cfg *config.Config, promptName string, args map[string]string, userQuery string) ([]PromptMessage, error) {
+	logger.Log("debug", "[MCP] GetPromptContent called: prompt='%s', args=%v, userQuery='%s'", promptName, args, userQuery)
+
+	loadOnce(cfg.MCPConfigPath)
+	if registry == nil {
+		return nil, fmt.Errorf("MCP client not initialized")
+	}
+
+	// Find which server has this prompt and get its definition
+	registry.mu.RLock()
+	var targetConn *ServerConnection
+	var promptInfo *PromptInfo
+	for _, conn := range registry.servers {
+		if !conn.Connected {
+			continue
+		}
+		for i, pi := range conn.PromptInfos {
+			if strings.EqualFold(pi.Name, promptName) {
+				targetConn = conn
+				promptInfo = &conn.PromptInfos[i]
+				break
+			}
+		}
+		if targetConn != nil {
+			break
+		}
+	}
+	registry.mu.RUnlock()
+
+	if targetConn == nil || targetConn.Session == nil {
+		return nil, fmt.Errorf("prompt '%s' not found on any connected MCP server", promptName)
+	}
+
+	// Build arguments map according to MCP spec
+	effectiveArgs := make(map[string]string)
+	if args != nil {
+		for k, v := range args {
+			effectiveArgs[k] = v
+		}
+	}
+
+	// MCP spec: If prompt has arguments, inject userQuery into appropriate argument
+	if promptInfo != nil && len(promptInfo.Arguments) > 0 {
+		logger.Log("debug", "[MCP] Prompt '%s' has %d arguments defined", promptName, len(promptInfo.Arguments))
+		for _, arg := range promptInfo.Arguments {
+			if arg != nil {
+				reqStr := "optional"
+				if arg.Required {
+					reqStr = "required"
+				}
+				logger.Log("debug", "[MCP]   - arg '%s' (%s): %s", arg.Name, reqStr, arg.Description)
+			}
+		}
+	}
+
+	if promptInfo != nil && len(promptInfo.Arguments) > 0 && userQuery != "" {
+		logger.Log("debug", "[MCP] Attempting to inject user query into prompt arguments")
+		// Find required arguments that aren't already set
+		injected := false
+		for _, arg := range promptInfo.Arguments {
+			if arg == nil {
+				continue
+			}
+			argName := arg.Name
+			if _, exists := effectiveArgs[argName]; !exists {
+				// Inject userQuery as value for first missing required argument,
+				// or first optional argument if no required ones are missing
+				if arg.Required {
+					effectiveArgs[argName] = userQuery
+					logger.Log("debug", "[MCP] Injected user query into required argument '%s' for prompt '%s'", argName, promptName)
+					injected = true
+					break
+				}
+			}
+		}
+		// If no required argument was found, inject into first optional argument
+		if !injected && len(effectiveArgs) == 0 {
+			for _, arg := range promptInfo.Arguments {
+				if arg != nil {
+					effectiveArgs[arg.Name] = userQuery
+					logger.Log("debug", "[MCP] Injected user query into optional argument '%s' for prompt '%s'", arg.Name, promptName)
+					break
+				}
+			}
+		}
+	}
+
+	// Validate required arguments according to MCP spec
+	if promptInfo != nil {
+		var missingArgs []string
+		for _, arg := range promptInfo.Arguments {
+			if arg != nil && arg.Required {
+				if _, exists := effectiveArgs[arg.Name]; !exists {
+					missingArgs = append(missingArgs, arg.Name)
+				}
+			}
+		}
+		if len(missingArgs) > 0 {
+			return nil, fmt.Errorf("prompt '%s' requires arguments: %s", promptName, strings.Join(missingArgs, ", "))
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.MCPToolTimeout)*time.Second)
+	defer cancel()
+
+	logger.Log("debug", "[MCP] Sending GetPrompt request to server for '%s' with args: %v", promptName, effectiveArgs)
+
+	res, err := targetConn.Session.GetPrompt(ctx, &sdkmcp.GetPromptParams{
+		Name:      promptName,
+		Arguments: effectiveArgs,
+	})
+	if err != nil {
+		logger.Log("debug", "[MCP] GetPrompt request failed: %v", err)
+		return nil, fmt.Errorf("failed to get prompt '%s': %w", promptName, err)
+	}
+
+	logger.Log("debug", "[MCP] GetPrompt response received: description='%s', messages=%d", res.Description, len(res.Messages))
+
+	// Convert MCP messages to our internal format
+	var messages []PromptMessage
+	for i, msg := range res.Messages {
+		pm := PromptMessage{Role: string(msg.Role)}
+		if tc, ok := msg.Content.(*sdkmcp.TextContent); ok {
+			pm.Content = tc.Text
+			logger.Log("debug", "[MCP]   Message[%d]: role=%s, content_len=%d", i, msg.Role, len(tc.Text))
+		} else {
+			logger.Log("debug", "[MCP]   Message[%d]: role=%s, content_type=%T (non-text)", i, msg.Role, msg.Content)
+		}
+		messages = append(messages, pm)
+	}
+
+	logger.Log("info", "[MCP] Retrieved prompt '%s' with %d messages (args: %v)", promptName, len(messages), effectiveArgs)
+	return messages, nil
+}
+
+// GetPromptRequiredArgs returns the names of required arguments for a prompt
+func GetPromptRequiredArgs(cfg *config.Config, promptName string) []string {
+	pi, found := GetPromptByName(cfg, promptName)
+	if !found {
+		return nil
+	}
+	var required []string
+	for _, arg := range pi.Arguments {
+		if arg != nil && arg.Required {
+			required = append(required, arg.Name)
+		}
+	}
+	return required
+}
+
+// GetPromptArgs returns all arguments for a prompt (name, description, required)
+func GetPromptArgs(cfg *config.Config, promptName string) []PromptArgInfo {
+	pi, found := GetPromptByName(cfg, promptName)
+	if !found {
+		return nil
+	}
+	var args []PromptArgInfo
+	for _, arg := range pi.Arguments {
+		if arg != nil {
+			args = append(args, PromptArgInfo{
+				Name:        arg.Name,
+				Description: arg.Description,
+				Required:    arg.Required,
+			})
+		}
+	}
+	return args
+}
+
+// PromptArgInfo represents argument metadata for a prompt
+type PromptArgInfo struct {
+	Name        string
+	Description string
+	Required    bool
+}
+
+// PromptMessage represents a message from an MCP prompt response
+type PromptMessage struct {
+	Role    string
+	Content string
+}
+
 // Servers returns configured MCP server names for display
 func Servers(cfg *config.Config) []string {
 	loadOnce(cfg.MCPConfigPath)
@@ -876,6 +1209,10 @@ func startServer(idx int, spec ServerSpec, cfg *config.Config) {
 	promptInfos := discoverAndCachePrompts(sess, name)
 	conn.PromptInfos = promptInfos
 
+	// Discover resources (best-effort; server may not support resources)
+	resourceInfos := discoverAndCacheResources(sess, name)
+	conn.ResourceInfos = resourceInfos
+
 	// Extract tool names for backward compatibility
 	var tools []string
 	for _, tool := range toolInfos {
@@ -1021,6 +1358,50 @@ func discoverAndCachePrompts(session *sdkmcp.ClientSession, serverName string) [
 
 	logger.Log("info", "[MCP] Successfully discovered %d prompts for server %s", len(prompts), serverName)
 	return prompts
+}
+
+// discoverAndCacheResources discovers resources exposed by an MCP server.
+// Best-effort: servers may not support resources.
+func discoverAndCacheResources(session *sdkmcp.ClientSession, serverName string) []ResourceInfo {
+	logger.Log("debug", "[MCP] Discovering resources for server %s", serverName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var resources []ResourceInfo
+
+	// List resources using the iterator
+	for resource, err := range session.Resources(ctx, &sdkmcp.ListResourcesParams{}) {
+		if err != nil {
+			logger.Log("debug", "[MCP] Error during resource discovery for server %s: %v", serverName, err)
+			break
+		}
+		if resource == nil {
+			continue
+		}
+
+		desc := resource.Description
+		if desc == "" {
+			desc = fmt.Sprintf("Resource: %s", resource.Name)
+		}
+
+		ri := ResourceInfo{
+			Name:        resource.Name,
+			URI:         resource.URI,
+			Description: desc,
+			MIMEType:    resource.MIMEType,
+			Server:      serverName,
+		}
+		resources = append(resources, ri)
+		logger.Log("debug", "[MCP]   Resource: %s (URI: %s, MIME: %s)", resource.Name, resource.URI, resource.MIMEType)
+	}
+
+	if len(resources) > 0 {
+		logger.Log("info", "[MCP] Discovered %d resources for server %s", len(resources), serverName)
+	} else {
+		logger.Log("debug", "[MCP] No resources discovered for server %s", serverName)
+	}
+	return resources
 }
 
 // discoverToolInfos attempts to discover available tools with descriptions from an MCP server

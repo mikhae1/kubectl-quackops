@@ -99,6 +99,10 @@ type Config struct {
 	EditMode      bool
 	CommandPrefix string
 
+	// SelectedPrompt tracks the currently selected MCP prompt for UI highlighting
+	// Format: prompt name without leading slash (e.g., "code-mode")
+	SelectedPrompt string
+
 	// Diagnostics toggles and knobs
 	EnableBaseline      bool
 	EventsWindowMinutes int

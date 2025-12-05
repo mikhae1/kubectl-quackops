@@ -446,16 +446,17 @@ func (c *shellAutoCompleter) CompleteSlashCommands(input string) ([][]rune, int)
 				seen[remaining] = true
 			}
 		}
+		// Show MCP server names as completion options
 		for _, pi := range promptInfos {
-			name := strings.TrimSpace(pi.Name)
-			if name == "" {
+			server := strings.TrimSpace(pi.Server)
+			if server == "" {
 				continue
 			}
-			if seen[name] {
+			if seen[server] {
 				continue
 			}
-			completions = append(completions, []rune(name))
-			seen[name] = true
+			completions = append(completions, []rune(server+"/"))
+			seen[server] = true
 			if len(completions) >= c.Cfg.MaxCompletions {
 				break
 			}
@@ -480,13 +481,20 @@ func (c *shellAutoCompleter) CompleteSlashCommands(input string) ([][]rune, int)
 		}
 	}
 
-	// Include MCP prompt names as slash completions
+	// Include MCP prompts in format /$server/$prompt with space suffix for user query
 	for _, pi := range promptInfos {
-		promptCmd := "/" + strings.TrimSpace(pi.Name)
+		server := strings.TrimSpace(pi.Server)
+		name := strings.TrimSpace(pi.Name)
+		if server == "" || name == "" {
+			continue
+		}
+		// Format: /$server/$prompt
+		promptCmd := "/" + server + "/" + name
 		if strings.HasPrefix(promptCmd, input) {
 			remaining := promptCmd[len(input):]
 			if remaining != "" && !seen[remaining] {
-				completions = append(completions, []rune(remaining))
+				// Add space after prompt name to allow user to type query
+				completions = append(completions, []rune(remaining+" "))
 				seen[remaining] = true
 			}
 		}
@@ -496,4 +504,73 @@ func (c *shellAutoCompleter) CompleteSlashCommands(input string) ([][]rune, int)
 	}
 
 	return completions, len(input)
+}
+
+// IsMCPPrompt checks if the input starts with an MCP prompt in format /$server/$prompt
+// Returns the prompt name, server name, and remaining text if found
+func IsMCPPrompt(cfg *config.Config, input string) (promptName string, userQuery string, isPrompt bool) {
+	if !cfg.MCPClientEnabled || !strings.HasPrefix(input, "/") {
+		return "", input, false
+	}
+
+	// Extract potential server/prompt path (format: /$server/$prompt query)
+	trimmed := strings.TrimPrefix(input, "/")
+
+	// Split by space first to separate the prompt path from the query
+	pathAndQuery := strings.SplitN(trimmed, " ", 2)
+	if len(pathAndQuery) == 0 {
+		return "", input, false
+	}
+
+	promptPath := pathAndQuery[0]
+	if promptPath == "" {
+		return "", input, false
+	}
+
+	// Split the path by "/" to get server and prompt name
+	pathParts := strings.SplitN(promptPath, "/", 2)
+	if len(pathParts) != 2 {
+		return "", input, false
+	}
+
+	serverName := pathParts[0]
+	candidateName := pathParts[1]
+	if serverName == "" || candidateName == "" {
+		return "", input, false
+	}
+
+	// Check if it matches an MCP prompt from the specified server
+	promptInfos := mcp.GetPromptInfos(cfg)
+	for _, pi := range promptInfos {
+		if strings.EqualFold(pi.Server, serverName) && strings.EqualFold(pi.Name, candidateName) {
+			userQuery = ""
+			if len(pathAndQuery) > 1 {
+				userQuery = strings.TrimSpace(pathAndQuery[1])
+			}
+			return pi.Name, userQuery, true
+		}
+	}
+
+	return "", input, false
+}
+
+// GetMCPPromptServer extracts the server name from an MCP prompt input
+// Format: /$server/$prompt query
+func GetMCPPromptServer(cfg *config.Config, input string) string {
+	if !cfg.MCPClientEnabled || !strings.HasPrefix(input, "/") {
+		return ""
+	}
+
+	trimmed := strings.TrimPrefix(input, "/")
+	pathAndQuery := strings.SplitN(trimmed, " ", 2)
+	if len(pathAndQuery) == 0 {
+		return ""
+	}
+
+	pathParts := strings.SplitN(pathAndQuery[0], "/", 2)
+	if len(pathParts) < 1 {
+		return ""
+	}
+
+	return pathParts[0]
 }

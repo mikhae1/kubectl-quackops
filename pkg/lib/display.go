@@ -195,7 +195,7 @@ func getTerminalSize() (int, int) {
 	if width, height, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
 		return width, height
 	}
-	
+
 	// Fallback: try environment variables
 	if cols := os.Getenv("COLUMNS"); cols != "" {
 		if width, err := strconv.Atoi(cols); err == nil {
@@ -206,7 +206,7 @@ func getTerminalSize() (int, int) {
 			}
 		}
 	}
-	
+
 	// Fallback: try tput command
 	if cmd := exec.Command("tput", "cols"); cmd != nil {
 		if output, err := cmd.Output(); err == nil {
@@ -221,9 +221,52 @@ func getTerminalSize() (int, int) {
 			}
 		}
 	}
-	
+
 	// Final fallback to reasonable defaults
 	return 80, 24
+}
+
+// FormatPromptHighlight formats an MCP prompt path with yellow background
+// for visual distinction in the input line
+// Format: /$server/$prompt
+func FormatPromptHighlight(promptPath string) string {
+	if promptPath == "" {
+		return ""
+	}
+	// Yellow background with black text for high visibility
+	promptColor := color.New(color.BgYellow, color.FgBlack, color.Bold)
+	if !strings.HasPrefix(promptPath, "/") {
+		promptPath = "/" + promptPath
+	}
+	return promptColor.Sprint(promptPath)
+}
+
+// FormatInputWithPrompt formats user input, highlighting the prompt part if present
+// Returns the formatted string for display
+// Now handles format /$server/$prompt
+func FormatInputWithPrompt(input string, promptName string, serverName string) string {
+	if promptName == "" {
+		return input
+	}
+
+	// Build the full prompt path
+	var promptPath string
+	if serverName != "" {
+		promptPath = "/" + serverName + "/" + promptName
+	} else {
+		promptPath = "/" + promptName
+	}
+
+	// Find the prompt in the input and highlight it
+	if !strings.HasPrefix(strings.ToLower(input), strings.ToLower(promptPath)) {
+		return input
+	}
+
+	// Split into prompt and user query parts
+	rest := input[len(promptPath):]
+	highlighted := FormatPromptHighlight(promptPath)
+
+	return highlighted + rest
 }
 
 // CoolClearEffect creates an animated clearing effect for the terminal
@@ -236,20 +279,20 @@ func CoolClearEffect(cfg *config.Config) {
 
 	// Get actual terminal dimensions
 	width, height := getTerminalSize()
-	
+
 	// Colors for the effect
 	cyan := color.New(color.FgHiCyan)
 	blue := color.New(color.FgHiBlue)
 	magenta := color.New(color.FgHiMagenta)
 	colors := []*color.Color{cyan, blue, magenta}
-	
+
 	// Matrix-style clearing effect
 	fmt.Print("\033[2J") // Clear screen first
-	
+
 	// Animate clearing from top to bottom with colored "dust"
 	for row := 0; row < height; row++ {
 		fmt.Printf("\033[%d;1H", row+1) // Move cursor to row
-		
+
 		// Create a line of random characters fading away
 		for col := 0; col < width; col++ {
 			if rand.Float32() < 0.3 { // 30% chance to show a character
@@ -260,17 +303,17 @@ func CoolClearEffect(cfg *config.Config) {
 				fmt.Print(" ")
 			}
 		}
-		
+
 		time.Sleep(time.Millisecond * 25) // Speed of the effect
 	}
-	
+
 	// Final clear and show completion message with duck
 	fmt.Print("\033[2J\033[H")
-	
+
 	// Show a quick "CLEARED" message with duck centered on screen
 	duck := color.New(color.FgHiYellow)
 	cleared := color.New(color.FgHiGreen, color.Bold)
-	
+
 	// Center the message
 	centerRow := height / 2
 	message := "🦆 CLEARED 🦆"
@@ -278,11 +321,11 @@ func CoolClearEffect(cfg *config.Config) {
 	if centerCol < 0 {
 		centerCol = 0
 	}
-	
+
 	fmt.Printf("\033[%d;%dH", centerRow, centerCol)
 	fmt.Print(duck.Sprint("🦆 ") + cleared.Sprint("CLEARED") + duck.Sprint(" 🦆"))
 	time.Sleep(time.Millisecond * 500)
-	
+
 	// Final clear
 	fmt.Print("\033[2J\033[H")
 }
