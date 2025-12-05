@@ -95,7 +95,7 @@ type Config struct {
 	LastOutgoingTokens int
 	LastIncomingTokens int
 
-	// EditMode indicates the persistent shell edit mode toggled by '$'
+	// EditMode indicates the persistent shell edit mode toggled by '!'
 	EditMode      bool
 	CommandPrefix string
 
@@ -342,7 +342,7 @@ func LoadConfig() *Config {
 		SuppressContentPrint:  false,
 		SkipWaits:             getEnvArg("QU_SKIP_WAITS", false).(bool),
 		SpinnerTimeout:        300,
-		CommandPrefix:         getEnvArg("QU_COMMAND_PREFIX", "$").(string),
+		CommandPrefix:         getEnvArg("QU_COMMAND_PREFIX", "!").(string),
 		StoredUserCmdResults:  []CmdRes{},
 		// Diagnostics toggles
 		EnableBaseline:           getEnvArg("QU_ENABLE_BASELINE", true).(bool),

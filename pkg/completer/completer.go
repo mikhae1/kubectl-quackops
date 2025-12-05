@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
@@ -27,6 +28,27 @@ func NewShellAutoCompleter(cfg *config.Config) *shellAutoCompleter {
 	}
 }
 
+func findSlashPrefix(line []rune) (string, bool) {
+	if len(line) == 0 {
+		return "", true
+	}
+
+	// Find the start of the current token (after the last whitespace)
+	tokenStart := 0
+	for i := len(line) - 1; i >= 0; i-- {
+		if unicode.IsSpace(line[i]) {
+			tokenStart = i + 1
+			break
+		}
+	}
+
+	if tokenStart >= len(line) || line[tokenStart] != '/' {
+		return "", tokenStart == 0
+	}
+
+	return string(line[tokenStart:]), tokenStart == 0
+}
+
 // Do implements the AutoCompleter interface for tab completion
 func (c *shellAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, length int) {
 	// Handle potential index out of bounds
@@ -34,11 +56,14 @@ func (c *shellAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, length 
 		pos = len(line)
 	}
 
-	lineStr := string(line[:pos])
+	lineRunes := line[:pos]
+	lineStr := string(lineRunes)
 
 	// Handle slash commands autocomplete first - works in all modes
-	if strings.HasPrefix(lineStr, "/") {
-		return c.CompleteSlashCommands(lineStr)
+	if slashPrefix, atLineStart := findSlashPrefix(lineRunes); slashPrefix != "" {
+		if completions, slashLen := c.CompleteSlashCommands(slashPrefix, atLineStart); len(completions) > 0 {
+			return completions, slashLen
+		}
 	}
 
 	// Only enable shell completion for command prefix mode or persistent edit mode
@@ -49,7 +74,7 @@ func (c *shellAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, length 
 	} else {
 		prefix := c.Cfg.CommandPrefix
 		if strings.TrimSpace(prefix) == "" {
-			prefix = "$"
+			prefix = "!"
 		}
 		if string(lineStr[0]) != prefix && !c.Cfg.EditMode {
 			return [][]rune{}, 0
@@ -60,7 +85,7 @@ func (c *shellAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, length 
 	if !c.Cfg.EditMode {
 		prefix := c.Cfg.CommandPrefix
 		if strings.TrimSpace(prefix) == "" {
-			prefix = "$"
+			prefix = "!"
 		}
 		lineStr = strings.TrimPrefix(lineStr, prefix)
 	}
@@ -427,26 +452,29 @@ func ParseCommandLine(line string) []string {
 }
 
 // CompleteSlashCommands provides autocomplete for slash commands
-func (c *shellAutoCompleter) CompleteSlashCommands(input string) ([][]rune, int) {
-	// Use slash commands from configuration
-	slashCommands := c.Cfg.SlashCommands
+// includeDefaults toggles built-in slash commands (only when slash starts at line start)
+func (c *shellAutoCompleter) CompleteSlashCommands(input string, includeDefaults bool) ([][]rune, int) {
+	// Use slash commands from configuration when allowed
+	var slashCommands []config.SlashCommand
+	if includeDefaults {
+		slashCommands = c.Cfg.SlashCommands
+	}
 	var promptInfos []mcp.PromptInfo
 	if c.Cfg.MCPClientEnabled {
 		promptInfos = mcp.GetPromptInfos(c.Cfg)
 	}
 
 	if input == "/" {
-		// Show primary commands when just "/" is typed for cleaner menu
+		// Show MCP server names as completion options (always) and built-ins only when allowed
 		var completions [][]rune
 		seen := make(map[string]bool)
 		for _, cmdInfo := range slashCommands {
 			remaining := cmdInfo.Primary[1:] // Remove the leading "/"
-			if !seen[remaining] {
+			if remaining != "" && !seen[remaining] {
 				completions = append(completions, []rune(remaining))
 				seen[remaining] = true
 			}
 		}
-		// Show MCP server names as completion options
 		for _, pi := range promptInfos {
 			server := strings.TrimSpace(pi.Server)
 			if server == "" {
@@ -573,4 +601,81 @@ func GetMCPPromptServer(cfg *config.Config, input string) string {
 	}
 
 	return pathParts[0]
+}
+
+// FindMCPPromptInText searches for any MCP prompt path (/$server/$prompt) anywhere in the input.
+// Returns prompt name, server name, and true when found.
+func FindMCPPromptInText(cfg *config.Config, input string) (string, string, bool) {
+	if !cfg.MCPClientEnabled {
+		return "", "", false
+	}
+
+	lowerInput := strings.ToLower(input)
+	promptInfos := mcp.GetPromptInfos(cfg)
+	bestIdx := -1
+	var bestPrompt, bestServer string
+
+	for _, pi := range promptInfos {
+		server := strings.TrimSpace(pi.Server)
+		name := strings.TrimSpace(pi.Name)
+		if server == "" || name == "" {
+			continue
+		}
+		path := "/" + strings.ToLower(server) + "/" + strings.ToLower(name)
+		if idx := strings.Index(lowerInput, path); idx != -1 {
+			if bestIdx == -1 || idx < bestIdx {
+				bestIdx = idx
+				bestPrompt = pi.Name
+				bestServer = pi.Server
+			}
+		}
+	}
+
+	if bestIdx == -1 {
+		return "", "", false
+	}
+
+	return bestPrompt, bestServer, true
+}
+
+// FindMCPPromptWithQuery returns prompt, server, and trailing query when an MCP prompt path is present anywhere in the input.
+func FindMCPPromptWithQuery(cfg *config.Config, input string) (promptName, serverName, userQuery string, found bool) {
+	if !cfg.MCPClientEnabled {
+		return "", "", "", false
+	}
+
+	lowerInput := strings.ToLower(input)
+	promptInfos := mcp.GetPromptInfos(cfg)
+
+	bestIdx := -1
+	var bestPrompt, bestServer string
+
+	for _, pi := range promptInfos {
+		server := strings.ToLower(strings.TrimSpace(pi.Server))
+		name := strings.ToLower(strings.TrimSpace(pi.Name))
+		if server == "" || name == "" {
+			continue
+		}
+		path := "/" + server + "/" + name
+		if idx := strings.Index(lowerInput, path); idx != -1 {
+			if bestIdx == -1 || idx < bestIdx {
+				bestIdx = idx
+				bestPrompt = pi.Name
+				bestServer = pi.Server
+			}
+		}
+	}
+
+	if bestIdx == -1 {
+		return "", "", "", false
+	}
+
+	bestPath := "/" + strings.ToLower(strings.TrimSpace(bestServer)) + "/" + strings.ToLower(strings.TrimSpace(bestPrompt))
+	queryStart := bestIdx + len(bestPath)
+	if queryStart > len(input) {
+		queryStart = len(input)
+	}
+
+	userQuery = strings.TrimSpace(input[queryStart:])
+	return bestPrompt, bestServer, userQuery, true
 }

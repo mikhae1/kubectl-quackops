@@ -166,7 +166,7 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 	// Format the main prompt
 	var promptStr string
 	if isCommand {
-		prefix := "$"
+		prefix := "!"
 		if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
 			prefix = cfg.CommandPrefix
 		}
@@ -180,9 +180,9 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 
 // FormatEditPrompt returns the edit-mode prompt string without any token counter
 // or context indicator. This is used when the user toggles persistent edit mode
-// by pressing '$'.
+// by pressing '!'.
 func FormatEditPromptWith(cfg *config.Config) string {
-	prefix := "$"
+	prefix := "!"
 	if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
 		prefix = cfg.CommandPrefix
 	}
@@ -234,7 +234,7 @@ func FormatPromptHighlight(promptPath string) string {
 		return ""
 	}
 	// Yellow background with black text for high visibility
-	promptColor := color.New(color.BgYellow, color.FgBlack, color.Bold)
+	promptColor := color.New(color.BgHiYellow, color.FgWhite)
 	if !strings.HasPrefix(promptPath, "/") {
 		promptPath = "/" + promptPath
 	}
@@ -257,16 +257,17 @@ func FormatInputWithPrompt(input string, promptName string, serverName string) s
 		promptPath = "/" + promptName
 	}
 
-	// Find the prompt in the input and highlight it
-	if !strings.HasPrefix(strings.ToLower(input), strings.ToLower(promptPath)) {
+	// Find the prompt in the input (case-insensitive) and highlight first occurrence
+	lowerInput := strings.ToLower(input)
+	lowerPrompt := strings.ToLower(promptPath)
+	idx := strings.Index(lowerInput, lowerPrompt)
+	if idx == -1 {
 		return input
 	}
 
-	// Split into prompt and user query parts
-	rest := input[len(promptPath):]
 	highlighted := FormatPromptHighlight(promptPath)
-
-	return highlighted + rest
+	// Reconstruct with the highlighted prompt
+	return input[:idx] + highlighted + input[idx+len(promptPath):]
 }
 
 // CoolClearEffect creates an animated clearing effect for the terminal

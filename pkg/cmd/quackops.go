@@ -183,7 +183,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 		lines := strings.Split(string(data), "\n")
 		prefix := cfg.CommandPrefix
 		if strings.TrimSpace(prefix) == "" {
-			prefix = "$"
+			prefix = "!"
 		}
 
 		for _, line := range lines {
@@ -222,10 +222,10 @@ func startChatSession(cfg *config.Config, args []string) error {
 			}
 		}
 	}
-	// Capture ESC and $ for edit mode toggle
+	// Capture ESC and ! for edit mode toggle
 	rlConfig.FuncFilterInputRune = func(r rune) (rune, bool) {
-		// Toggle edit mode with $ key press
-		if r == '$' {
+		// Toggle edit mode with ! key press
+		if r == '!' {
 			cfg.EditMode = !cfg.EditMode
 			if rl != nil {
 				if cfg.EditMode {
@@ -373,7 +373,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 		originalUserPrompt := userPrompt
 		prefix := cfg.CommandPrefix
 		if strings.TrimSpace(prefix) == "" {
-			prefix = "$"
+			prefix = "!"
 		}
 		wasPrefixed := strings.HasPrefix(originalUserPrompt, prefix)
 		wasCommand := wasEditMode || wasPrefixed
@@ -910,20 +910,43 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		return nil
 	}
 
+	// Highlight MCP prompt even when embedded mid-line
+	var inlinePromptName, inlineServerName, inlineQuery string
+	var inlineFound bool
+	if action != "prompt_query" {
+		inlinePromptName, inlineServerName, inlineQuery, inlineFound = completer.FindMCPPromptWithQuery(cfg, userPrompt)
+		if inlineFound {
+			fmt.Println(lib.FormatInputWithPrompt(userPrompt, inlinePromptName, inlineServerName))
+		}
+	}
+
 	// Check if this is an MCP prompt with a user query
 	var mcpPromptContent string
 	var actualUserQuery string
+	var promptServer string
+	var hasPrompt bool
 	if action == "prompt_query" && cfg.SelectedPrompt != "" {
 		// Extract the user query part (after the prompt name)
 		_, actualUserQuery, _ = completer.IsMCPPrompt(cfg, userPrompt)
-		serverName := completer.GetMCPPromptServer(cfg, userPrompt)
+		promptServer = completer.GetMCPPromptServer(cfg, userPrompt)
+		hasPrompt = true
 
-		logger.Log("debug", "[MCP Prompt] Detected prompt: '%s' from server '%s'", cfg.SelectedPrompt, serverName)
+		logger.Log("debug", "[MCP Prompt] Detected prompt: '%s' from server '%s'", cfg.SelectedPrompt, promptServer)
 		logger.Log("debug", "[MCP Prompt] User query: '%s'", actualUserQuery)
 
 		// Display with yellow background highlighting for the prompt part (/$server/$prompt)
-		fmt.Println(lib.FormatInputWithPrompt(userPrompt, cfg.SelectedPrompt, serverName))
+		fmt.Println(lib.FormatInputWithPrompt(userPrompt, cfg.SelectedPrompt, promptServer))
+	} else if inlineFound && strings.TrimSpace(inlineQuery) != "" {
+		cfg.SelectedPrompt = inlinePromptName
+		actualUserQuery = strings.TrimSpace(inlineQuery)
+		promptServer = inlineServerName
+		hasPrompt = true
 
+		logger.Log("debug", "[MCP Prompt] Detected inline prompt: '%s' from server '%s'", cfg.SelectedPrompt, promptServer)
+		logger.Log("debug", "[MCP Prompt] User query: '%s'", actualUserQuery)
+	}
+
+	if hasPrompt && cfg.SelectedPrompt != "" {
 		// Check if prompt has arguments and log them
 		promptArgs := mcp.GetPromptArgs(cfg, cfg.SelectedPrompt)
 		if len(promptArgs) > 0 {
@@ -967,7 +990,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		cfg.SelectedPrompt = "" // Clear after use
 	}
 
-	// Edit mode: treat input as command without requiring '$' prefix
+	// Edit mode: treat input as command without requiring prefix
 	if cfg.EditMode || strings.HasPrefix(userPrompt, cfg.CommandPrefix) {
 		effectiveCmd := userPrompt
 		if cfg.EditMode && !strings.HasPrefix(userPrompt, cfg.CommandPrefix) {
@@ -1267,8 +1290,13 @@ func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
 	mcpContext.WriteString("\n")
 
 	mcpContext.WriteString("---\n\n")
-	mcpContext.WriteString("## User Query\n")
-	mcpContext.WriteString(prompt)
+	if strings.Contains(prompt, "## User Query") {
+		// Prompt already includes a user-query section (e.g., MCP prompt injection); avoid duplicating the heading.
+		mcpContext.WriteString(prompt)
+	} else {
+		mcpContext.WriteString("## User Query\n")
+		mcpContext.WriteString(prompt)
+	}
 
 	logger.Log("info", "Enhanced prompt with MCP tool information (%d tools, %d resources)", len(toolInfos), len(resourceInfos))
 	return mcpContext.String()
@@ -1325,11 +1353,15 @@ func printInlineHelp(cfg *config.Config) {
 	title := color.New(color.FgHiYellow, color.Bold)
 	body := color.New(color.FgHiWhite)
 	accent := color.New(color.FgHiCyan)
+	prefix := cfg.CommandPrefix
+	if strings.TrimSpace(prefix) == "" {
+		prefix = "!"
+	}
 
 	fmt.Println()
 	title.Println("Tips for getting started:")
-	fmt.Println(body.Sprint("- Ask questions, or run commands with the configured prefix (default \"$\")."))
-	fmt.Println(body.Sprint("- Example: $ kubectl get events -A"))
+	fmt.Println(body.Sprintf("- Ask questions, or run commands with the configured prefix (default %q).", prefix))
+	fmt.Println(body.Sprintf("- Example: %s kubectl get events -A", prefix))
 	fmt.Println(body.Sprint("- Type 'exit', 'quit', or 'bye' to leave"))
 	fmt.Println()
 
@@ -1355,7 +1387,7 @@ func printInlineHelp(cfg *config.Config) {
 	fmt.Println()
 
 	title.Println("Shell Commands:")
-	fmt.Println(body.Sprint("- Press $ to toggle command mode; type $ again to exit command mode"))
+	fmt.Println(body.Sprintf("- Press %s to toggle command mode; type %s again to exit command mode", prefix, prefix))
 	fmt.Println(body.Sprint("- Press tab for shell auto-completion"))
 	fmt.Println()
 

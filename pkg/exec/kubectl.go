@@ -36,7 +36,7 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 		skippedCount := 0
 		for _, c := range commands {
 			cTrim := strings.TrimSpace(c)
-			prefix := "$"
+			prefix := "!"
 			if strings.TrimSpace(cfg.CommandPrefix) != "" {
 				prefix = cfg.CommandPrefix
 			}
@@ -245,7 +245,7 @@ func printKubectlDiagnosticsList(cfg *config.Config, commands []string) {
 	// Determine command prefix used for shell commands
 	prefix := cfg.CommandPrefix
 	if strings.TrimSpace(prefix) == "" {
-		prefix = "$"
+		prefix = "!"
 	}
 
 	// Collect kubectl-only commands (strip shell prefix first)
@@ -283,7 +283,7 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 	// Prepare display list by stripping shell prefix and keeping only kubectl and prefixed shell commands
 	prefix := cfg.CommandPrefix
 	if strings.TrimSpace(prefix) == "" {
-		prefix = "$"
+		prefix = "!"
 	}
 
 	// Items to display, and mapping back to original indices
@@ -627,7 +627,7 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 
 	// Check if it's a kubectl command and replace with custom binary path if needed
 	isKubectlCmd := strings.HasPrefix(command, "kubectl")
-	prefix := "$"
+	prefix := "!"
 	if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
 		prefix = cfg.CommandPrefix
 	}
@@ -731,7 +731,7 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 		dim := color.New(color.Faint).SprintFunc()
 		bold := color.New(color.Bold).SprintFunc()
 
-		prefix := "$"
+	prefix := "!"
 		if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
 			prefix = cfg.CommandPrefix
 		}

@@ -58,7 +58,7 @@ func TestE2E_CompleteConversationFlow(t *testing.T) {
 			},
 			{
 				Description: "Command execution for diagnostics",
-				Input:       "$ kubectl get pods -n production",
+				Input:       "! kubectl get pods -n production",
 				MockResponses: []llm.MockResponse{}, // No LLM call expected for commands
 				ExpectOutput: []string{}, // Command execution would produce kubectl output
 			},
@@ -347,7 +347,7 @@ func TestE2E_ConfigurationVariations(t *testing.T) {
 			expectSuccess: true,
 		},
 		{
-			name: "animation_disabled", 
+			name: "animation_disabled",
 			config: map[string]interface{}{
 				"animation_disabled": true,
 				"provider": "openai",
@@ -361,7 +361,7 @@ func TestE2E_ConfigurationVariations(t *testing.T) {
 				"safe_mode": true,
 				"provider": "openai",
 			},
-			input: "$ kubectl delete all pods --all-namespaces",
+			input: "! kubectl delete all pods --all-namespaces",
 			expectSuccess: true, // Should be blocked by safe mode
 		},
 	}
@@ -484,7 +484,7 @@ func createE2ETestConfig(options map[string]interface{}) *config.Config {
 		UserMaxTokens:           0,
 		SpinnerTimeout:          100,
 		ThrottleRequestsPerMinute: 0, // Disable throttling for tests
-		CommandPrefix:           "$",
+		CommandPrefix:           "!",
 		EditMode:                false,
 		MCPClientEnabled:        false,
 		InputTokenReservePercent: 20,

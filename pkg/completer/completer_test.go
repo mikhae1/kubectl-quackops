@@ -255,7 +255,7 @@ func TestShellAutoCompleter_Do(t *testing.T) {
 	}{
 		{
 			name:            "Complete command",
-			line:            "$ku",
+			line:            "!ku",
 			pos:             3,
 			wantCompletions: true,
 		},
@@ -267,13 +267,13 @@ func TestShellAutoCompleter_Do(t *testing.T) {
 		},
 		{
 			name:            "Empty line",
-			line:            "$",
+			line:            "!",
 			pos:             1,
 			wantCompletions: false,
 		},
 		{
 			name:            "Position past end",
-			line:            "$ku",
+			line:            "!ku",
 			pos:             5, // Past end
 			wantCompletions: true,
 		},

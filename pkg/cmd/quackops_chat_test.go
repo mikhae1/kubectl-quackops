@@ -31,7 +31,7 @@ func createInteractiveTestConfig() *config.Config {
 		UserMaxTokens:             0,
 		SpinnerTimeout:            100,
 		ThrottleRequestsPerMinute: 0, // Disable throttling for tests
-		CommandPrefix:             "$",
+		CommandPrefix:             "!",
 		EditMode:                  false,
 		MCPClientEnabled:          false,
 		InputTokenReservePercent:  20,
@@ -84,7 +84,7 @@ func TestProcessUserPrompt_BasicPrompts(t *testing.T) {
 		},
 		{
 			name:          "command_execution",
-			prompt:        "$ kubectl get pods",
+			prompt:        "! kubectl get pods",
 			expectedError: false,
 			mockResponses: []llm.MockResponse{}, // No LLM call expected
 			expectLLMCall: false,
@@ -181,7 +181,7 @@ func TestProcessUserPrompt_EditMode(t *testing.T) {
 		{
 			name:      "normal_mode_command",
 			editMode:  false,
-			prompt:    "$ kubectl get pods",
+			prompt:    "! kubectl get pods",
 			expectCmd: true,
 		},
 		{
