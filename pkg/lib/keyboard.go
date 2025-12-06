@@ -46,6 +46,8 @@ func StartEscWatcher(cancel func(), spinnerManager *SpinnerManager, cfg *config.
 		// Window to wait for escape sequence bytes after ESC
 		const escSeqWindow = 30 * time.Millisecond
 
+		pollTV := unix.NsecToTimeval(pollInterval.Nanoseconds())
+
 		for {
 			select {
 			case <-stopCh:
@@ -55,7 +57,7 @@ func StartEscWatcher(cancel func(), spinnerManager *SpinnerManager, cfg *config.
 
 			var readfds unix.FdSet
 			readfds.Set(fd)
-			tv := unix.Timeval{Sec: 0, Usec: int32(pollInterval.Microseconds())}
+			tv := pollTV
 			n, selErr := unix.Select(fd+1, &readfds, nil, nil, &tv)
 			if selErr != nil || n <= 0 || !readfds.IsSet(fd) {
 				continue
@@ -114,7 +116,7 @@ func handleEscKey(fd int, stopCh chan struct{}, escSeqWindow time.Duration, canc
 	// Wait briefly to see if more bytes follow (ANSI escape sequence)
 	var peekfds unix.FdSet
 	peekfds.Set(fd)
-	peekTV := unix.Timeval{Sec: 0, Usec: int32(escSeqWindow.Microseconds())}
+	peekTV := unix.NsecToTimeval(escSeqWindow.Nanoseconds())
 	n, _ := unix.Select(fd+1, &peekfds, nil, nil, &peekTV)
 
 	if n <= 0 || !peekfds.IsSet(fd) {
