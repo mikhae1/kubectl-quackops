@@ -82,11 +82,10 @@ build-publish:
 	git add CHANGELOG.md; \
 	git commit -m "Release $$VERSION"; \
 	git tag -a "$$VERSION" -m "Release $$VERSION"; \
-	echo "Created commit and tag $$VERSION (not pushed)."
-
-build-push:
-	git push
-	git push --tags
+	echo "Created commit and tag $$VERSION"; \
+	git push; \
+	git push --tags; \
+	echo "Done! Pushed commit and tag $$VERSION to origin.";
 
 build-benchmark:
 	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -v -o kubectl-quackops-benchmark cmd/benchmark/main.go
