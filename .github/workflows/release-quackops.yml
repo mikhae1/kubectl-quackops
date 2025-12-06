@@ -153,37 +153,6 @@ jobs:
           cat notes.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Generate Changelog
-        id: changelog
-        if: github.event.inputs.release_notes == '' && steps.detect_notes.outputs.has_notes != 'true'
-        uses: mikepenz/release-changelog-builder-action@v4
-        with:
-          configurationJson: |
-            {
-              "categories": [
-                {
-                  "title": "## 🚀 Features",
-                  "labels": ["feature", "enhancement"]
-                },
-                {
-                  "title": "## 🐛 Bug Fixes",
-                  "labels": ["fix", "bug"]
-                },
-                {
-                  "title": "## 📦 Dependencies",
-                  "labels": ["dependencies"]
-                },
-                {
-                  "title": "## 📚 Documentation",
-                  "labels": ["documentation"]
-                }
-              ],
-              "template": "#{{CHANGELOG}}\n\n<details>\n<summary>All Changes</summary>\n\n#{{UNCATEGORIZED}}\n</details>",
-              "pr_template": "- #{{TITLE}} (#{{NUMBER}})"
-            }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set release notes
         id: release_notes
         run: |
@@ -196,9 +165,8 @@ jobs:
             echo "${{ steps.detect_notes.outputs.release_notes }}" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
           else
-            echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-            echo "${{ steps.changelog.outputs.changelog }}" >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
+            echo "No release notes found in CHANGELOG.md and none provided via input."
+            exit 1
           fi
 
       - name: Update Release

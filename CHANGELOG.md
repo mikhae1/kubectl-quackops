@@ -1,5 +1,18 @@
 ## Changelog
 
+### v2.0.0 — 2025-12-06
+
+- Update README.md to include quickstart guide, common workflows, and troubleshooting tips
+- Enhance Markdown formatting and improve code block detection
+- Refactor LLM request handling to support separate system and user prompts
+- Bump: command prefix change from '$' to '!' for improved user interaction
+- Enhance MCP prompt handling and user query integration
+- Update Go version and dependencies, migrate to Google genai lib
+- Update dependencies, enhance MCP configuration, and introduce wave animation demo
+- Improve user cancellation handling and ESC key management
+- Refactor spinner implementation and remove unused dependency
+
+
 ### v1.8.0 — 2025-08-24
 
 - **Added**
