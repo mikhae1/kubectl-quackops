@@ -1,5 +1,10 @@
 ## Changelog
 
+### v2.0.2 — 2025-12-06
+
+- Improve escape sequence handling in keyboard input
+
+
 ### v2.0.1 — 2025-12-06
 
 - Update Makefile and GitHub Actions to streamline release process and upgrade Go version
