@@ -291,11 +291,10 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 			go func() {
 				spotLR := 0 // Left-to-right wave position
 				spotRL := 0 // Right-to-left wave position (starts at 0, moves backward)
-				// Wider window for smoother gradient
-				width := 12
-				// Slower ticker than spinner refresh to ensure each frame is displayed
-				// Spinner refreshes at 80ms; spotlight moves at 100ms for smooth effect
-				ticker := time.NewTicker(100 * time.Millisecond)
+				// Comet width: head(2) + lead(1) + trail(~7) = 10
+				width := 10
+				// Fast ticker for smooth neon comet sweep
+				ticker := time.NewTicker(70 * time.Millisecond)
 				defer ticker.Stop()
 
 				for {
@@ -566,19 +565,29 @@ func spotlightFormatWithStop(message string, position int, width int, stopSeq st
 	return headFormatted + tail, next
 }
 
-// dualWaveFormat renders a single wave that periodically flips direction to keep
-// the animation feeling dynamic. The second return value is the next position,
-// and the third encodes wave state (direction * stepsRemaining).
-func dualWaveFormat(message string, posLR int, posRL int, width int) (string, int, int) {
+// dualWaveFormat renders a spring-like neon comet with eased motion.
+// Slow at edges, fast and wide in the middle, bounces smoothly.
+// posLR = animation step (0 to totalSteps), posRL = direction (1 or -1)
+func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, int) {
 	if message == "" {
 		return message, 0, 0
 	}
 
 	const stopSeq = "(ESC to cancel)"
 
-	// Detect the stop sequence so the wave animation does not color it.
-	// Everything from the stop sequence onward is kept dimmed.
+	// Stop animation before token counts or explicit stop sequence
 	stopIdx := strings.Index(message, stopSeq)
+
+	// Detect token count bracket e.g., " [↑5.2k tokens"
+	tokenIdx := -1
+	if tokensWord := strings.Index(message, " tokens"); tokensWord >= 0 {
+		if open := strings.LastIndex(message[:tokensWord], "["); open >= 0 {
+			tokenIdx = open
+		}
+	}
+	if tokenIdx >= 0 && (stopIdx < 0 || tokenIdx < stopIdx) {
+		stopIdx = tokenIdx
+	}
 
 	var (
 		cleanMessage string
@@ -589,7 +598,7 @@ func dualWaveFormat(message string, posLR int, posRL int, width int) (string, in
 		head := message[:stopIdx]
 		tail := message[stopIdx:]
 		cleanMessage = stripAnsiColors(head)
-		tailDimmed = config.Colors.Dim.Sprint(stripAnsiColors(tail))
+		tailDimmed = config.Colors.Info.Sprint(stripAnsiColors(tail))
 	} else {
 		cleanMessage = stripAnsiColors(message)
 	}
@@ -597,98 +606,195 @@ func dualWaveFormat(message string, posLR int, posRL int, width int) (string, in
 	runes := []rune(cleanMessage)
 	n := len(runes)
 	if n == 0 {
-		// No animated portion; only return the dimmed tail if present.
 		return tailDimmed, 0, 0
 	}
-	if width <= 0 {
-		width = 1
+
+	// Spring animation parameters
+	const totalSteps = 60 // steps per half-cycle (left-to-right or right-to-left)
+	minWidth := 3         // compressed at edges
+	maxWidth := 14        // stretched in the middle
+	if maxWidth > n {
+		maxWidth = n
+	}
+	if minWidth > maxWidth {
+		minWidth = maxWidth
+	}
+
+	// Direction: 1 = moving right, -1 = moving left
+	dir := 1
+	if posRL < 0 {
+		dir = -1
+	}
+
+	// Current step in animation
+	step := posLR
+	if step < 0 {
+		step = 0
+	}
+	if step > totalSteps {
+		step = totalSteps
+	}
+
+	// Progress 0.0 to 1.0 through current half-cycle
+	progress := float64(step) / float64(totalSteps)
+
+	// Ease-in-out using sine curve: slow-fast-slow
+	// Maps linear progress to eased position
+	eased := (1.0 - cosine(progress*3.14159265)) / 2.0
+
+	// Calculate position: 0 at left edge, n-1 at right edge
+	// For right movement: eased goes 0→1, position goes left→right
+	// For left movement: eased goes 0→1, position goes right→left
+	var leadPos int
+	if dir > 0 {
+		leadPos = int(eased * float64(n-1))
+	} else {
+		leadPos = int((1.0 - eased) * float64(n-1))
+	}
+
+	// Dynamic width: widest in middle (high velocity), narrow at edges
+	// Velocity is derivative of eased position, highest at progress=0.5
+	velocity := sine(progress * 3.14159265) // 0 at edges, 1 at middle
+	width := minWidth + int(velocity*float64(maxWidth-minWidth))
+	if width < minWidth {
+		width = minWidth
 	}
 	if width > n {
 		width = n
 	}
 
-	// Direction/state handling: posRL encodes direction * stepsRemaining.
-	const defaultFlipSteps = 40 // ~4s at 100ms tick; keeps motion varied
-	dir := 1
-	stepsRemaining := defaultFlipSteps
-	if posRL != 0 {
-		if posRL < 0 {
-			dir = -1
-		}
-		stepsRemaining = posRL * dir
-		if stepsRemaining == 0 {
-			stepsRemaining = defaultFlipSteps
-		}
+	// Comet structure
+	headLen := 2
+	leadLen := 1
+	trailLen := width - headLen - leadLen
+	if trailLen < 1 {
+		trailLen = 1
 	}
 
-	// Normalize position to avoid unbounded growth
-	pos := posLR % n
-	if pos < 0 {
-		pos += n
+	// Neon palette
+	cometHead := []*color.Color{
+		color.New(color.FgHiCyan, color.Bold),
+		color.New(color.FgHiMagenta, color.Bold),
 	}
-	end := pos + width
-
-	// Gradient used by the wave
-	colorWave := []*color.Color{
-		color.New(color.FgHiCyan),
+	cometLead := color.New(color.FgHiWhite, color.Bold)
+	cometTrail := []*color.Color{
 		color.New(color.FgCyan),
-		color.New(color.FgHiMagenta),
-		color.New(color.FgMagenta),
+		color.New(color.FgBlue),
+		color.New(color.FgHiBlack),
+	}
+	bgColor := color.New(color.Faint)
+
+	// Calculate tail position from lead position
+	var tailPos int
+	if dir > 0 {
+		tailPos = leadPos - width + 1
+	} else {
+		tailPos = leadPos + width - 1
 	}
 
 	var b strings.Builder
-	b.Grow(len(cleanMessage) * 4) // ANSI codes add overhead
+	b.Grow(len(cleanMessage) * 4)
 
 	for i := 0; i < n; i++ {
 		ch := string(runes[i])
-		inWindow := func(idx int) bool {
-			if end <= n {
-				return idx >= pos && idx < end
-			}
-			return idx >= pos || idx < (end%n)
-		}
 
-		if inWindow(i) {
-			rel := i - pos
-			if rel < 0 {
-				rel += n
-			}
-			if dir < 0 {
-				rel = width - 1 - rel
-				if rel < 0 {
-					rel += width
+		// Determine segment for this character
+		var seg int // -1=bg, 0=trail, 1=head, 2=lead
+		var relPos int
+
+		if dir > 0 {
+			// Moving right: tail at low idx, lead at high idx
+			if i < tailPos || i > leadPos {
+				seg = -1
+			} else {
+				relPos = i - tailPos
+				if relPos < trailLen {
+					seg = 0
+				} else if relPos < trailLen+headLen {
+					seg = 1
+				} else {
+					seg = 2
 				}
 			}
-			colorIdx := (rel * len(colorWave)) / width
-			if colorIdx >= len(colorWave) {
-				colorIdx = len(colorWave) - 1
-			}
-			b.WriteString(colorWave[colorIdx].Sprint(ch))
 		} else {
-			// Background: Dimmed
-			b.WriteString(config.Colors.Dim.Sprint(ch))
+			// Moving left: lead at low idx, tail at high idx
+			if i < leadPos || i > tailPos {
+				seg = -1
+			} else {
+				relPos = tailPos - i
+				if relPos < trailLen {
+					seg = 0
+				} else if relPos < trailLen+headLen {
+					seg = 1
+				} else {
+					seg = 2
+				}
+			}
+		}
+
+		switch seg {
+		case 2:
+			b.WriteString(cometLead.Sprint(ch))
+		case 1:
+			headIdx := (step + i) % len(cometHead)
+			b.WriteString(cometHead[headIdx].Sprint(ch))
+		case 0:
+			depth := trailLen - 1 - relPos
+			if depth < 0 {
+				depth = 0
+			}
+			trailIdx := (depth * len(cometTrail)) / trailLen
+			if trailIdx >= len(cometTrail) {
+				trailIdx = len(cometTrail) - 1
+			}
+			b.WriteString(cometTrail[trailIdx].Sprint(ch))
+		default:
+			b.WriteString(bgColor.Sprint(ch))
 		}
 	}
 
-	// Advance position and maybe flip direction
-	nextPos := pos + dir
-	if nextPos < 0 {
-		nextPos += n
+	// Advance animation
+	nextStep := step + 1
+	nextDir := dir
+	if nextStep > totalSteps {
+		// Bounce: reverse direction, reset step
+		nextStep = 0
+		nextDir = -dir
 	}
-	if nextPos >= n {
-		nextPos %= n
-	}
-
-	stepsRemaining--
-	if stepsRemaining <= 0 {
-		dir *= -1
-		stepsRemaining = defaultFlipSteps
-	}
-	nextState := dir * stepsRemaining
 
 	if stopIdx >= 0 {
-		return b.String() + tailDimmed, nextPos, nextState
+		return b.String() + tailDimmed, nextStep, nextDir
 	}
 
-	return b.String(), nextPos, nextState
+	return b.String(), nextStep, nextDir
+}
+
+// sine returns sin(x) using Taylor series approximation
+func sine(x float64) float64 {
+	// Normalize to [-π, π]
+	for x > 3.14159265 {
+		x -= 2 * 3.14159265
+	}
+	for x < -3.14159265 {
+		x += 2 * 3.14159265
+	}
+	x3 := x * x * x
+	x5 := x3 * x * x
+	x7 := x5 * x * x
+	return x - x3/6 + x5/120 - x7/5040
+}
+
+// cosine returns cos(x) using Taylor series approximation
+func cosine(x float64) float64 {
+	// Normalize to [-π, π]
+	for x > 3.14159265 {
+		x -= 2 * 3.14159265
+	}
+	for x < -3.14159265 {
+		x += 2 * 3.14159265
+	}
+	x2 := x * x
+	x4 := x2 * x2
+	x6 := x4 * x2
+	return 1 - x2/2 + x4/24 - x6/720
 }
