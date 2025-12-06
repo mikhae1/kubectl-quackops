@@ -127,7 +127,11 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	cfg.LastOutgoingTokens = outgoingTokens
 	cfg.LastIncomingTokens = 0
 
-	tokenMeter := lib.NewTokenMeter(cfg, outgoingTokens)
+	var tokenMeter *lib.TokenMeter
+	// Strict MCP prints final output non-streaming; skip live meter to avoid extra counter line.
+	if !(cfg.MCPClientEnabled && cfg.MCPStrict) {
+		tokenMeter = lib.NewTokenMeter(cfg, outgoingTokens)
+	}
 
 	spinnerManager := lib.GetSpinnerManager(cfg)
 	message := fmt.Sprintf("Waiting for %s/%s... %s %s"+config.Colors.Dim.Sprint(" (ESC to cancel)"),
@@ -321,7 +325,9 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	}
 
 	if !useStreaming {
-		tokenMeter.AddIncoming(lib.EstimateTokens(cfg, responseContent))
+		if tokenMeter != nil {
+			tokenMeter.AddIncoming(lib.EstimateTokens(cfg, responseContent))
+		}
 		spinnerManager.Hide()
 
 		if cfg.MCPClientEnabled {

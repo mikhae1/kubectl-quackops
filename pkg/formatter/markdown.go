@@ -27,8 +27,8 @@ var (
 	// Link [text](url)
 	linkRegex = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 
-	// Code block markers (```language)
-	codeBlockMarkerRegex = regexp.MustCompile(`(^|\s)` + "```" + `([a-zA-Z0-9_+-]*)`)
+	// Code block markers (```language) - must be alone on the line
+	codeBlockMarkerRegex = regexp.MustCompile("^\\s*```[a-zA-Z0-9_+\\-]*\\s*$")
 
 	// Think block markers (<think> and </think>)
 	thinkBlockStartRegex = regexp.MustCompile(`<think>`)
@@ -192,8 +192,9 @@ func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
 		// Reset the lastWasThinkStart flag for any non-empty line
 		lastWasThinkStart = false
 
-		// Check for code block markers (```) with optional language specification
-		if codeBlockMarkerRegex.Match(line) {
+		// Check for code block markers (```) with optional language specification.
+		// Only treat as code fence when the line contains nothing else.
+		if codeBlockMarkerRegex.Match(bytes.TrimSpace(line)) {
 			f.inCodeBlock = !f.inCodeBlock
 			// Use a different color for code block delimiter
 			result.Write(line)
@@ -281,18 +282,16 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 		bytes.HasPrefix(trimmed, []byte("+ ")) {
 		// Find the prefix length in the original line
 		prefixLen := len(line) - len(bytes.TrimLeft(line, " \t"))
-		bulletPos := prefixLen + 1 // +1 for the bullet character itself
+		bulletIdx := prefixLen
 
-		// Color only the bullet and process the rest of the line for other formatting
-		if bulletPos < len(line) {
+		// Guard against malformed lines
+		if bulletIdx+1 < len(line) && (line[bulletIdx] == '-' || line[bulletIdx] == '*' || line[bulletIdx] == '+') && line[bulletIdx+1] == ' ' {
 			var result bytes.Buffer
-			result.Write(line[:prefixLen])                                                                // Write leading whitespace
-			result.Write([]byte(color.New(color.FgHiBlue).Sprint(string(line[prefixLen : prefixLen+1])))) // Color the bullet
-			result.Write([]byte(" "))                                                                     // Add a space after the bullet
-
-			// Process the rest of the line for inline elements
-			restOfLine := line[bulletPos:]
-			formattedRest := f.formatInlineElements(restOfLine)
+			result.Write(line[:prefixLen])                              // Preserve leading whitespace
+			result.Write([]byte(color.New(color.FgHiBlue).Sprint("-"))) // Render bullet as dash
+			result.WriteByte(' ')                                       // One space after bullet
+			restOfLine := bytes.TrimLeft(line[bulletIdx+2:], " \t")     // Skip original spacing
+			formattedRest := f.formatInlineElements(restOfLine)         // Format remaining text
 			result.Write(formattedRest)
 
 			return result.Bytes()
@@ -317,9 +316,9 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 			result.Write([]byte(color.New(color.FgHiBlue).Sprint(string(line[prefixLen : numEnd+1])))) // Color the number and dot
 
 			// Process the rest of the line for inline elements
-			restOfLine := line[numEnd+2:] // +2 to skip the dot and space
+			restOfLine := bytes.TrimLeft(line[numEnd+2:], " \t") // +2 to skip the dot and space
 			formattedRest := f.formatInlineElements(restOfLine)
-			result.Write([]byte(" ")) // Add the space back
+			result.WriteByte(' ') // One space after number and dot
 			result.Write(formattedRest)
 
 			return result.Bytes()

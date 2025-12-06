@@ -3,6 +3,8 @@ package formatter
 import (
 	"bytes"
 	"testing"
+
+	"github.com/fatih/color"
 )
 
 func TestMarkdownFormatter_ProcessChunk(t *testing.T) {
@@ -50,6 +52,11 @@ func TestMarkdownFormatter_ProcessChunk(t *testing.T) {
 			name:   "think block",
 			chunks: []string{"<think>\n", "This is reasoning\n", "</think>\n", "Final answer\n"},
 			want:   "\n╭─ thinking...\n│ This is reasoning\n╰\nFinal answer\n",
+		},
+		{
+			name:   "inline triple backticks not code fence",
+			chunks: []string{"Inline ```code``` here\n"},
+			want:   "Inline ```code``` here\n",
 		},
 	}
 
@@ -130,6 +137,41 @@ func TestStreamingWriter(t *testing.T) {
 				t.Errorf("StreamingWriter output = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMarkdownFormatter_ListSpacing(t *testing.T) {
+	// Disable ANSI output while keeping formatting logic active
+	color.NoColor = true
+	defer func() { color.NoColor = false }()
+
+	lines := []string{
+		"* item one\n",
+		"+ item two\n",
+		"- item three\n",
+		"  * nested item\n",
+		"1. first item\n",
+		"2. second item\n",
+	}
+
+	f := NewMarkdownFormatter()
+	var output bytes.Buffer
+
+	for _, line := range lines {
+		if formatted := f.ProcessChunk([]byte(line)); formatted != nil {
+			output.Write(formatted)
+		}
+	}
+
+	if flush := f.Flush(); flush != nil {
+		output.Write(flush)
+	}
+
+	got := output.String()
+	want := "- item one\n- item two\n- item three\n  - nested item\n1. first item\n2. second item\n"
+
+	if got != want {
+		t.Errorf("List spacing formatting = %q, want %q", got, want)
 	}
 }
 
@@ -215,6 +257,16 @@ func TestCodeBlockMarkerRegex(t *testing.T) {
 			name:     "Special chars in lang",
 			input:    "```c++",
 			expected: true,
+		},
+		{
+			name:     "Inline triple backticks should not match",
+			input:    "Some text ```go``` here",
+			expected: false,
+		},
+		{
+			name:     "Code fence with trailing text should not match",
+			input:    "```go code",
+			expected: false,
 		},
 	}
 
