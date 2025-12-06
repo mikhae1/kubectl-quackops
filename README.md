@@ -10,6 +10,42 @@ QuackOps goes beyond simple question-and-answer functionality, offering natural 
 
 <img src="https://raw.githubusercontent.com/mikhae1/media/master/quackops/quackops-demo.gif" alt="QuackOps Demo" width="800">
 
+## ⚡ Quickstart (2 minutes)
+
+1) Install the plugin (from a release tarball):
+```sh
+tar -xzf ~/Downloads/kubectl-quackops-$(uname -s | tr '[:upper:]' '[:lower:]')-amd64.tar.gz -C ~/.local/bin
+chmod +x ~/.local/bin/kubectl-quackops
+```
+
+2) Pick a provider:
+- OpenAI:
+  ```sh
+  export OPENAI_API_KEY=...             # required
+  kubectl quackops -p openai -m gpt-5-mini 'check pod issues'
+  ```
+- Ollama (local, no API key):
+  ```sh
+  ollama serve &
+  kubectl quackops -p ollama -m llama3.1 'why is my ingress slow?'
+  ```
+
+3) Keep it safe in prod:
+```sh
+kubectl quackops --safe-mode -- 'review pod restarts'
+```
+
+4) Prefer external MCP tools (optional):
+```sh
+kubectl quackops --mcp-client=true --mcp-strict=true -- 'summarize cluster health'
+```
+
+## ✅ Prerequisites
+
+- `kubectl` installed and pointed at the cluster you want to debug.
+- API access for your chosen LLM provider (unless using Ollama locally).
+- For MCP mode, ensure your MCP server(s) are configured.
+
 ## 🚀 Key Features
 
 - **AI-Powered Diagnostics:**
@@ -93,6 +129,25 @@ To resolve the issue, you can check the image availability, correct the image
 name or tag, ensure the repository access is correct, and troubleshoot any
 network issues that may be preventing the pod from pulling the image.
 ```
+
+## 🔁 Common Workflows
+
+- Quick pod triage:
+  ```sh
+  kubectl quackops -- 'why are pods in crashloopbackoff?'
+  ```
+- Log pull with guidance:
+  ```sh
+  kubectl quackops -- 'grab logs from nginx pods and summarize errors'
+  ```
+- Safe commands run:
+  ```sh
+  kubectl quackops --safe-mode -- 'suggest commands to debug ingress 503s'
+  ```
+- MCP-first troubleshooting:
+  ```sh
+  kubectl quackops --mcp-client=true --mcp-strict=true -- 'list unhealthy deployments'
+  ```
 
 ## 🛠️ Advanced Examples
 
@@ -463,6 +518,13 @@ QuackOps is designed with security in mind, but there are important consideratio
 - **Command Restrictions:** The tool prevents execution of potentially destructive commands. Configure additional blocked commands with the `QU_KUBECTL_BLOCKED_CMDS_EXTRA` environment variable.
 
 - **Local Models:** For sensitive environments, use Ollama with local models to ensure your cluster data never leaves your infrastructure.
+
+## 🧰 Troubleshooting
+
+- `kubectl quackops: command not found`: ensure the binary is on your `PATH`, then re-run `kubectl plugin list`.
+- Provider auth errors: export the right API key (`OPENAI_API_KEY`, `GOOGLE_API_KEY`, etc.) and try `--verbose` for more detail.
+- Ollama connection errors: verify `ollama serve` is running and `QU_OLLAMA_BASE_URL` matches the server URL.
+- MCP strict failures: drop `--mcp-strict` or update your `~/.quackops/mcp.json` so servers can start.
 
 ## 📊 Benchmarking
 
