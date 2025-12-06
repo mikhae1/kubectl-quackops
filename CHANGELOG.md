@@ -1,5 +1,10 @@
 ## Changelog
 
+### v2.0.1 — 2025-12-06
+
+- Update Makefile and GitHub Actions to streamline release process and upgrade Go version
+
+
 ### v2.0.0 — 2025-12-06
 
 - Update README.md to include quickstart guide, common workflows, and troubleshooting tips
