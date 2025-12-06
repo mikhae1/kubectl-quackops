@@ -234,7 +234,7 @@ func FormatPromptHighlight(promptPath string) string {
 		return ""
 	}
 	// Yellow background with black text for high visibility
-	promptColor := color.New(color.BgHiYellow, color.FgWhite)
+	promptColor := color.New(color.BgHiYellow, color.FgBlack)
 	if !strings.HasPrefix(promptPath, "/") {
 		promptPath = "/" + promptPath
 	}

@@ -26,6 +26,9 @@ func (l *logWriter) Write(p []byte) (int, error) {
 
 	lines := strings.Split(string(p), "\n")
 	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue // Skip empty lines
+		}
 		l.logger.Println(l.color(l.prefix + line))
 	}
 	return len(p), nil
@@ -48,12 +51,15 @@ func initLogger(level string, prefix string, colorFunc func(a ...interface{}) st
 // InitLoggers initializes all loggers with different levels and colors
 func InitLoggers(output io.Writer, flags int) {
 	initLogger("info", "INFO: ", color.New(color.FgCyan).SprintFunc(), flags, output)
+	initLogger("debug", "DEBUG: ", color.New(color.FgHiBlack).SprintFunc(), flags, output)
 	initLogger("warn", "WARN: ", color.New(color.FgYellow).SprintFunc(), flags, output)
 	initLogger("err", "ERR: ", color.New(color.FgRed).SprintFunc(), flags, output)
 
 	// Custom loggers
 	initLogger("llmIn", "[LLM] > ", color.New(color.FgHiBlue).SprintFunc(), flags, output)
 	initLogger("llmOut", "[LLM] < ", color.New(color.FgBlue).SprintFunc(), flags, output)
+	initLogger("llmSys", "[LLM:SYS] > ", color.New(color.FgHiMagenta).SprintFunc(), flags, output)
+	initLogger("llmUser", "[LLM:USER] > ", color.New(color.FgHiCyan).SprintFunc(), flags, output)
 	initLogger("in", "> ", color.New(color.FgHiGreen).SprintFunc(), flags, output)
 	initLogger("out", "< ", color.New(color.FgGreen).SprintFunc(), flags, output)
 }

@@ -1033,23 +1033,33 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		augPrompt = userPrompt
 	}
 
-	// Inject MCP prompt content at the beginning if present
+	// Build role-separated prompts using MessageBuilder
+	mb := llm.NewMessageBuilder()
+
+	// System prompt: MCP prompt content + MCP tools instructions
 	if mcpPromptContent != "" {
-		augPrompt = mcpPromptContent + "\n\n## User Query\n" + augPrompt
+		mb.SetMCPPrompt(mcpPromptContent)
 	}
+
+	if cfg.MCPClientEnabled {
+		mcpInstructions := buildMCPSystemInstructions(cfg)
+		if mcpInstructions != "" {
+			mb.AddSystemInstruction(mcpInstructions)
+		}
+		logger.Log("info", "Added MCP tool instructions to system prompt")
+	}
+
+	// User prompt: RAG context + user query
+	mb.SetContextData(augPrompt)
+	mb.LogRoleSummary(cfg)
 
 	// Print a minimal verbose trace for tests when verbose is enabled
 	if cfg.Verbose {
 		fmt.Fprintln(os.Stderr, "Processing prompt (verbose mode)")
 	}
 
-	// Add MCP tool information to the prompt if MCP is enabled
-	if cfg.MCPClientEnabled {
-		augPrompt = addMCPToolsToPrompt(cfg, augPrompt)
-		logger.Log("info", "Enhanced prompt with MCP tool information for better diagnostics")
-	}
-
-	_, err = llm.Request(cfg, augPrompt, true, true)
+	systemContent, userContent := mb.Build(cfg)
+	_, err = llm.RequestWithSystem(cfg, systemContent, userContent, true, true)
 	if err != nil {
 		// Check if this is a 429 rate limit error - don't exit interactive mode for these
 		if lib.Is429Error(err) {
@@ -1240,41 +1250,37 @@ func renderPromptDetails(pi mcp.PromptInfo) {
 	fmt.Println()
 }
 
-// addMCPToolsToPrompt enriches the prompt with available MCP tools information for better RAG integration
-func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
+// buildMCPSystemInstructions builds system-level MCP instructions without user content
+func buildMCPSystemInstructions(cfg *config.Config) string {
 	toolInfos := mcp.GetToolInfos(cfg)
 	if len(toolInfos) == 0 {
-		logger.Log("info", "No MCP tools available for prompt enhancement")
-		return prompt
+		logger.Log("info", "No MCP tools available for system instructions")
+		return ""
 	}
 
-	// Get server information
 	connectedServers := mcp.GetConnectedServerNames(cfg)
 
-	// Build enhanced MCP tools context for RAG
-	var mcpContext strings.Builder
-	mcpContext.WriteString("\n\n## Available MCP Tools for Diagnostics\n")
-	mcpContext.WriteString("You have access to the following MCP (Model Context Protocol) tools that can provide real-time Kubernetes cluster diagnostics:\n\n")
+	var sb strings.Builder
+	sb.WriteString("## Available MCP Tools for Diagnostics\n")
+	sb.WriteString("You have access to MCP (Model Context Protocol) tools for real-time Kubernetes cluster diagnostics.\n\n")
 
 	if len(connectedServers) > 0 {
-		mcpContext.WriteString(fmt.Sprintf("**Connected MCP Servers:** %s\n\n", strings.Join(connectedServers, ", ")))
+		sb.WriteString(fmt.Sprintf("**Connected MCP Servers:** %s\n\n", strings.Join(connectedServers, ", ")))
 	}
 
-	// Try to fetch and include type definitions (like global.d.ts)
+	// Include type definitions if available
 	typeDefContent, err := mcp.GetTypeDefinitions(cfg)
 	if err != nil {
 		logger.Log("debug", "Failed to get type definitions: %v", err)
 	}
 	if typeDefContent != "" {
-		mcpContext.WriteString("## MCP Type Definitions\n")
-		mcpContext.WriteString("The following type definitions describe the available tools and their parameters:\n\n")
-		mcpContext.WriteString("```typescript\n")
-		mcpContext.WriteString(typeDefContent)
-		mcpContext.WriteString("\n```\n\n")
+		sb.WriteString("## MCP Type Definitions\n")
+		sb.WriteString("```typescript\n")
+		sb.WriteString(typeDefContent)
+		sb.WriteString("\n```\n\n")
 		logger.Log("info", "Included MCP type definitions (%d bytes)", len(typeDefContent))
 	}
 
-	// List available resources
 	resourceInfos := mcp.GetResourceInfos(cfg)
 	if len(resourceInfos) > 0 {
 		logger.Log("debug", "[MCP] Available resources (%d):", len(resourceInfos))
@@ -1283,22 +1289,34 @@ func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
 		}
 	}
 
-	mcpContext.WriteString("**Instructions for Tool Usage:**\n")
-	mcpContext.WriteString("- These tools can be called automatically to gather real-time diagnostics\n")
-	mcpContext.WriteString("- When analyzing Kubernetes issues, use relevant MCP tools to get current state information\n")
-	mcpContext.WriteString("- Tool results will be automatically fed back into the analysis\n")
-	mcpContext.WriteString("\n")
+	sb.WriteString("**Instructions for Tool Usage:**\n")
+	sb.WriteString("- These tools can be called automatically to gather real-time diagnostics\n")
+	sb.WriteString("- When analyzing Kubernetes issues, use relevant MCP tools to get current state information\n")
+	sb.WriteString("- Tool results will be automatically fed back into the analysis\n")
 
-	mcpContext.WriteString("---\n\n")
+	logger.Log("info", "Built MCP system instructions (%d tools, %d resources)", len(toolInfos), len(resourceInfos))
+	return sb.String()
+}
+
+// addMCPToolsToPrompt enriches the prompt with available MCP tools information for better RAG integration
+// Deprecated: Use buildMCPSystemInstructions + MessageBuilder for role-separated prompts
+func addMCPToolsToPrompt(cfg *config.Config, prompt string) string {
+	mcpInstructions := buildMCPSystemInstructions(cfg)
+	if mcpInstructions == "" {
+		return prompt
+	}
+
+	var mcpContext strings.Builder
+	mcpContext.WriteString("\n\n")
+	mcpContext.WriteString(mcpInstructions)
+	mcpContext.WriteString("\n---\n\n")
 	if strings.Contains(prompt, "## User Query") {
-		// Prompt already includes a user-query section (e.g., MCP prompt injection); avoid duplicating the heading.
 		mcpContext.WriteString(prompt)
 	} else {
 		mcpContext.WriteString("## User Query\n")
 		mcpContext.WriteString(prompt)
 	}
 
-	logger.Log("info", "Enhanced prompt with MCP tool information (%d tools, %d resources)", len(toolInfos), len(resourceInfos))
 	return mcpContext.String()
 }
 

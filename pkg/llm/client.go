@@ -19,17 +19,45 @@ import (
 // Define RequestFunc type for easier mocking in tests
 type RequestFunc func(cfg *config.Config, prompt string, stream bool, history bool) (string, error)
 
+// RequestWithSystemFunc type for system-prompt-aware requests
+type RequestWithSystemFunc func(cfg *config.Config, systemPrompt string, userPrompt string, stream bool, history bool) (string, error)
+
 // Request sends a request to the LLM provider
 var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
-	truncPrompt := prompt
+	return RequestWithSystem(cfg, "", prompt, stream, history)
+}
+
+// RequestWithSystem sends a request with separate system and user prompts
+var RequestWithSystem RequestWithSystemFunc = func(cfg *config.Config, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
+	truncUserPrompt := userPrompt
 	// Rude truncation of the prompt if it exceeds the maximum token length
 	maxWin := lib.EffectiveMaxTokens(cfg)
-	if len(truncPrompt) > maxWin*2 {
-		truncPrompt = truncPrompt[:maxWin*2] + "..."
+	if len(truncUserPrompt) > maxWin*2 {
+		truncUserPrompt = truncUserPrompt[:maxWin*2] + "..."
 	}
 
-	logger.Log("llmIn", "[%s/%s]: %s", cfg.Provider, cfg.Model, truncPrompt)
-	logger.Log("llmIn", "History: %v messages, %d tokens", len(cfg.ChatMessages), lib.CountTokens("", cfg.ChatMessages))
+	// Role-aware debug logging with token counts
+	systemTok := lib.EstimateTokens(cfg, systemPrompt)
+	userTok := lib.EstimateTokens(cfg, userPrompt)
+	historyTok := lib.CountTokens("", cfg.ChatMessages)
+
+	if systemPrompt != "" {
+		logger.Log("debug", "[Request] Roles: system=%d tok, user=%d tok, history=%d msg (%d tok)",
+			systemTok, userTok, len(cfg.ChatMessages), historyTok)
+		systemPreview := summarizeSystemPrompt(systemPrompt, 120)
+		logger.Log("llmIn", "[%s/%s] System (%d tok): %s", cfg.Provider, cfg.Model, systemTok, systemPreview)
+		logger.Log("llmIn", "[%s/%s] User (%d tok): %s", cfg.Provider, cfg.Model, userTok, truncUserPrompt)
+		// Full context debug logging (excluding history)
+		logMultiline("llmSys", systemPrompt)
+		logMultiline("llmUser", userPrompt)
+	} else {
+		logger.Log("debug", "[Request] Roles: user=%d tok, history=%d msg (%d tok)",
+			userTok, len(cfg.ChatMessages), historyTok)
+		logger.Log("llmIn", "[%s/%s] User (%d tok): %s", cfg.Provider, cfg.Model, userTok, truncUserPrompt)
+		// Full user prompt debug logging
+		logMultiline("llmUser", userPrompt)
+	}
+	logger.Log("llmIn", "History: %d messages, %d tokens", len(cfg.ChatMessages), historyTok)
 
 	// Spinner lifecycle and throttling are managed inside Chat().
 
@@ -37,21 +65,74 @@ var Request RequestFunc = func(cfg *config.Config, prompt string, stream bool, h
 	var answer string
 	switch cfg.Provider {
 	case "ollama":
-		answer, err = ollamaRequestWithChat(cfg, truncPrompt, stream, history)
+		answer, err = ollamaRequestWithChatSystem(cfg, systemPrompt, truncUserPrompt, stream, history)
 	case "openai":
-		answer, err = openaiRequestWithChat(cfg, truncPrompt, stream, history)
+		answer, err = openaiRequestWithChatSystem(cfg, systemPrompt, truncUserPrompt, stream, history)
 	case "azopenai":
-		answer, err = azOpenAIRequestWithChat(cfg, truncPrompt, stream, history)
+		answer, err = azOpenAIRequestWithChatSystem(cfg, systemPrompt, truncUserPrompt, stream, history)
 	case "google":
-		answer, err = googleRequestWithChat(cfg, truncPrompt, stream, history)
+		answer, err = googleRequestWithChatSystem(cfg, systemPrompt, truncUserPrompt, stream, history)
 	case "anthropic":
-		answer, err = anthropicRequestWithChat(cfg, truncPrompt, stream, history)
+		answer, err = anthropicRequestWithChatSystem(cfg, systemPrompt, truncUserPrompt, stream, history)
 	default:
 		return "", fmt.Errorf("unsupported AI provider: %s", cfg.Provider)
 	}
 
 	logger.Log("llmOut", "[%s@%s]: %s", cfg.Provider, cfg.Model, answer)
 	return answer, err
+}
+
+// logMultiline logs each non-empty line of content
+func logMultiline(level string, content string) {
+	if content == "" {
+		return
+	}
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			logger.Log(level, "%s", line)
+		}
+	}
+}
+
+// summarizeSystemPrompt extracts a meaningful preview from a system prompt
+func summarizeSystemPrompt(systemPrompt string, maxLen int) string {
+	if systemPrompt == "" {
+		return "(empty)"
+	}
+
+	// Extract section headers (lines starting with ## or #)
+	var headers []string
+	lines := strings.Split(systemPrompt, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") {
+			headers = append(headers, strings.TrimPrefix(trimmed, "## "))
+		} else if strings.HasPrefix(trimmed, "# ") {
+			headers = append(headers, strings.TrimPrefix(trimmed, "# "))
+		}
+	}
+
+	if len(headers) > 0 {
+		summary := strings.Join(headers, " | ")
+		if len(summary) > maxLen {
+			return summary[:maxLen-3] + "..."
+		}
+		return summary
+	}
+
+	// Fallback: first meaningful line
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "```") {
+			if len(trimmed) > maxLen {
+				return trimmed[:maxLen-3] + "..."
+			}
+			return trimmed
+		}
+	}
+
+	return "(system prompt)"
 }
 
 // Helper function to check if a prompt exists in chat history
@@ -66,12 +147,12 @@ func PromptExistsInHistory(messages []llms.ChatMessage, prompt string) bool {
 
 // ManageChatThreadContext manages the context window of the chat thread
 func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage, maxTokens int) {
-	if chatMessages == nil {
+	if cfg == nil || chatMessages == nil || maxTokens <= 0 {
 		return
 	}
 
 	// If the token length exceeds the context window, remove the oldest message in loop
-	threadLen := lib.CountTokens("", chatMessages)
+	threadLen := lib.CountTokensWithConfig(cfg, "", chatMessages)
 	if threadLen > maxTokens {
 		logger.Log("warn", "Thread should be truncated: %d messages, %d tokens", len(chatMessages), threadLen)
 
@@ -81,7 +162,7 @@ func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage
 		defer cancelTrimSpinner()
 
 		// Truncate the thread if it exceeds the maximum token length
-		for lib.CountTokens("", chatMessages) > maxTokens && len(chatMessages) > 0 {
+		for lib.CountTokensWithConfig(cfg, "", chatMessages) > maxTokens && len(chatMessages) > 0 {
 			// Remove the most irrelevant message: find oldest AI answer and remove it
 			foundAIMessage := false
 			for i, message := range chatMessages {
@@ -97,13 +178,16 @@ func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage
 				chatMessages = chatMessages[1:]
 			}
 
-			logger.Log("info", "Thread after truncation: tokens: %d, messages: %v", lib.CountTokens("", chatMessages), len(chatMessages))
+			logger.Log("info", "Thread after truncation: tokens: %d, messages: %v", lib.CountTokensWithConfig(cfg, "", chatMessages), len(chatMessages))
 			// Brief pause to show spinner movement
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
 
-	logger.Log("info", "\nThread: %d messages, %d tokens", len(chatMessages), lib.CountTokens("", chatMessages))
+	// Persist any trimming back to the shared chat history
+	cfg.ChatMessages = chatMessages
+
+	logger.Log("info", "\nThread: %d messages, %d tokens", len(cfg.ChatMessages), lib.CountTokensWithConfig(cfg, "", cfg.ChatMessages))
 }
 
 // WriteNormalizedChunk writes chunk to the provided writer while normalizing line breaks.

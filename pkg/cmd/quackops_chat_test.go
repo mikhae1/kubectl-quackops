@@ -109,12 +109,15 @@ func TestProcessUserPrompt_BasicPrompts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := createInteractiveTestConfig()
 
-			// Mock the Request function if LLM call is expected
+			// Mock the Request functions if LLM call is expected
 			if tt.expectLLMCall {
 				originalRequest := llm.Request
+				originalRequestWithSystem := llm.RequestWithSystem
 				llm.Request = llm.MockRequestFunc(tt.mockResponses)
+				llm.RequestWithSystem = llm.MockRequestWithSystemFunc(tt.mockResponses)
 				defer func() {
 					llm.Request = originalRequest
+					llm.RequestWithSystem = originalRequestWithSystem
 				}()
 			}
 
@@ -203,11 +206,13 @@ func TestProcessUserPrompt_EditMode(t *testing.T) {
 			cfg := createInteractiveTestConfig()
 			cfg.EditMode = tt.editMode
 
-			// Mock the Request function for non-command prompts
+			// Mock the Request functions for non-command prompts
 			if !tt.expectCmd {
-				llm.Request = llm.MockRequestFunc([]llm.MockResponse{
+				mockResponses := []llm.MockResponse{
 					{Content: "Mock explanation about pods", TokensUsed: 50},
-				})
+				}
+				llm.Request = llm.MockRequestFunc(mockResponses)
+				llm.RequestWithSystem = llm.MockRequestWithSystemFunc(mockResponses)
 			}
 
 			// Capture output
@@ -290,9 +295,11 @@ func TestProcessUserPrompt_HistoryManagement(t *testing.T) {
 			}
 
 			// Mock LLM request
-			llm.Request = llm.MockRequestFunc([]llm.MockResponse{
+			mockResponses := []llm.MockResponse{
 				{Content: "Mock response for testing", TokensUsed: 40},
-			})
+			}
+			llm.Request = llm.MockRequestFunc(mockResponses)
+			llm.RequestWithSystem = llm.MockRequestWithSystemFunc(mockResponses)
 
 			// Capture output
 			oldStderr := os.Stderr
@@ -455,9 +462,11 @@ func TestProcessUserPrompt_VerboseMode(t *testing.T) {
 			cfg.Verbose = tt.verbose
 
 			// Mock LLM request
-			llm.Request = llm.MockRequestFunc([]llm.MockResponse{
+			mockResponses := []llm.MockResponse{
 				{Content: "Mock explanation about containers", TokensUsed: 60},
-			})
+			}
+			llm.Request = llm.MockRequestFunc(mockResponses)
+			llm.RequestWithSystem = llm.MockRequestWithSystemFunc(mockResponses)
 
 			// Capture stderr for verbose logging
 			oldStderr := os.Stderr
@@ -524,6 +533,7 @@ func TestStartChatSession_NonInteractive(t *testing.T) {
 			// Mock LLM request if responses provided
 			if len(tt.mockResponses) > 0 {
 				llm.Request = llm.MockRequestFunc(tt.mockResponses)
+				llm.RequestWithSystem = llm.MockRequestWithSystemFunc(tt.mockResponses)
 			}
 
 			// For non-interactive mode test, only test with actual prompts

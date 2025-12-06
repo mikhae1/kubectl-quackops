@@ -140,8 +140,16 @@ func (m *MockLLMClient) Reset() {
 
 // MockRequestFunc creates a mock version of the Request function
 func MockRequestFunc(responses []MockResponse) RequestFunc {
-	currentIndex := 0
+	mockWithSystem := MockRequestWithSystemFunc(responses)
 	return func(cfg *config.Config, prompt string, stream bool, history bool) (string, error) {
+		return mockWithSystem(cfg, "", prompt, stream, history)
+	}
+}
+
+// MockRequestWithSystemFunc creates a mock version of the RequestWithSystem function
+func MockRequestWithSystemFunc(responses []MockResponse) RequestWithSystemFunc {
+	currentIndex := 0
+	return func(cfg *config.Config, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
 		// If we run out of responses, cycle back to the first one
 		if currentIndex >= len(responses) {
 			currentIndex = 0
@@ -181,7 +189,10 @@ func MockRequestFunc(responses []MockResponse) RequestFunc {
 
 		// Update history if requested
 		if history {
-			cfg.ChatMessages = append(cfg.ChatMessages, llms.HumanChatMessage{Content: prompt})
+			if systemPrompt != "" && len(cfg.ChatMessages) == 0 {
+				cfg.ChatMessages = append(cfg.ChatMessages, llms.SystemChatMessage{Content: systemPrompt})
+			}
+			cfg.ChatMessages = append(cfg.ChatMessages, llms.HumanChatMessage{Content: userPrompt})
 			cfg.ChatMessages = append(cfg.ChatMessages, llms.AIChatMessage{Content: response.Content})
 		}
 

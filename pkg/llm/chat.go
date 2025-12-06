@@ -21,7 +21,22 @@ import (
 // Chat orchestrates a chat completion with the provided llms.Model, handling
 // history, streaming, retries, token accounting, and MCP tool calls.
 func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, history bool) (string, error) {
-	humanMessage := llms.HumanChatMessage{Content: prompt}
+	return ChatWithSystemPrompt(cfg, client, "", prompt, stream, history)
+}
+
+// ChatWithSystemPrompt orchestrates a chat completion with separate system and user prompts.
+// The systemPrompt is added as a system message before the user prompt.
+func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
+	// Add system message to history if provided (only once at the start of conversation)
+	if systemPrompt != "" && len(cfg.ChatMessages) == 0 {
+		systemMessage := llms.SystemChatMessage{Content: systemPrompt}
+		if history {
+			cfg.ChatMessages = append(cfg.ChatMessages, systemMessage)
+		}
+		logger.Log("debug", "[Chat] Added system prompt (%d chars)", len(systemPrompt))
+	}
+
+	humanMessage := llms.HumanChatMessage{Content: userPrompt}
 	if history {
 		cfg.ChatMessages = append(cfg.ChatMessages, humanMessage)
 	}
@@ -51,8 +66,11 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 
 	// Include the current prompt only when history is disabled to avoid duplication
 	if !history {
-		messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, prompt))
+		messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, userPrompt))
 	}
+
+	// Log role distribution for debugging
+	LogOutboundMessages(messages, cfg)
 
 	logger.Log("info", "Sending request to %s/%s with %d messages in history", cfg.Provider, cfg.Model, len(messages))
 
@@ -105,7 +123,7 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 		generateOptions = append(generateOptions, llms.WithMaxTokens(availableForOutput))
 	}
 
-	outgoingTokens := lib.CountTokensWithConfig(cfg, prompt, cfg.ChatMessages)
+	outgoingTokens := lib.CountTokensWithConfig(cfg, userPrompt, cfg.ChatMessages)
 	cfg.LastOutgoingTokens = outgoingTokens
 	cfg.LastIncomingTokens = 0
 
@@ -536,7 +554,8 @@ func generateWithRetries(
 			cfg.LastIncomingTokens = lib.EstimateTokens(cfg, responseContent)
 		}
 
-		if responseContent == "" {
+		hasToolCalls := resp != nil && len(resp.Choices) > 0 && len(resp.Choices[0].ToolCalls) > 0
+		if responseContent == "" && !hasToolCalls {
 			if attempt < maxRetries {
 				logger.Log("warn", "Received empty content from %s/%s", cfg.Provider, cfg.Model)
 				lastError = fmt.Errorf("no content generated from %s", cfg.Provider)
