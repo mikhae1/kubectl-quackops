@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/completer"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
@@ -177,7 +177,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 		}
 
 		// Reset current history completely
-		rl.Operation.ResetHistory()
+		rl.ResetHistory()
 
 		// Load only prefixed commands without prefixes
 		lines := strings.Split(string(data), "\n")
@@ -192,7 +192,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 				// Remove prefix for display in edit mode
 				clean := strings.TrimSpace(strings.TrimPrefix(line, prefix))
 				if clean != "" {
-					_ = rl.Operation.SaveHistory(clean)
+					_ = rl.SaveToHistory(clean)
 				}
 			}
 		}
@@ -211,14 +211,14 @@ func startChatSession(cfg *config.Config, args []string) error {
 		}
 
 		// Reset current history completely
-		rl.Operation.ResetHistory()
+		rl.ResetHistory()
 
 		// Load all history entries
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line != "" {
-				_ = rl.Operation.SaveHistory(line)
+				_ = rl.SaveToHistory(line)
 			}
 		}
 	}
@@ -257,7 +257,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 	}
 
 	// Avoid recomputing prompt on every keystroke to prevent latency
-	rlConfig.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
+	rlConfig.Listener = func(line []rune, pos int, key rune) ([]rune, int, bool) {
 		// Backup ESC handling
 		if cfg.EditMode && key == readline.CharEsc {
 			cfg.EditMode = false
@@ -277,9 +277,9 @@ func startChatSession(cfg *config.Config, args []string) error {
 		}
 
 		return line, pos, false
-	})
+	}
 
-	rl, err := readline.NewEx(rlConfig)
+	rl, err := readline.NewFromConfig(rlConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create interactive prompt instance: %w", err)
 	}
@@ -326,7 +326,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 	var lastTextPrompt string
 	var userMsgCount int
 	for {
-		userPrompt, err := rl.Readline()
+		userPrompt, err := rl.ReadLine()
 		if err != nil { // io.EOF is returned on Ctrl-C
 			cleanupAndExit("Exiting...", 0)
 			return nil // Ensure we exit immediately
@@ -469,18 +469,24 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		return false, ""
 	}
 
+	body := color.New(color.FgCyan)
+	accent := config.Colors.Accent
+	dim := config.Colors.Dim
+	info := config.Colors.Info
+	warn := config.Colors.Warn
+
 	switch lowered {
 	case "/help", "/h", "/?":
 		printInlineHelp(cfg)
 		return true, "help"
 	case "/version":
-		fmt.Println(version.Version)
+		fmt.Println(info.Sprint(version.Version))
 		return true, "version"
 	case "/reset":
 		cfg.ChatMessages = nil
 		cfg.StoredUserCmdResults = nil
 		cfg.SelectedPrompt = ""
-		fmt.Println("Context reset")
+		fmt.Println(body.Sprint("Context reset"))
 		return true, "reset"
 	case "/clear", "/clean":
 		cfg.ChatMessages = nil
@@ -488,13 +494,13 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		cfg.LastOutgoingTokens = 0
 		cfg.LastIncomingTokens = 0
 		cfg.SelectedPrompt = ""
-		fmt.Println("🦆 Context cleared!")
+		fmt.Println(accent.Sprint("🦆 Context cleared!"))
 		return true, "clear"
 	case "/mcp":
 		if cfg.MCPClientEnabled {
 			printMCPDetails(cfg)
 		} else {
-			fmt.Println("MCP client: disabled")
+			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
 		}
 		return true, "mcp"
 	case "/model", "/models":
@@ -510,24 +516,24 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 
 		// Check if there are any additional arguments (for future extension)
 		// For now, always launch the interactive selector
-		fmt.Printf("Current: %s/%s\n", prov, m)
-		fmt.Println("Launching interactive model selector...")
+		fmt.Printf("%s\n", body.Sprintf("Current: %s/%s", prov, m))
+		fmt.Println(dim.Sprint("Launching interactive model selector..."))
 
 		// Create model selector and launch interactive selection
 		selector := lib.NewModelSelector(cfg)
 		selectedModel, err := selector.SelectModel()
 		if err != nil {
 			if strings.Contains(err.Error(), "cancelled") {
-				fmt.Println("Model selection cancelled.")
+				fmt.Println(dim.Sprint("Model selection cancelled."))
 			} else {
-				fmt.Printf("Error selecting model: %v\n", err)
+				fmt.Printf("%s %v\n", warn.Sprint("Error selecting model:"), err)
 			}
 			return true, "model"
 		}
 
 		// Update configuration with selected model
 		cfg.Model = selectedModel
-		fmt.Printf("Model updated to: %s\n", config.Colors.Model.Sprint(selectedModel))
+		fmt.Printf("%s %s\n", body.Sprint("Model updated to:"), config.Colors.Model.Sprint(selectedModel))
 
 		// Auto-detect max tokens for the new model
 		cfg.ConfigDetectMaxTokens()
@@ -537,26 +543,24 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		if cfg.MCPClientEnabled {
 			list := mcp.Servers(cfg)
 			if len(list) == 0 {
-				fmt.Println("No MCP servers configured")
+				fmt.Println(dim.Sprint("No MCP servers configured"))
 			} else {
-				fmt.Println("MCP servers:")
+				fmt.Println(accent.Sprint("MCP servers:"))
 				for _, s := range list {
-					fmt.Printf(" - %s\n", s)
+					fmt.Printf(" - %s\n", info.Sprint(s))
 				}
 			}
 		} else {
-			fmt.Println("MCP client: disabled")
+			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
 		}
 		return true, "servers"
 	case "/tools":
 		if cfg.MCPClientEnabled {
 			toolInfos := mcp.GetToolInfos(cfg)
 			if len(toolInfos) == 0 {
-				fmt.Println("No MCP tools discovered")
+				fmt.Println(dim.Sprint("No MCP tools discovered"))
 			} else {
-				toolColor := color.New(color.FgHiCyan)
-				descColor := color.New(color.FgWhite)
-				fmt.Printf("MCP tools (%d):\n", len(toolInfos))
+				fmt.Printf("%s\n", accent.Sprintf("MCP tools (%d):", len(toolInfos)))
 				for _, tool := range toolInfos {
 					// Truncate description if too long
 					desc := tool.Description
@@ -564,18 +568,18 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 					if len(desc) > maxLen {
 						desc = desc[:maxLen] + "..."
 					}
-					fmt.Printf(" - %s: %s\n", toolColor.Sprint(tool.Name), descColor.Sprint(desc))
+					fmt.Printf(" - %s: %s\n", accent.Sprint(tool.Name), body.Sprint(desc))
 				}
 			}
 		} else {
-			fmt.Println("MCP client: disabled")
+			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
 		}
 		return true, "tools"
 	case "/prompts":
 		if cfg.MCPClientEnabled {
 			printMCPPrompts(cfg)
 		} else {
-			fmt.Println("MCP client: disabled")
+			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
 		}
 		return true, "prompts"
 	default:
@@ -595,8 +599,8 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 				}
 			}
 		}
-		fmt.Printf("Unknown command: %s\n", userPrompt)
-		fmt.Println("Type /help for available commands.")
+		fmt.Printf("%s %s\n", warn.Sprint("Unknown command:"), body.Sprint(userPrompt))
+		fmt.Println(body.Sprint("Type /help for available commands."))
 		return true, "unknown"
 	}
 }
@@ -1081,10 +1085,11 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 // printMCPDetails displays detailed MCP information with proper formatting
 func printMCPDetails(cfg *config.Config) {
-	titleColor := color.New(color.FgHiYellow, color.Bold)
-	toolColor := color.New(color.FgHiCyan)
-	descColor := color.New(color.FgWhite)
-	serverColor := color.New(color.FgHiGreen)
+	titleColor := config.Colors.Header
+	toolColor := config.Colors.Accent
+	descColor := color.New(color.FgCyan)
+	serverColor := config.Colors.Info
+	dim := config.Colors.Dim
 
 	fmt.Println()
 	titleColor.Println("MCP Details:")
@@ -1098,14 +1103,14 @@ func printMCPDetails(cfg *config.Config) {
 	}
 
 	if len(srvs) == 0 {
-		fmt.Println("- servers: none")
+		fmt.Println(dim.Sprint("- servers: none"))
 	} else {
-		fmt.Println("- servers:")
+		fmt.Println(dim.Sprint("- servers:"))
 		for _, s := range srvs {
 			if connectedMap[s] {
 				fmt.Printf("  · %s\n", serverColor.Sprint(s))
 			} else {
-				fmt.Printf("  · %s (disconnected)\n", color.HiBlackString(s))
+				fmt.Printf("  · %s %s\n", dim.Sprint(s), dim.Sprint("(disconnected)"))
 			}
 		}
 	}
@@ -1113,9 +1118,9 @@ func printMCPDetails(cfg *config.Config) {
 	// Show tools with descriptions
 	toolInfos := mcp.GetToolInfos(cfg)
 	if len(toolInfos) == 0 {
-		fmt.Println("- tools: none")
+		fmt.Println(dim.Sprint("- tools: none"))
 	} else {
-		fmt.Printf("- tools (%d):\n", len(toolInfos))
+		fmt.Printf("%s\n", dim.Sprintf("- tools (%d):", len(toolInfos)))
 		for _, tool := range toolInfos {
 			// Truncate description if too long
 			desc := tool.Description
@@ -1131,16 +1136,16 @@ func printMCPDetails(cfg *config.Config) {
 // printMCPPrompts displays MCP prompts with brand-accent styling
 func printMCPPrompts(cfg *config.Config) {
 	accent := config.Colors.Accent
-	descColor := color.New(color.FgHiWhite)
+	descColor := color.New(color.FgCyan)
 	serverColor := config.Colors.Label
 
 	promptInfos := mcp.GetPromptInfos(cfg)
 	if len(promptInfos) == 0 {
-		fmt.Println("No MCP prompts discovered")
+		fmt.Println(config.Colors.Dim.Sprint("No MCP prompts discovered"))
 		return
 	}
 
-	fmt.Printf("MCP prompts (%d):\n", len(promptInfos))
+	fmt.Printf("%s\n", accent.Sprintf("MCP prompts (%d):", len(promptInfos)))
 	for _, pi := range promptInfos {
 		// Format: /$server/$prompt
 		promptPath := "/" + pi.Server + "/" + pi.Name
@@ -1187,11 +1192,11 @@ func handleMCPDynamicPrompt(cfg *config.Config, lowered string) bool {
 func renderPromptDetails(pi mcp.PromptInfo) {
 	accent := config.Colors.Accent
 	titleColor := config.Colors.Info
-	descColor := color.New(color.FgHiWhite)
+	descColor := color.New(color.FgCyan)
 	labelColor := config.Colors.Label
 	dim := config.Colors.Dim
 	reqColor := color.New(color.FgHiYellow)
-	optColor := color.New(color.FgHiBlack)
+	optColor := dim
 
 	// Format: /$server/$prompt
 	promptPath := "/" + pi.Server + "/" + pi.Name
@@ -1368,9 +1373,10 @@ func showCostEstimation(cfg *config.Config) {
 
 // printInlineHelp prints quick usage information for interactive mode
 func printInlineHelp(cfg *config.Config) {
-	title := color.New(color.FgHiYellow, color.Bold)
-	body := color.New(color.FgHiWhite)
-	accent := color.New(color.FgHiCyan)
+	title := config.Colors.Header
+	body := color.New(color.FgCyan)
+	accent := config.Colors.Accent
+	label := config.Colors.Dim
 	prefix := cfg.CommandPrefix
 	if strings.TrimSpace(prefix) == "" {
 		prefix = "!"
@@ -1398,7 +1404,7 @@ func printInlineHelp(cfg *config.Config) {
 				}
 			}
 			if len(variations) > 0 {
-				fmt.Printf("    %s (%s)\n", body.Sprint("Aliases:"), body.Sprint(strings.Join(variations, ", ")))
+				fmt.Printf("    %s (%s)\n", label.Sprint("Aliases:"), body.Sprint(strings.Join(variations, ", ")))
 			}
 		}
 	}

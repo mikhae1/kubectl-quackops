@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
 )
@@ -91,7 +91,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 
 	// Create readline instance with custom completer
 	completer := &modelCompleter{models: models}
-	rl, err := readline.NewEx(&readline.Config{
+	rl, err := readline.NewFromConfig(&readline.Config{
 		Prompt:       config.Colors.Info.Sprint("Choose a model") + " (or press Tab): ",
 		AutoComplete: completer,
 		EOFPrompt:    "exit",
@@ -108,7 +108,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 	var lastPartialMatches []*metadata.ModelMetadata
 
 	for {
-		line, err := rl.Readline()
+		line, err := rl.ReadLine()
 		if err != nil { // This includes Ctrl+C, EOF
 			return "", fmt.Errorf("selection cancelled")
 		}
