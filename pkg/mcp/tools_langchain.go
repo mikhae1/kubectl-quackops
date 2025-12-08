@@ -18,6 +18,24 @@ func DiscoverLangchainTools(cfg *config.Config) []llms.Tool {
 		return []llms.Tool{}
 	}
 
+	return convertToolInfosToLangchain(toolInfos)
+}
+
+// DiscoverLangchainToolsForServer maps MCP tools from a specific server to LangChainGo tools.
+// Used when a prompt is active to filter tools to the same server as the prompt.
+func DiscoverLangchainToolsForServer(cfg *config.Config, serverName string) []llms.Tool {
+	toolInfos := GetToolInfosByServer(cfg, serverName)
+	if len(toolInfos) == 0 {
+		logger.Log("info", "No MCP tools discovered for server '%s'", serverName)
+		return []llms.Tool{}
+	}
+
+	logger.Log("info", "Discovering LangChain tools for server '%s' (%d tools)", serverName, len(toolInfos))
+	return convertToolInfosToLangchain(toolInfos)
+}
+
+// convertToolInfosToLangchain converts ToolInfo slice to LangChainGo tools
+func convertToolInfosToLangchain(toolInfos []ToolInfo) []llms.Tool {
 	tools := make([]llms.Tool, 0, len(toolInfos))
 
 	for idx, ti := range toolInfos {

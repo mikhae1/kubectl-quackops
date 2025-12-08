@@ -132,35 +132,11 @@ func CalculateContextPercentage(cfg *config.Config) float64 {
 }
 
 // FormatContextPrompt formats the prompt with context percentage
+// Shows: [▰▰▰▱▱▱▱▱] 38% ↑2.9k↓2.0k ❯
+// The progress bar and context info appear before the prompt chevron
 func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
-	percentage := CalculateContextPercentage(cfg)
-
-	// Choose color based on context usage
-	var contextColor *color.Color
-	if percentage < 50 {
-		contextColor = color.New(color.FgHiCyan)
-	} else if percentage < 80 {
-		contextColor = color.New(color.FgYellow)
-	} else {
-		contextColor = color.New(color.FgHiRed)
-	}
-
-	// Build compact context indicator with colored arrows and compact numbers
-	// Example: [3%|↑2.9k|↓2.0k]
-	leftBracket := color.New(color.FgHiBlack).Sprint("[")
-	rightBracket := color.New(color.FgHiBlack).Sprint("]")
-	pctStr := contextColor.Sprintf("%3.0f%%", percentage)
-	sep := color.New(color.FgHiBlack).Sprint("|")
-
-	tokenStr := ""
-	if cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0 {
-		up := color.New(color.FgHiBlue, color.Bold).Sprint("↑")
-		down := color.New(color.FgHiGreen, color.Bold).Sprint("↓")
-		outNum := contextColor.Sprint(FormatCompactNumber(cfg.LastOutgoingTokens))
-		inNum := contextColor.Sprint(FormatCompactNumber(cfg.LastIncomingTokens))
-		tokenStr = fmt.Sprintf("%s%s%s%s%s", sep, up, outNum, sep, down+inNum)
-	}
-	contextStr := fmt.Sprintf("%s%s%s%s", leftBracket, pctStr, tokenStr, rightBracket)
+	// Build the compact context indicator (left side, before prompt)
+	contextIndicator := FormatContextIndicator(cfg)
 
 	// Format the main prompt
 	var promptStr string
@@ -174,7 +150,133 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 		promptStr = color.New(color.Bold).Sprint("❯ ")
 	}
 
-	return contextStr + " " + promptStr
+	return contextIndicator + " " + promptStr
+}
+
+// FormatContextIndicator creates a compact context indicator
+// Format: [▰▰▰▱▱▱▱▱] 38% ↑2.9k ↓2.0k
+func FormatContextIndicator(cfg *config.Config) string {
+	percentage := CalculateContextPercentage(cfg)
+
+	// Choose color based on context usage
+	var contextColor *color.Color
+	if percentage < 50 {
+		contextColor = color.New(color.FgHiCyan)
+	} else if percentage < 80 {
+		contextColor = color.New(color.FgYellow)
+	} else {
+		contextColor = color.New(color.FgHiRed)
+	}
+
+	// Build progress bar
+	progressBar := FormatProgressBar(percentage, 5, contextColor)
+
+	// Build percentage string (2 digits)
+	pctStr := contextColor.Sprintf("%2.0f%%", percentage)
+
+	// Build token counts (compact, no decimals)
+	tokenStr := ""
+	if cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0 {
+		up := color.New(color.FgHiBlue, color.Bold).Sprint("↑")
+		down := color.New(color.FgHiGreen, color.Bold).Sprint("↓")
+		outNum := color.New(color.FgHiBlack).Sprint(formatCompact2Digit(cfg.LastOutgoingTokens))
+		inNum := color.New(color.FgHiBlack).Sprint(formatCompact2Digit(cfg.LastIncomingTokens))
+		tokenStr = fmt.Sprintf(" %s%s%s%s", up, outNum, down, inNum)
+	}
+
+	return fmt.Sprintf("%s%s%s", progressBar, pctStr, tokenStr)
+}
+
+// formatCompact2Digit formats numbers compactly with max 2 digits (no decimals)
+// Examples: 0 -> "0", 950 -> "950", 2910 -> "3k", 1200000 -> "1M"
+func formatCompact2Digit(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	sign := ""
+	n := value
+	if n < 0 {
+		sign = "-"
+		n = -n
+	}
+
+	var scaled float64
+	var suffix string
+
+	switch {
+	case n >= 1_000_000_000_000:
+		scaled = float64(n) / 1_000_000_000_000.0
+		suffix = "T"
+	case n >= 1_000_000_000:
+		scaled = float64(n) / 1_000_000_000.0
+		suffix = "B"
+	case n >= 1_000_000:
+		scaled = float64(n) / 1_000_000.0
+		suffix = "M"
+	case n >= 1_000:
+		scaled = float64(n) / 1_000.0
+		suffix = "k"
+	default:
+		return fmt.Sprintf("%s%d", sign, n)
+	}
+
+	// Round to nearest integer for compact display
+	rounded := int(scaled + 0.5)
+	return fmt.Sprintf("%s%d%s", sign, rounded, suffix)
+}
+
+// FormatProgressBar creates a visual progress bar for context usage
+// Uses ▰ for filled and ▱ for empty segments
+func FormatProgressBar(percentage float64, width int, barColor *color.Color) string {
+	if width <= 0 {
+		width = 8
+	}
+
+	filled := int((percentage / 100.0) * float64(width))
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+
+	leftBracket := color.New(color.FgHiBlack).Sprint("[")
+	rightBracket := color.New(color.FgHiBlack).Sprint("]")
+
+	var bar strings.Builder
+	bar.WriteString(leftBracket)
+
+	for i := 0; i < width; i++ {
+		if i < filled {
+			bar.WriteString(barColor.Sprint("▰"))
+		} else {
+			bar.WriteString(color.New(color.FgHiBlack).Sprint("▱"))
+		}
+	}
+
+	bar.WriteString(rightBracket)
+	return bar.String()
+}
+
+// visibleLen returns the visible length of a string, stripping ANSI escape codes
+func visibleLen(s string) int {
+	// Simple ANSI stripping: remove sequences starting with ESC[
+	inEscape := false
+	length := 0
+	for _, r := range s {
+		if r == '\033' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		length++
+	}
+	return length
 }
 
 // FormatEditPrompt returns the edit-mode prompt string without any token counter

@@ -47,6 +47,7 @@ type ToolInfo struct {
 	Title       string
 	Description string
 	InputSchema *jsonschema.Schema
+	Server      string
 }
 
 // PromptInfo represents a discovered MCP prompt and its arguments
@@ -699,6 +700,24 @@ func GetToolInfos(cfg *config.Config) []ToolInfo {
 	return registry.GetAllToolInfos()
 }
 
+// GetToolInfosByServer returns tools from a specific MCP server
+// Used when a prompt is active to filter tools to the same server
+func GetToolInfosByServer(cfg *config.Config, serverName string) []ToolInfo {
+	loadOnce(cfg.MCPConfigPath)
+	if registry == nil || serverName == "" {
+		return []ToolInfo{}
+	}
+	allTools := registry.GetAllToolInfos()
+	var filtered []ToolInfo
+	for _, ti := range allTools {
+		if strings.EqualFold(ti.Server, serverName) {
+			filtered = append(filtered, ti)
+		}
+	}
+	logger.Log("debug", "[MCP] Filtered %d tools for server '%s' (from %d total)", len(filtered), serverName, len(allTools))
+	return filtered
+}
+
 // GetPromptInfos returns all available prompts with descriptions
 func GetPromptInfos(cfg *config.Config) []PromptInfo {
 	loadOnce(cfg.MCPConfigPath)
@@ -1296,6 +1315,7 @@ func discoverAndCacheToolInfos(session *sdkmcp.ClientSession, serverName string)
 			Title:       title,
 			Description: desc,
 			InputSchema: schema,
+			Server:      serverName,
 		}
 
 		tools = append(tools, toolInfo)

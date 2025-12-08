@@ -428,6 +428,8 @@ QU_MCP_CLIENT=true
 | `QU_KUBECTL_BINARY` | string | `kubectl` | Path to the kubectl binary |
 | `QU_COMMAND_PREFIX` | string | `$` | Single-character prefix to enter command mode and mark shell commands |
 | `QU_ENABLE_BASELINE` | bool | `true` | Enable baseline diagnostic pack before LLM |
+| `QU_BASELINE_LEVEL` | string | `minimal` | Baseline diagnostic level: minimal (13 commands), standard (+ workloads), comprehensive (+ metrics/policies) |
+| `QU_BASELINE_NAMESPACE_FILTER` | string | `` | Comma-separated namespaces for baseline commands (empty = all namespaces) |
 | `QU_EVENTS_WINDOW_MINUTES` | int | `60` | Events time window in minutes for summarization |
 | `QU_EVENTS_WARN_ONLY` | bool | `true` | Include only Warning events in summaries |
 | `QU_LOGS_TAIL` | int | `200` | Tail lines for log aggregation when triggered by playbooks |

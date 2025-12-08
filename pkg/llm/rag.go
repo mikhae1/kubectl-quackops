@@ -3,8 +3,8 @@ package llm
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
-	"time"
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/diag"
@@ -224,16 +224,39 @@ func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []
 			f := findings[i]
 			logger.Log("info", "Finding[%d]: kind=%s id=%s severity=%s summary=%s", i, f.Kind, f.ID, f.Severity, f.Summary)
 		}
+
+		// Sort findings by priority (highest first) when priority scoring is enabled
+		if cfg.EnablePriorityScoring {
+			sort.Slice(findings, func(i, j int) bool {
+				// Primary sort: priority (descending - higher priority first)
+				if findings[i].Priority != findings[j].Priority {
+					return findings[i].Priority > findings[j].Priority
+				}
+				// Secondary sort: severity (error > warn > info)
+				severityOrder := map[string]int{"error": 3, "warn": 2, "info": 1}
+				return severityOrder[findings[i].Severity] > severityOrder[findings[j].Severity]
+			})
+			logger.Log("info", "Sorted findings by priority (highest first)")
+		}
+
+		// Filter out info-level findings to reduce context bloat
+		// Only send actual issues (warn/error) to the LLM
+		issuesOnly := make([]diag.Finding, 0, len(findings))
+		for _, f := range findings {
+			if f.Severity == "warn" || f.Severity == "error" {
+				issuesOnly = append(issuesOnly, f)
+			}
+		}
+		if len(issuesOnly) < len(findings) {
+			logger.Log("info", "Filtered %d info-level findings, sending %d actual issues to LLM", len(findings)-len(issuesOnly), len(issuesOnly))
+			findings = issuesOnly
+		}
 	} else {
 		logger.Log("info", "Analyzers produced no findings")
 	}
-	if eventsJSON != "" && cfg.EventsWindowMinutes > 0 {
-		// Attach a compact event summary as a pseudo-finding block
-		summary := diag.SummarizeEvents(eventsJSON, cfg.EventsWarningsOnly, time.Duration(cfg.EventsWindowMinutes)*time.Minute, 20)
-		if summary != "" {
-			findings = append(findings, diag.Finding{Kind: "Events", ID: "-A", Severity: "info", Summary: strings.ReplaceAll(summary, "\n", " | ")})
-		}
-	}
+
+	// Skip event summaries to save context - they're redundant with analyzer findings
+	// Events are already analyzed by other analyzers (pod failures, etc.)
 
 	// Construct context data prioritizing analyzer findings and excluding baseline raw outputs
 	var sections []string

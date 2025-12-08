@@ -87,7 +87,14 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 	var mcpToolReserve int = 0
 	if cfg.MCPClientEnabled {
-		llmTools := mcp.DiscoverLangchainTools(cfg)
+		var llmTools []llms.Tool
+		if cfg.MCPPromptServer != "" {
+			// When a prompt is active, filter tools to the same server as the prompt
+			llmTools = mcp.DiscoverLangchainToolsForServer(cfg, cfg.MCPPromptServer)
+			logger.Log("info", "Filtering MCP tools for prompt server '%s'", cfg.MCPPromptServer)
+		} else {
+			llmTools = mcp.DiscoverLangchainTools(cfg)
+		}
 		if len(llmTools) > 0 {
 			generateOptions = append(generateOptions, llms.WithTools(llmTools))
 			generateOptions = append(generateOptions, llms.WithToolChoice("auto"))
@@ -196,7 +203,9 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 			// Display content if available and not already displayed
 			if choice.Content != "" && !contentAlreadyDisplayed {
-				stopOnce.Do(func() { hideSpinnerWithLeadingNewline(spinnerManager) })
+				// Hide spinner before displaying content - can't use stopOnce because
+				// spinner is re-shown for each LLM call in the MCP tool loop
+				hideSpinnerWithLeadingNewline(spinnerManager)
 				if !cfg.SuppressContentPrint {
 					printContentFormatted(cfg, choice.Content, false)
 				}
@@ -280,6 +289,9 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 					if useStreaming {
 						bufferedToolBlocks = append(bufferedToolBlocks, block)
 					} else {
+						// Hide spinner before printing tool block to avoid visual overlap
+						// Note: Can't use stopOnce here because spinner is re-shown for each LLM call
+						hideSpinnerWithLeadingNewline(spinnerManager)
 						fmt.Fprint(os.Stdout, block)
 					}
 

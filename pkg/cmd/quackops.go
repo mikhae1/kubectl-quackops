@@ -951,6 +951,10 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	}
 
 	if hasPrompt && cfg.SelectedPrompt != "" {
+		// Set the prompt server for tool filtering during LLM chat
+		cfg.MCPPromptServer = promptServer
+		logger.Log("debug", "[MCP Prompt] Set MCPPromptServer to '%s' for tool filtering", promptServer)
+
 		// Check if prompt has arguments and log them
 		promptArgs := mcp.GetPromptArgs(cfg, cfg.SelectedPrompt)
 		if len(promptArgs) > 0 {
@@ -1080,6 +1084,10 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	}
 
 	llm.ManageChatThreadContext(cfg, cfg.ChatMessages, lib.EffectiveMaxTokens(cfg))
+
+	// Clear prompt server filter after LLM request completes
+	cfg.MCPPromptServer = ""
+
 	return nil
 }
 
