@@ -935,7 +935,7 @@ func defaultSlashCommands() []SlashCommand {
 			Description: "Reset conversation context",
 		},
 		{
-			Commands:    []string{"/clear", "/clean"},
+			Commands:    []string{"/clear"},
 			Primary:     "/clear",
 			Description: "Clear context and screen",
 		},

@@ -488,7 +488,7 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		cfg.SelectedPrompt = ""
 		fmt.Println(body.Sprint("Context reset"))
 		return true, "reset"
-	case "/clear", "/clean":
+	case "/clear":
 		cfg.ChatMessages = nil
 		cfg.StoredUserCmdResults = nil
 		cfg.LastOutgoingTokens = 0

@@ -3,7 +3,6 @@ package lib
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"os"
 	"os/exec"
 	"strconv"
@@ -270,52 +269,64 @@ func FormatInputWithPrompt(input string, promptName string, serverName string) s
 	return input[:idx] + highlighted + input[idx+len(promptPath):]
 }
 
-// CoolClearEffect creates an animated clearing effect for the terminal
+// CoolClearEffect creates a quick neon sweep clear animation
 func CoolClearEffect(cfg *config.Config) {
 	if cfg.DisableAnimation {
-		// Just clear immediately if animations are disabled
 		fmt.Print("\033[2J\033[H")
 		return
 	}
 
-	// Get actual terminal dimensions
 	width, height := getTerminalSize()
-
-	// Colors for the effect
-	cyan := color.New(color.FgHiCyan)
-	blue := color.New(color.FgHiBlue)
-	magenta := color.New(color.FgHiMagenta)
-	colors := []*color.Color{cyan, blue, magenta}
-
-	// Matrix-style clearing effect
-	fmt.Print("\033[2J") // Clear screen first
-
-	// Animate clearing from top to bottom with colored "dust"
-	for row := 0; row < height; row++ {
-		fmt.Printf("\033[%d;1H", row+1) // Move cursor to row
-
-		// Create a line of random characters fading away
-		for col := 0; col < width; col++ {
-			if rand.Float32() < 0.3 { // 30% chance to show a character
-				char := []rune("⠁⠂⠄⡀⢀⠠⠐⠈")[rand.Intn(8)] // Braille dots for effect
-				c := colors[rand.Intn(len(colors))]
-				fmt.Print(c.Sprint(string(char)))
-			} else {
-				fmt.Print(" ")
-			}
-		}
-
-		time.Sleep(time.Millisecond * 25) // Speed of the effect
+	if width <= 0 || height <= 0 {
+		fmt.Print("\033[2J\033[H")
+		return
 	}
 
-	// Final clear and show completion message with duck
+	renderWidth := width
+	if renderWidth > 180 {
+		renderWidth = 180
+	}
+
+	palette := []*color.Color{
+		color.New(color.FgHiCyan),
+		color.New(color.FgHiMagenta),
+		color.New(color.FgHiBlue),
+		color.New(color.FgHiWhite),
+	}
+	shades := []string{"-", "=", "~", ":"}
+
+	lineCache := make([]string, len(shades))
+	for i, ch := range shades {
+		lineCache[i] = strings.Repeat(ch, renderWidth)
+	}
+
+	frames := 10
+	stripeHeight := height / 12
+	if stripeHeight < 1 {
+		stripeHeight = 1
+	}
+
+	fmt.Print("\033[2J\033[H\033[?25l")
+	defer fmt.Print("\033[?25h")
+
+	for frame := 0; frame < frames; frame++ {
+		shift := (frame * 3) % renderWidth
+		fmt.Print("\033[H")
+
+		for row := 0; row < height; row++ {
+			band := (row / stripeHeight) % len(lineCache)
+			line := lineCache[band]
+			rowShift := (shift + row) % renderWidth
+			rotated := line[rowShift:] + line[:rowShift]
+			col := palette[(band+frame)%len(palette)]
+			fmt.Printf("\033[%d;1H%s", row+1, col.Sprint(rotated))
+		}
+
+		time.Sleep(time.Millisecond * 16)
+	}
+
 	fmt.Print("\033[2J\033[H")
 
-	// Show a quick "CLEARED" message with duck centered on screen
-	duck := color.New(color.FgHiYellow)
-	cleared := color.New(color.FgHiGreen, color.Bold)
-
-	// Center the message
 	centerRow := height / 2
 	message := "🦆 CLEARED 🦆"
 	centerCol := (width - len(message)) / 2
@@ -323,10 +334,11 @@ func CoolClearEffect(cfg *config.Config) {
 		centerCol = 0
 	}
 
-	fmt.Printf("\033[%d;%dH", centerRow, centerCol)
-	fmt.Print(duck.Sprint("🦆 ") + cleared.Sprint("CLEARED") + duck.Sprint(" 🦆"))
-	time.Sleep(time.Millisecond * 500)
+	accent := color.New(color.FgHiCyan, color.Bold)
+	glow := color.New(color.FgHiMagenta)
 
-	// Final clear
+	fmt.Printf("\033[%d;%dH%s%s%s", centerRow, centerCol, glow.Sprint("🦆 "), accent.Sprint("CLEARED"), glow.Sprint(" 🦆"))
+	time.Sleep(time.Millisecond * 260)
+
 	fmt.Print("\033[2J\033[H")
 }
