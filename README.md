@@ -12,11 +12,11 @@ QuackOps goes beyond simple question-and-answer functionality, offering natural 
 
 ## ⚡ Quickstart (2 minutes)
 
-1) Install the plugin (from a release tarball):
-```sh
-tar -xzf ~/Downloads/kubectl-quackops-$(uname -s | tr '[:upper:]' '[:lower:]')-amd64.tar.gz -C ~/.local/bin
-chmod +x ~/.local/bin/kubectl-quackops
-```
+1) Install the plugin via krew (full instructions [here](https://krew.sigs.k8s.io/docs/user-guide/setup/install/)):
+   ```sh
+   kubectl krew index add mikahe1 https://github.com/mikhae1/kubectl-quackops
+   kubectl krew install mikahe1/quackops
+   ```
 
 2) Pick a provider:
 - OpenAI:
@@ -35,7 +35,7 @@ chmod +x ~/.local/bin/kubectl-quackops
 kubectl quackops --safe-mode -- 'review pod restarts'
 ```
 
-4) Prefer external MCP tools (optional):
+4) Use MCP tools:
 ```sh
 kubectl quackops --mcp-client=true --mcp-strict=true -- 'summarize cluster health'
 ```
