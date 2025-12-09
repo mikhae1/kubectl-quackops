@@ -12,10 +12,10 @@ QuackOps goes beyond simple question-and-answer functionality, offering natural 
 
 ## ⚡ Quickstart (2 minutes)
 
-1) Install the plugin via krew (full instructions [here](https://krew.sigs.k8s.io/docs/user-guide/setup/install/)):
+1) Install the plugin via [krew](https://krew.sigs.k8s.io/docs/user-guide/setup/install/):
    ```sh
-   kubectl krew index add mikahe1 https://github.com/mikhae1/kubectl-quackops
-   kubectl krew install mikahe1/quackops
+   kubectl krew index add mikhae1 https://github.com/mikhae1/kubectl-quackops
+   kubectl krew install mikhae1/quackops
    ```
 
 2) Pick a provider:
