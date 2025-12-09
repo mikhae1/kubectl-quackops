@@ -1,5 +1,15 @@
 ## Changelog
 
+### v2.1.0 — 2025-12-09
+
+- Add local `krew` setup
+- Update readline dependency and refactor related code
+- Add session history recording, `/history` command, and Ctrl-R for detailed last command/partial interaction view
+- Add diagnostic finding priorities
+- Add visual context progress bar
+- Add MCP tools filtering by prompt server
+
+
 ### v2.0.2 — 2025-12-06
 
 - Improve escape sequence handling in keyboard input
