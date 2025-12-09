@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   name: quackops
 spec:
-  version: v2.1.0-pre
+  version: v2.1.0
   homepage: https://github.com/mikhae1/kubectl-quackops
   shortDescription: AI-powered kubectl plugin for Kubernetes troubleshooting
   description: |
@@ -15,27 +15,27 @@ spec:
       matchLabels:
         os: linux
         arch: amd64
-    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.1.0-pre/kubectl-quackops-linux-amd64.tar.gz
-    sha256: 
+    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.1.0/kubectl-quackops-linux-amd64.tar.gz
+    sha256: d14d567cae31715bd7da0cce6e64dc5f267a936ca1445f0af6f10ff0e4e38a3f
     bin: kubectl-quackops
   - selector:
       matchLabels:
         os: linux
         arch: arm64
-    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.1.0-pre/kubectl-quackops-linux-arm64.tar.gz
-    sha256: 
+    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.1.0/kubectl-quackops-linux-arm64.tar.gz
+    sha256: 1914d2c776d7331d963bde9e28ffcd32016a3696e00cb3bc0b34afd6eb46ab4d
     bin: kubectl-quackops
   - selector:
       matchLabels:
         os: darwin
         arch: amd64
-    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.1.0-pre/kubectl-quackops-darwin-amd64.tar.gz
-    sha256: 
+    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.1.0/kubectl-quackops-darwin-amd64.tar.gz
+    sha256: b596e329b6f8e16155f1008d932d5fa3e37d2a82824bd41f5b744942886f5faa
     bin: kubectl-quackops
   - selector:
       matchLabels:
         os: darwin
         arch: arm64
-    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.1.0-pre/kubectl-quackops-darwin-arm64.tar.gz
-    sha256: 
+    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.1.0/kubectl-quackops-darwin-arm64.tar.gz
+    sha256: 529d19f21bb59511da53bcdefa8cd4ed49705b136510ee3677dac8feff3fa6e4
     bin: kubectl-quackops
