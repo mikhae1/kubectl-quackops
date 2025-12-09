@@ -248,6 +248,18 @@ func printKubectlDiagnosticsList(cfg *config.Config, commands []string) {
 		prefix = "!"
 	}
 
+	// Skip suggestions when user is in command/edit mode
+	allPrefixed := true
+	for _, c := range commands {
+		if !strings.HasPrefix(strings.TrimSpace(c), prefix) {
+			allPrefixed = false
+			break
+		}
+	}
+	if cfg.EditMode || allPrefixed {
+		return
+	}
+
 	// Collect kubectl-only commands (strip shell prefix first)
 	var kubectlCmds []string
 	for _, c := range commands {
@@ -731,7 +743,7 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 		dim := color.New(color.Faint).SprintFunc()
 		bold := color.New(color.Bold).SprintFunc()
 
-	prefix := "!"
+		prefix := "!"
 		if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
 			prefix = cfg.CommandPrefix
 		}

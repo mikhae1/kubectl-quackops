@@ -89,7 +89,7 @@ func (rb *RenderBlock) processContent(content string) string {
 		}
 
 		above := indent + color.New(color.FgHiBlack).Sprint("┈┈┈")
-		center := indent + color.New(color.FgHiBlack, color.Italic).Sprintf("… (%d lines truncated) …", truncatedCount)
+		center := indent + color.New(color.FgHiBlack, color.Italic).Sprintf("… (%d lines truncated, press CTRL-R to view) …", truncatedCount)
 		below := indent + color.New(color.FgHiBlack).Sprint("┈┈┈")
 
 		outLines = append(append(head, above, center, below), tail...)

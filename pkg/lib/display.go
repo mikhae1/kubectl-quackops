@@ -133,35 +133,11 @@ func CalculateContextPercentage(cfg *config.Config) float64 {
 }
 
 // FormatContextPrompt formats the prompt with context percentage
+// Shows: [▰▰▰▱▱▱▱▱] 38% ↑2.9k↓2.0k ❯
+// The progress bar and context info appear before the prompt chevron
 func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
-	percentage := CalculateContextPercentage(cfg)
-
-	// Choose color based on context usage
-	var contextColor *color.Color
-	if percentage < 50 {
-		contextColor = color.New(color.FgHiCyan)
-	} else if percentage < 80 {
-		contextColor = color.New(color.FgYellow)
-	} else {
-		contextColor = color.New(color.FgHiRed)
-	}
-
-	// Build compact context indicator with colored arrows and compact numbers
-	// Example: [3%|↑2.9k|↓2.0k]
-	leftBracket := color.New(color.FgHiBlack).Sprint("[")
-	rightBracket := color.New(color.FgHiBlack).Sprint("]")
-	pctStr := contextColor.Sprintf("%3.0f%%", percentage)
-	sep := color.New(color.FgHiBlack).Sprint("|")
-
-	tokenStr := ""
-	if cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0 {
-		up := color.New(color.FgHiBlue, color.Bold).Sprint("↑")
-		down := color.New(color.FgHiGreen, color.Bold).Sprint("↓")
-		outNum := contextColor.Sprint(FormatCompactNumber(cfg.LastOutgoingTokens))
-		inNum := contextColor.Sprint(FormatCompactNumber(cfg.LastIncomingTokens))
-		tokenStr = fmt.Sprintf("%s%s%s%s%s", sep, up, outNum, sep, down+inNum)
-	}
-	contextStr := fmt.Sprintf("%s%s%s%s", leftBracket, pctStr, tokenStr, rightBracket)
+	// Build the compact context indicator (left side, before prompt)
+	contextIndicator := FormatContextIndicator(cfg)
 
 	// Format the main prompt
 	var promptStr string
@@ -175,7 +151,133 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 		promptStr = color.New(color.Bold).Sprint("❯ ")
 	}
 
-	return contextStr + " " + promptStr
+	return contextIndicator + " " + promptStr
+}
+
+// FormatContextIndicator creates a compact context indicator
+// Format: [▰▰▰▱▱▱▱▱] 38% ↑2.9k ↓2.0k
+func FormatContextIndicator(cfg *config.Config) string {
+	percentage := CalculateContextPercentage(cfg)
+
+	// Choose color based on context usage
+	var contextColor *color.Color
+	if percentage < 50 {
+		contextColor = color.New(color.FgHiCyan)
+	} else if percentage < 80 {
+		contextColor = color.New(color.FgYellow)
+	} else {
+		contextColor = color.New(color.FgHiRed)
+	}
+
+	// Build progress bar
+	progressBar := FormatProgressBar(percentage, 5, contextColor)
+
+	// Build percentage string (2 digits)
+	pctStr := contextColor.Sprintf("%2.0f%%", percentage)
+
+	// Build token counts (compact, no decimals)
+	tokenStr := ""
+	if cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0 {
+		up := color.New(color.FgHiBlue, color.Bold).Sprint("↑")
+		down := color.New(color.FgHiGreen, color.Bold).Sprint("↓")
+		outNum := color.New(color.FgHiBlack).Sprint(formatCompact2Digit(cfg.LastOutgoingTokens))
+		inNum := color.New(color.FgHiBlack).Sprint(formatCompact2Digit(cfg.LastIncomingTokens))
+		tokenStr = fmt.Sprintf(" %s%s%s%s", up, outNum, down, inNum)
+	}
+
+	return fmt.Sprintf("%s%s%s", progressBar, pctStr, tokenStr)
+}
+
+// formatCompact2Digit formats numbers compactly with max 2 digits (no decimals)
+// Examples: 0 -> "0", 950 -> "950", 2910 -> "3k", 1200000 -> "1M"
+func formatCompact2Digit(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	sign := ""
+	n := value
+	if n < 0 {
+		sign = "-"
+		n = -n
+	}
+
+	var scaled float64
+	var suffix string
+
+	switch {
+	case n >= 1_000_000_000_000:
+		scaled = float64(n) / 1_000_000_000_000.0
+		suffix = "T"
+	case n >= 1_000_000_000:
+		scaled = float64(n) / 1_000_000_000.0
+		suffix = "B"
+	case n >= 1_000_000:
+		scaled = float64(n) / 1_000_000.0
+		suffix = "M"
+	case n >= 1_000:
+		scaled = float64(n) / 1_000.0
+		suffix = "k"
+	default:
+		return fmt.Sprintf("%s%d", sign, n)
+	}
+
+	// Round to nearest integer for compact display
+	rounded := int(scaled + 0.5)
+	return fmt.Sprintf("%s%d%s", sign, rounded, suffix)
+}
+
+// FormatProgressBar creates a visual progress bar for context usage
+// Uses ▰ for filled and ▱ for empty segments
+func FormatProgressBar(percentage float64, width int, barColor *color.Color) string {
+	if width <= 0 {
+		width = 8
+	}
+
+	filled := int((percentage / 100.0) * float64(width))
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+
+	leftBracket := color.New(color.FgHiBlack).Sprint("[")
+	rightBracket := color.New(color.FgHiBlack).Sprint("]")
+
+	var bar strings.Builder
+	bar.WriteString(leftBracket)
+
+	for i := 0; i < width; i++ {
+		if i < filled {
+			bar.WriteString(barColor.Sprint("▰"))
+		} else {
+			bar.WriteString(color.New(color.FgHiBlack).Sprint("▱"))
+		}
+	}
+
+	bar.WriteString(rightBracket)
+	return bar.String()
+}
+
+// visibleLen returns the visible length of a string, stripping ANSI escape codes
+func visibleLen(s string) int {
+	// Simple ANSI stripping: remove sequences starting with ESC[
+	inEscape := false
+	length := 0
+	for _, r := range s {
+		if r == '\033' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		length++
+	}
+	return length
 }
 
 // FormatEditPrompt returns the edit-mode prompt string without any token counter
@@ -270,63 +372,119 @@ func FormatInputWithPrompt(input string, promptName string, serverName string) s
 	return input[:idx] + highlighted + input[idx+len(promptPath):]
 }
 
-// CoolClearEffect creates an animated clearing effect for the terminal
+// CoolClearEffect creates a snappy glitch-style clear animation
 func CoolClearEffect(cfg *config.Config) {
 	if cfg.DisableAnimation {
-		// Just clear immediately if animations are disabled
-		fmt.Print("\033[2J\033[H")
+		// Clear screen and scrollback buffer
+		fmt.Print("\033[2J\033[3J\033[H")
 		return
 	}
 
-	// Get actual terminal dimensions
 	width, height := getTerminalSize()
+	if width <= 0 || height <= 0 {
+		fmt.Print("\033[2J\033[3J\033[H")
+		return
+	}
 
-	// Colors for the effect
-	cyan := color.New(color.FgHiCyan)
-	blue := color.New(color.FgHiBlue)
-	magenta := color.New(color.FgHiMagenta)
-	colors := []*color.Color{cyan, blue, magenta}
+	// Constants for the animation
+	renderWidth := width
+	if renderWidth > 180 {
+		renderWidth = 180
+	}
 
-	// Matrix-style clearing effect
-	fmt.Print("\033[2J") // Clear screen first
+	// Glitch characters
+	glitchChars := []string{"▓", "▒", "░", "<", ">", "/", "\\", "!", "?", "#", "%", "&", "_", "-", "+", "="}
+	rand.Seed(time.Now().UnixNano())
 
-	// Animate clearing from top to bottom with colored "dust"
-	for row := 0; row < height; row++ {
-		fmt.Printf("\033[%d;1H", row+1) // Move cursor to row
+	// Phase 1: Heavy Glitch (very fast)
+	// Randomly fill lines with glitch characters to create noise
+	fmt.Print("\033[?25l") // Hide cursor
+	defer fmt.Print("\033[?25h")
 
-		// Create a line of random characters fading away
-		for col := 0; col < width; col++ {
-			if rand.Float32() < 0.3 { // 30% chance to show a character
-				char := []rune("⠁⠂⠄⡀⢀⠠⠐⠈")[rand.Intn(8)] // Braille dots for effect
-				c := colors[rand.Intn(len(colors))]
-				fmt.Print(c.Sprint(string(char)))
+	// Pre-generate some random noise lines
+	noiseLines := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		var b strings.Builder
+		for j := 0; j < renderWidth; j++ {
+			if rand.Float32() < 0.3 {
+				b.WriteString(glitchChars[rand.Intn(len(glitchChars))])
 			} else {
-				fmt.Print(" ")
+				b.WriteString(" ")
 			}
 		}
-
-		time.Sleep(time.Millisecond * 25) // Speed of the effect
+		noiseLines[i] = b.String()
 	}
 
-	// Final clear and show completion message with duck
-	fmt.Print("\033[2J\033[H")
-
-	// Show a quick "CLEARED" message with duck centered on screen
-	duck := color.New(color.FgHiYellow)
-	cleared := color.New(color.FgHiGreen, color.Bold)
-
-	// Center the message
-	centerRow := height / 2
-	message := "🦆 CLEARED 🦆"
-	centerCol := (width - len(message)) / 2
-	if centerCol < 0 {
-		centerCol = 0
+	// Flash noise for a brief moment
+	colors := []*color.Color{
+		color.New(color.FgHiCyan),
+		color.New(color.FgHiMagenta),
+		color.New(color.FgHiWhite),
+		color.New(color.FgHiRed), // Add red for that "critical" glitch feel
 	}
 
-	fmt.Printf("\033[%d;%dH", centerRow, centerCol)
-	fmt.Print(duck.Sprint("🦆 ") + cleared.Sprint("CLEARED") + duck.Sprint(" 🦆"))
-	time.Sleep(time.Millisecond * 500)
+	// Frame count for the glitch phase
+	glitchFrames := 5
+	for i := 0; i < glitchFrames; i++ {
+		fmt.Print("\033[H") // Reset cursor to top-left
+		for r := 0; r < height; r++ {
+			if rand.Float32() < 0.4 { // Only draw on some lines
+				lineIdx := rand.Intn(len(noiseLines))
+				col := colors[rand.Intn(len(colors))]
+				// Shift line randomly
+				start := rand.Intn(renderWidth / 2)
+				lineBody := noiseLines[lineIdx]
+				if start < len(lineBody) {
+					lineBody = lineBody[start:]
+				}
+				fmt.Printf("\033[%d;1H%s", r+1, col.Sprint(lineBody))
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
-	// Final clear
-	fmt.Print("\033[2J\033[H")
+	// Phase 2: Thinning Lines (Cleanup)
+	// Rapidly wipe with thin horizontal lines that disappear
+	thinChars := []string{"─", " ", " ", " "} // Mostly empty to "thin out"
+
+	wipeFrames := 8
+	for i := 0; i < wipeFrames; i++ {
+		fmt.Print("\033[H")
+		for r := 0; r < height; r++ {
+			// Probability of drawing a line decreases with frames
+			if rand.Float32() < (0.8 - float32(i)*0.1) {
+				var b strings.Builder
+				widthFrac := renderWidth - (i * (renderWidth / wipeFrames)) // Line gets shorter
+				if widthFrac < 0 {
+					widthFrac = 0
+				}
+
+				for j := 0; j < widthFrac; j++ {
+					b.WriteString(thinChars[rand.Intn(len(thinChars))])
+				}
+				col := color.New(color.FgHiBlue) // Cool blue for the wipe
+				fmt.Printf("\033[%d;1H%s", r+1, col.Sprint(b.String()))
+			} else {
+				// Clear the line
+				fmt.Printf("\033[%d;1H\033[2K", r+1)
+			}
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+
+	// Phase 3: Empty Frame (ensure clean history)
+	// Explicitly clear all lines to remove any "leftovers" from the buffer
+	// before the final screen wipe. This helps prevents artifacts in scrollback.
+	fmt.Print("\033[H")
+	for r := 0; r < height; r++ {
+		fmt.Printf("\033[%d;1H\033[2K", r+1)
+	}
+	// Small pause to let the empty frame register
+	time.Sleep(10 * time.Millisecond)
+
+	// Final Clean: Clear screen and scrollback buffer
+	// \033[2J clears the entire screen
+	// \033[3J clears the scrollback buffer (extension supported by many terminals like iTerm2, xterm, VSCode)
+	// \033[H moves cursor to home
+	fmt.Print("\033[2J\033[3J\033[H")
 }

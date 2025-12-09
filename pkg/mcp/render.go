@@ -60,23 +60,23 @@ func FormatToolCallVerbose(toolName string, args map[string]any, output string) 
 	}
 
 	var result strings.Builder
-	
+
 	// Print tool call header similar to diagnostic command format
 	result.WriteString(bold("\n$ mcp_tool_call " + toolName))
 	result.WriteString("\n")
-	
+
 	// Print args section with config colors
 	result.WriteString(dim("-- ") + config.Colors.Label.Sprint("Args:") + "\n")
 	for _, line := range strings.Split(argJSON, "\n") {
-		result.WriteString(dim("-- " + line) + "\n")
+		result.WriteString(dim("-- "+line) + "\n")
 	}
-	
+
 	// Print output section with config colors
 	result.WriteString(dim("-- ") + config.Colors.Label.Sprint("Output:") + "\n")
 	for _, line := range strings.Split(output, "\n") {
-		result.WriteString(dim("-- " + line) + "\n")
+		result.WriteString(dim("-- "+line) + "\n")
 	}
-	
+
 	return result.String()
 }
 
@@ -87,3 +87,50 @@ func RenderToolCallBlock(toolName string, args map[string]any, output string) {
 	fmt.Fprint(os.Stdout, block)
 }
 
+// RenderSessionEvent formats a session event for display.
+// If verbose is true, tool outputs are shown in full using FormatToolCallVerbose.
+// If verbose is false, tool outputs are formatted using FormatToolCallBlock (potentially truncated).
+func RenderSessionEvent(event config.SessionEvent, verbose bool, cfg *config.Config) string {
+	var sb strings.Builder
+
+	// Format timestamp
+	ts := event.Timestamp.Format("15:04:05")
+	sb.WriteString(config.Colors.Dim.Sprintf("[%s] ", ts))
+
+	// Format user prompt
+	sb.WriteString(config.Colors.Primary.Sprintf("❯ %s\n", event.UserPrompt))
+
+	// Format tool calls
+	for _, tc := range event.ToolCalls {
+		if verbose {
+			sb.WriteString(FormatToolCallVerbose(tc.Name, tc.Args, tc.Result))
+		} else {
+			sb.WriteString(FormatToolCallBlock(tc.Name, tc.Args, tc.Result))
+		}
+	}
+
+	// Format AI response
+	if event.AIResponse != "" {
+		if !verbose && cfg.DisableMarkdownFormat {
+			sb.WriteString(event.AIResponse + "\n")
+		} else {
+			// In verbose/history mode, we want to visually separate the response
+			// Re-use formatting logic or just print plain if simple
+			// For now, let's keep it simple but clear
+			sb.WriteString("\n")
+			if !cfg.DisableMarkdownFormat {
+				// We can't easily perform the full markdown rendering here without a writer,
+				// so we'll approximate or just print plain text if not streaming.
+				// Since this is for history/repaint, plain text with some color is safer/faster
+				// or we could use the GLAM renderer if we extracted it.
+				// For now, let's print it directly.
+				sb.WriteString(event.AIResponse)
+			} else {
+				sb.WriteString(event.AIResponse)
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
+}

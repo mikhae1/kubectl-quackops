@@ -87,7 +87,14 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 	var mcpToolReserve int = 0
 	if cfg.MCPClientEnabled {
-		llmTools := mcp.DiscoverLangchainTools(cfg)
+		var llmTools []llms.Tool
+		if cfg.MCPPromptServer != "" {
+			// When a prompt is active, filter tools to the same server as the prompt
+			llmTools = mcp.DiscoverLangchainToolsForServer(cfg, cfg.MCPPromptServer)
+			logger.Log("info", "Filtering MCP tools for prompt server '%s'", cfg.MCPPromptServer)
+		} else {
+			llmTools = mcp.DiscoverLangchainTools(cfg)
+		}
 		if len(llmTools) > 0 {
 			generateOptions = append(generateOptions, llms.WithTools(llmTools))
 			generateOptions = append(generateOptions, llms.WithToolChoice("auto"))
@@ -149,9 +156,69 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	// So we disable streaming initially and re-enable it for final responses
 	useStreaming := stream && !cfg.MCPClientEnabled
 
+	// Track tool calls for session history
+	var sessionToolCalls []config.ToolCallData
+
+	maxRetries := cfg.Retries
+	var responseContent string
+	var bufferedToolBlocks []string
+
+	// onCtrlR is called when the user presses Ctrl-R during a blocking operation.
+	// It clears the screen and redraws the full session history + current partial state.
+	onCtrlR := func() {
+		// 1. Hide spinner temporarily
+		wasActive := spinnerManager.IsActive()
+		var currentSpinnerMsg string
+		var currentSpinnerType lib.SpinnerType
+		if wasActive {
+			if ctx := spinnerManager.GetContext(); ctx != nil {
+				currentSpinnerMsg = ctx.Message
+				currentSpinnerType = ctx.Type
+			}
+			spinnerManager.Hide()
+		}
+
+		// 2. Clear screen with cool effect
+		lib.CoolClearEffect(cfg)
+
+		// 3. Print full history (verbose)
+		if len(cfg.SessionHistory) > 0 {
+			fmt.Println(config.Colors.Accent.Sprint("Session History:"))
+			for _, event := range cfg.SessionHistory {
+				fmt.Print(mcp.RenderSessionEvent(event, true, cfg))
+				fmt.Println(config.Colors.Dim.Sprint(strings.Repeat("-", 40)))
+			}
+		}
+
+		// 4. Print current partial turn
+		// We construct a temporary event representing the current state
+		currentEvent := config.SessionEvent{
+			Timestamp:  time.Now(),
+			UserPrompt: userPrompt,
+			ToolCalls:  sessionToolCalls,
+			// AIResponse is not yet available/complete, but we can show what we have
+			AIResponse: responseContent,
+		}
+
+		// If we have content displayed already, use that
+		if contentAlreadyDisplayed {
+			currentEvent.AIResponse = displayedContent
+		}
+
+		fmt.Println(config.Colors.Accent.Sprint("Current Interaction:"))
+		fmt.Print(mcp.RenderSessionEvent(currentEvent, true, cfg))
+
+		// 5. Restore spinner
+		if wasActive {
+			// Add a small delay/newline to separate history from spinner?
+			// RenderSessionEvent ends with newline usually.
+			spinnerManager.Show(currentSpinnerType, currentSpinnerMsg)
+		}
+	}
+
 	// startEscBreaker starts a raw-input watcher to cancel the context on standalone ESC.
 	startEscBreaker := func(cancel func()) func() {
-		return lib.StartEscWatcher(cancel, spinnerManager, cfg)
+		return lib.StartEscWatcher(cancel, spinnerManager, cfg, onCtrlR)
 	}
 
 	if useStreaming {
@@ -176,9 +243,7 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 		defer cancelSpinner()
 	}
 
-	maxRetries := cfg.Retries
-	var responseContent string
-	var bufferedToolBlocks []string
+	// sessionToolCalls declared above
 
 	resp, responseContent, err := generateWithRetries(cfg, spinnerManager, client, messages, generateOptions, message, outgoingTokens, maxRetries, startEscBreaker)
 	if err != nil {
@@ -196,7 +261,9 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 			// Display content if available and not already displayed
 			if choice.Content != "" && !contentAlreadyDisplayed {
-				stopOnce.Do(func() { hideSpinnerWithLeadingNewline(spinnerManager) })
+				// Hide spinner before displaying content - can't use stopOnce because
+				// spinner is re-shown for each LLM call in the MCP tool loop
+				hideSpinnerWithLeadingNewline(spinnerManager)
 				if !cfg.SuppressContentPrint {
 					printContentFormatted(cfg, choice.Content, false)
 				}
@@ -267,6 +334,13 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						logger.Log("info", "MCP tool %s executed successfully, result length: %d", tc.FunctionCall.Name, len(toolResult))
 					}
 
+					// Record tool call for history
+					sessionToolCalls = append(sessionToolCalls, config.ToolCallData{
+						Name:   tc.FunctionCall.Name,
+						Args:   args,
+						Result: toolResult,
+					})
+
 					// Update response timestamp for throttling calculations after MCP tool execution
 					updateResponseTime()
 
@@ -280,6 +354,9 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 					if useStreaming {
 						bufferedToolBlocks = append(bufferedToolBlocks, block)
 					} else {
+						// Hide spinner before printing tool block to avoid visual overlap
+						// Note: Can't use stopOnce here because spinner is re-shown for each LLM call
+						hideSpinnerWithLeadingNewline(spinnerManager)
 						fmt.Fprint(os.Stdout, block)
 					}
 
@@ -353,6 +430,22 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 			}
 		}
 	}
+
+	// Record session event
+	if !history {
+		// Only record if history is disabled (meaning this is a direct interaction, not a recursive one?)
+		// Wait, history param usually means "add to LLM context history".
+		// We want to record the SESSION interacton regardless of LLM context strategy.
+		// Actually, standard chat uses history=true.
+	}
+
+	// Always record the session event
+	cfg.SessionHistory = append(cfg.SessionHistory, config.SessionEvent{
+		Timestamp:  time.Now(),
+		UserPrompt: userPrompt,
+		ToolCalls:  sessionToolCalls,
+		AIResponse: responseContent,
+	})
 
 	return responseContent, nil
 }

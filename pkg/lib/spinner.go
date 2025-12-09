@@ -362,6 +362,10 @@ func (sm *SpinnerManager) Hide() {
 			duration := time.Since(sm.context.startTime)
 			logger.Log("debug", "Stopped %v spinner after %v: %s",
 				sm.context.Type, duration, sm.context.Message)
+			// Cancel the context to stop the animation goroutine
+			if sm.context.cancel != nil {
+				sm.context.cancel()
+			}
 		}
 
 		sm.activeSpinner = nil

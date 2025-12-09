@@ -38,8 +38,24 @@ type SlashCommand struct {
 	Description string   // Command description
 }
 
+// SessionEvent represents a single interaction in the session history
+type SessionEvent struct {
+	Timestamp  time.Time
+	UserPrompt string
+	ToolCalls  []ToolCallData
+	AIResponse string
+}
+
+// ToolCallData represents a recorded tool call
+type ToolCallData struct {
+	Name   string
+	Args   map[string]any
+	Result string
+}
+
 type Config struct {
-	ChatMessages []llms.ChatMessage
+	ChatMessages   []llms.ChatMessage
+	SessionHistory []SessionEvent
 
 	AllowedKubectlCmds []string
 	BlockedKubectlCmds []string
@@ -103,12 +119,21 @@ type Config struct {
 	// Format: prompt name without leading slash (e.g., "code-mode")
 	SelectedPrompt string
 
+	// MCPPromptServer tracks the server of the currently selected MCP prompt
+	// Used to filter tools when a prompt is active
+	MCPPromptServer string
+
 	// Diagnostics toggles and knobs
-	EnableBaseline      bool
-	EventsWindowMinutes int
-	EventsWarningsOnly  bool
-	LogsTail            int
-	LogsAllContainers   bool
+	EnableBaseline          bool
+	BaselineLevel           string // "minimal", "standard", "comprehensive"
+	BaselineIncludeMetrics  bool   // Include pod/node metrics if available
+	BaselineNamespaceFilter string // Comma-separated namespaces (empty = all)
+	EnablePriorityScoring   bool   // Add priority field to findings
+	MaxFindingsPerCategory  int    // Limit findings per category (0 = unlimited)
+	EventsWindowMinutes     int
+	EventsWarningsOnly      bool
+	LogsTail                int
+	LogsAllContainers       bool
 
 	// MCP client mode
 	MCPClientEnabled bool
@@ -346,6 +371,11 @@ func LoadConfig() *Config {
 		StoredUserCmdResults:  []CmdRes{},
 		// Diagnostics toggles
 		EnableBaseline:           getEnvArg("QU_ENABLE_BASELINE", true).(bool),
+		BaselineLevel:            getEnvArg("QU_BASELINE_LEVEL", "minimal").(string),
+		BaselineIncludeMetrics:   getEnvArg("QU_BASELINE_INCLUDE_METRICS", true).(bool),
+		BaselineNamespaceFilter:  getEnvArg("QU_BASELINE_NAMESPACE_FILTER", "").(string),
+		EnablePriorityScoring:    getEnvArg("QU_ENABLE_PRIORITY_SCORING", true).(bool),
+		MaxFindingsPerCategory:   getEnvArg("QU_MAX_FINDINGS_PER_CATEGORY", 0).(int),
 		EventsWindowMinutes:      getEnvArg("QU_EVENTS_WINDOW_MINUTES", 60).(int),
 		EventsWarningsOnly:       getEnvArg("QU_EVENTS_WARN_ONLY", true).(bool),
 		LogsTail:                 getEnvArg("QU_LOGS_TAIL", 200).(int),
@@ -935,7 +965,7 @@ func defaultSlashCommands() []SlashCommand {
 			Description: "Reset conversation context",
 		},
 		{
-			Commands:    []string{"/clear", "/clean"},
+			Commands:    []string{"/clear"},
 			Primary:     "/clear",
 			Description: "Clear context and screen",
 		},
@@ -958,6 +988,11 @@ func defaultSlashCommands() []SlashCommand {
 			Commands:    []string{"/prompts"},
 			Primary:     "/prompts",
 			Description: "List MCP prompts",
+		},
+		{
+			Commands:    []string{"/history"},
+			Primary:     "/history",
+			Description: "Show full session history",
 		},
 		{
 			Commands:    []string{"/bye", "/exit", "/quit", "/q"},

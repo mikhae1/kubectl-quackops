@@ -12,6 +12,10 @@ on:
         description: 'Version to release (e.g., v0.1.0 or v0.1.0-beta)'
         required: true
         default: 'v1.0.0'
+      target_branch:
+        description: 'Branch to push Krew manifest updates to'
+        required: false
+        default: 'master'
       release_notes:
         description: 'Manual release notes (optional)'
         required: false
@@ -99,6 +103,191 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-krew-manifest:
+    runs-on: ubuntu-latest
+    needs: [goreleaser]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: master
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Download checksums from release
+        run: |
+          curl -sSL -O "https://github.com/${{ github.repository }}/releases/download/${VERSION}/checksums.txt"
+
+      - name: Extract platform SHAs
+        id: shas
+        run: |
+          set -euo pipefail
+          sha_linux_amd64=$(awk '/linux-amd64/ {print $1}' checksums.txt)
+          sha_linux_arm64=$(awk '/linux-arm64/ {print $1}' checksums.txt)
+          sha_darwin_amd64=$(awk '/darwin-amd64/ {print $1}' checksums.txt)
+          sha_darwin_arm64=$(awk '/darwin-arm64/ {print $1}' checksums.txt)
+          echo "sha_linux_amd64=${sha_linux_amd64}" >> $GITHUB_OUTPUT
+          echo "sha_linux_arm64=${sha_linux_arm64}" >> $GITHUB_OUTPUT
+          echo "sha_darwin_amd64=${sha_darwin_amd64}" >> $GITHUB_OUTPUT
+          echo "sha_darwin_arm64=${sha_darwin_arm64}" >> $GITHUB_OUTPUT
+
+      - name: Update plugins/quackops.yaml
+        run: |
+          mkdir -p plugins
+          cat > plugins/quackops.yaml <<EOF
+          apiVersion: krew.googlecontainertools.github.com/v1alpha2
+          kind: Plugin
+          metadata:
+            name: quackops
+          spec:
+            version: ${VERSION}
+            homepage: https://github.com/${{ github.repository }}
+            shortDescription: AI-powered kubectl plugin for Kubernetes troubleshooting
+            description: |
+              QuackOps is a kubectl plugin that opens an interactive AI assistant to
+              help you diagnose and resolve Kubernetes issues. It keeps session
+              context, can suggest commands, and supports local or cloud LLM providers.
+            platforms:
+            - selector:
+                matchLabels:
+                  os: linux
+                  arch: amd64
+              uri: https://github.com/${{ github.repository }}/releases/download/${VERSION}/kubectl-quackops-linux-amd64.tar.gz
+              sha256: ${{ steps.shas.outputs.sha_linux_amd64 }}
+              bin: kubectl-quackops
+            - selector:
+                matchLabels:
+                  os: linux
+                  arch: arm64
+              uri: https://github.com/${{ github.repository }}/releases/download/${VERSION}/kubectl-quackops-linux-arm64.tar.gz
+              sha256: ${{ steps.shas.outputs.sha_linux_arm64 }}
+              bin: kubectl-quackops
+            - selector:
+                matchLabels:
+                  os: darwin
+                  arch: amd64
+              uri: https://github.com/${{ github.repository }}/releases/download/${VERSION}/kubectl-quackops-darwin-amd64.tar.gz
+              sha256: ${{ steps.shas.outputs.sha_darwin_amd64 }}
+              bin: kubectl-quackops
+            - selector:
+                matchLabels:
+                  os: darwin
+                  arch: arm64
+              uri: https://github.com/${{ github.repository }}/releases/download/${VERSION}/kubectl-quackops-darwin-arm64.tar.gz
+              sha256: ${{ steps.shas.outputs.sha_darwin_arm64 }}
+              bin: kubectl-quackops
+          EOF
+
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plugins/quackops.yaml
+          if git diff --cached --quiet; then
+            echo "No manifest changes detected; skipping commit."
+            exit 0
+          fi
+          git commit -m "chore: update krew manifest for ${VERSION}"
+          git push origin HEAD:master
+
+  update-krew-manifest-manual:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.target_branch }}
+
+      - name: Set version from input
+        run: echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+
+      - name: Download checksums from release
+        run: |
+          curl -sSL -O "https://github.com/${{ github.repository }}/releases/download/${VERSION}/checksums.txt"
+
+      - name: Extract platform SHAs
+        id: shas_manual
+        run: |
+          set -euo pipefail
+          sha_linux_amd64=$(awk '/linux-amd64/ {print $1}' checksums.txt)
+          sha_linux_arm64=$(awk '/linux-arm64/ {print $1}' checksums.txt)
+          sha_darwin_amd64=$(awk '/darwin-amd64/ {print $1}' checksums.txt)
+          sha_darwin_arm64=$(awk '/darwin-arm64/ {print $1}' checksums.txt)
+          echo "sha_linux_amd64=${sha_linux_amd64}" >> $GITHUB_OUTPUT
+          echo "sha_linux_arm64=${sha_linux_arm64}" >> $GITHUB_OUTPUT
+          echo "sha_darwin_amd64=${sha_darwin_amd64}" >> $GITHUB_OUTPUT
+          echo "sha_darwin_arm64=${sha_darwin_arm64}" >> $GITHUB_OUTPUT
+
+      - name: Update plugins/quackops.yaml
+        run: |
+          mkdir -p plugins
+          cat > plugins/quackops.yaml <<EOF
+          apiVersion: krew.googlecontainertools.github.com/v1alpha2
+          kind: Plugin
+          metadata:
+            name: quackops
+          spec:
+            version: ${VERSION}
+            homepage: https://github.com/${{ github.repository }}
+            shortDescription: AI-powered kubectl plugin for Kubernetes troubleshooting
+            description: |
+              QuackOps is a kubectl plugin that opens an interactive AI assistant to
+              help you diagnose and resolve Kubernetes issues. It keeps session
+              context, can suggest commands, and supports local or cloud LLM providers.
+            platforms:
+            - selector:
+                matchLabels:
+                  os: linux
+                  arch: amd64
+              uri: https://github.com/${{ github.repository }}/releases/download/${VERSION}/kubectl-quackops-linux-amd64.tar.gz
+              sha256: ${{ steps.shas_manual.outputs.sha_linux_amd64 }}
+              bin: kubectl-quackops
+            - selector:
+                matchLabels:
+                  os: linux
+                  arch: arm64
+              uri: https://github.com/${{ github.repository }}/releases/download/${VERSION}/kubectl-quackops-linux-arm64.tar.gz
+              sha256: ${{ steps.shas_manual.outputs.sha_linux_arm64 }}
+              bin: kubectl-quackops
+            - selector:
+                matchLabels:
+                  os: darwin
+                  arch: amd64
+              uri: https://github.com/${{ github.repository }}/releases/download/${VERSION}/kubectl-quackops-darwin-amd64.tar.gz
+              sha256: ${{ steps.shas_manual.outputs.sha_darwin_amd64 }}
+              bin: kubectl-quackops
+            - selector:
+                matchLabels:
+                  os: darwin
+                  arch: arm64
+              uri: https://github.com/${{ github.repository }}/releases/download/${VERSION}/kubectl-quackops-darwin-arm64.tar.gz
+              sha256: ${{ steps.shas_manual.outputs.sha_darwin_arm64 }}
+              bin: kubectl-quackops
+          EOF
+
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plugins/quackops.yaml
+          if git diff --cached --quiet; then
+            echo "No manifest changes detected; skipping commit."
+            exit 0
+          fi
+          git commit -m "chore: update krew manifest for ${VERSION}"
+          git push origin HEAD:${{ github.event.inputs.target_branch }}
 
   generate-changelog:
     needs: [goreleaser]

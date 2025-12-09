@@ -3,7 +3,7 @@ module github.com/mikhae1/kubectl-quackops
 go 1.24.6
 
 require (
-	github.com/chzyer/readline v1.5.1
+	github.com/ergochat/readline v0.1.3
 	github.com/fatih/color v1.18.0
 	github.com/google/jsonschema-go v0.3.0
 	github.com/modelcontextprotocol/go-sdk v1.1.0

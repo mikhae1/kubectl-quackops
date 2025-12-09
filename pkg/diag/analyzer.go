@@ -11,7 +11,41 @@ type Finding struct {
 	Kind     string `json:"kind"`
 	ID       string `json:"id"`
 	Severity string `json:"severity"` // info|warn|error
+	Priority int    `json:"priority"` // 1-10, higher = more urgent (0 = not set)
 	Summary  string `json:"summary"`
+}
+
+// assignPriority calculates priority score (1-10) based on severity and kind
+// Higher scores = more urgent
+func assignPriority(severity string, kind string, issue string) int {
+	base := 0
+	switch strings.ToLower(severity) {
+	case "error":
+		base = 7
+	case "warn":
+		base = 4
+	case "info":
+		base = 2
+	}
+
+	// Boost priority for critical issues
+	if strings.Contains(strings.ToLower(issue), "crashloopbackoff") {
+		return 10 // Highest priority
+	}
+	if strings.Contains(strings.ToLower(issue), "imagepull") {
+		return 9
+	}
+	if kind == "Node" && strings.Contains(issue, "NotReady") {
+		return 9 // Node failures are critical
+	}
+	if kind == "Service" && strings.Contains(issue, "zero endpoints") {
+		return 8 // Service connectivity issues are high priority
+	}
+	if kind == "APIServer" {
+		return 8 // API server health issues are critical
+	}
+
+	return base
 }
 
 // AnalyzePods inspects `kubectl get pods -A -o json` output for common issues.
@@ -171,21 +205,17 @@ func AnalyzeServices(servicesJSON, endpointsJSON, endpointSlicesJSON string) []F
 	for _, s := range svcs.Items {
 		nsName := s.Metadata.Namespace + "/" + s.Metadata.Name
 		if len(s.Spec.Selector) == 0 {
-			// Headless or externalName could be legitimate; mark informational
-			findings = append(findings, Finding{
-				Kind:     "Service",
-				ID:       nsName,
-				Severity: "info",
-				Summary:  "service has no selector (may be headless/external)",
-			})
+			// Headless or externalName services are legitimate; skip them
 			continue
 		}
 		if !hasAddresses[nsName] {
+			summary := "service has zero endpoints; check selectors and pod readiness"
 			findings = append(findings, Finding{
 				Kind:     "Service",
 				ID:       nsName,
 				Severity: "error",
-				Summary:  "service has zero endpoints; check selectors and pod readiness",
+				Priority: assignPriority("error", "Service", summary),
+				Summary:  summary,
 			})
 		}
 	}
@@ -232,13 +262,34 @@ func AnalyzeNodes(nodesJSON string) []Finding {
 			}
 		}
 		if notReady {
-			f = append(f, Finding{Kind: "Node", ID: n.Metadata.Name, Severity: "error", Summary: "NotReady"})
+			summary := "NotReady"
+			f = append(f, Finding{
+				Kind:     "Node",
+				ID:       n.Metadata.Name,
+				Severity: "error",
+				Priority: assignPriority("error", "Node", summary),
+				Summary:  summary,
+			})
 		}
 		if memPressure {
-			f = append(f, Finding{Kind: "Node", ID: n.Metadata.Name, Severity: "warn", Summary: "MemoryPressure"})
+			summary := "MemoryPressure"
+			f = append(f, Finding{
+				Kind:     "Node",
+				ID:       n.Metadata.Name,
+				Severity: "warn",
+				Priority: assignPriority("warn", "Node", summary),
+				Summary:  summary,
+			})
 		}
 		if diskPressure {
-			f = append(f, Finding{Kind: "Node", ID: n.Metadata.Name, Severity: "warn", Summary: "DiskPressure"})
+			summary := "DiskPressure"
+			f = append(f, Finding{
+				Kind:     "Node",
+				ID:       n.Metadata.Name,
+				Severity: "warn",
+				Priority: assignPriority("warn", "Node", summary),
+				Summary:  summary,
+			})
 		}
 	}
 	return f
@@ -275,7 +326,13 @@ func AnalyzeHPAs(hpaJSON string) []Finding {
 				if c.Reason != "" {
 					msg += ": " + c.Reason
 				}
-				f = append(f, Finding{Kind: "HPA", ID: id, Severity: "warn", Summary: msg})
+				f = append(f, Finding{
+					Kind:     "HPA",
+					ID:       id,
+					Severity: "warn",
+					Priority: assignPriority("warn", "HPA", msg),
+					Summary:  msg,
+				})
 			}
 		}
 	}
@@ -298,7 +355,14 @@ func AnalyzeAPIServerHealth(raw string, kind string) []Finding {
 	if len(failing) == 0 {
 		return nil
 	}
-	return []Finding{{Kind: "APIServer", ID: kind, Severity: "warn", Summary: strings.Join(failing, "; ")}}
+	summary := strings.Join(failing, "; ")
+	return []Finding{{
+		Kind:     "APIServer",
+		ID:       kind,
+		Severity: "warn",
+		Priority: assignPriority("warn", "APIServer", summary),
+		Summary:  summary,
+	}}
 }
 
 // FormatFindings returns a compact human-readable list for inclusion in RAG prompts.

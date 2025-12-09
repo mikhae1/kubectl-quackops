@@ -178,6 +178,22 @@ $ kubectl quackops 'analyze the connection between my failing deployments and th
 ## 📦 Installation
 
 QuackOps is packaged as a kubectl plugin, which is a standalone executable file whose name begins with `kubectl-`.
+
+### Install via Krew (recommended)
+
+1. Make sure [Krew](https://krew.sigs.k8s.io/docs/user-guide/setup/install/) is installed.
+2. Add the custom index and install:
+   ```sh
+   kubectl krew index add mikahe1 https://github.com/mikhae1/kubectl-quackops
+   kubectl krew install mikahe1/quackops
+   ```
+3. Verify:
+   ```sh
+   kubectl quackops --help
+   ```
+
+### Manual install (tarball)
+
 You can install it by moving the executable file to any directory included in your `$PATH`.
 
 1. **Download the QuackOps binary**
@@ -428,6 +444,8 @@ QU_MCP_CLIENT=true
 | `QU_KUBECTL_BINARY` | string | `kubectl` | Path to the kubectl binary |
 | `QU_COMMAND_PREFIX` | string | `$` | Single-character prefix to enter command mode and mark shell commands |
 | `QU_ENABLE_BASELINE` | bool | `true` | Enable baseline diagnostic pack before LLM |
+| `QU_BASELINE_LEVEL` | string | `minimal` | Baseline diagnostic level: minimal (13 commands), standard (+ workloads), comprehensive (+ metrics/policies) |
+| `QU_BASELINE_NAMESPACE_FILTER` | string | `` | Comma-separated namespaces for baseline commands (empty = all namespaces) |
 | `QU_EVENTS_WINDOW_MINUTES` | int | `60` | Events time window in minutes for summarization |
 | `QU_EVENTS_WARN_ONLY` | bool | `true` | Include only Warning events in summaries |
 | `QU_LOGS_TAIL` | int | `200` | Tail lines for log aggregation when triggered by playbooks |
