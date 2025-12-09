@@ -38,8 +38,24 @@ type SlashCommand struct {
 	Description string   // Command description
 }
 
+// SessionEvent represents a single interaction in the session history
+type SessionEvent struct {
+	Timestamp  time.Time
+	UserPrompt string
+	ToolCalls  []ToolCallData
+	AIResponse string
+}
+
+// ToolCallData represents a recorded tool call
+type ToolCallData struct {
+	Name   string
+	Args   map[string]any
+	Result string
+}
+
 type Config struct {
-	ChatMessages []llms.ChatMessage
+	ChatMessages   []llms.ChatMessage
+	SessionHistory []SessionEvent
 
 	AllowedKubectlCmds []string
 	BlockedKubectlCmds []string
@@ -972,6 +988,11 @@ func defaultSlashCommands() []SlashCommand {
 			Commands:    []string{"/prompts"},
 			Primary:     "/prompts",
 			Description: "List MCP prompts",
+		},
+		{
+			Commands:    []string{"/history"},
+			Primary:     "/history",
+			Description: "Show full session history",
 		},
 		{
 			Commands:    []string{"/bye", "/exit", "/quit", "/q"},

@@ -3,6 +3,7 @@ package lib
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"strconv"
@@ -371,76 +372,119 @@ func FormatInputWithPrompt(input string, promptName string, serverName string) s
 	return input[:idx] + highlighted + input[idx+len(promptPath):]
 }
 
-// CoolClearEffect creates a quick neon sweep clear animation
+// CoolClearEffect creates a snappy glitch-style clear animation
 func CoolClearEffect(cfg *config.Config) {
 	if cfg.DisableAnimation {
-		fmt.Print("\033[2J\033[H")
+		// Clear screen and scrollback buffer
+		fmt.Print("\033[2J\033[3J\033[H")
 		return
 	}
 
 	width, height := getTerminalSize()
 	if width <= 0 || height <= 0 {
-		fmt.Print("\033[2J\033[H")
+		fmt.Print("\033[2J\033[3J\033[H")
 		return
 	}
 
+	// Constants for the animation
 	renderWidth := width
 	if renderWidth > 180 {
 		renderWidth = 180
 	}
 
-	palette := []*color.Color{
-		color.New(color.FgHiCyan),
-		color.New(color.FgHiMagenta),
-		color.New(color.FgHiBlue),
-		color.New(color.FgHiWhite),
-	}
-	shades := []string{"-", "=", "~", ":"}
+	// Glitch characters
+	glitchChars := []string{"▓", "▒", "░", "<", ">", "/", "\\", "!", "?", "#", "%", "&", "_", "-", "+", "="}
+	rand.Seed(time.Now().UnixNano())
 
-	lineCache := make([]string, len(shades))
-	for i, ch := range shades {
-		lineCache[i] = strings.Repeat(ch, renderWidth)
-	}
-
-	frames := 10
-	stripeHeight := height / 12
-	if stripeHeight < 1 {
-		stripeHeight = 1
-	}
-
-	fmt.Print("\033[2J\033[H\033[?25l")
+	// Phase 1: Heavy Glitch (very fast)
+	// Randomly fill lines with glitch characters to create noise
+	fmt.Print("\033[?25l") // Hide cursor
 	defer fmt.Print("\033[?25h")
 
-	for frame := 0; frame < frames; frame++ {
-		shift := (frame * 3) % renderWidth
-		fmt.Print("\033[H")
-
-		for row := 0; row < height; row++ {
-			band := (row / stripeHeight) % len(lineCache)
-			line := lineCache[band]
-			rowShift := (shift + row) % renderWidth
-			rotated := line[rowShift:] + line[:rowShift]
-			col := palette[(band+frame)%len(palette)]
-			fmt.Printf("\033[%d;1H%s", row+1, col.Sprint(rotated))
+	// Pre-generate some random noise lines
+	noiseLines := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		var b strings.Builder
+		for j := 0; j < renderWidth; j++ {
+			if rand.Float32() < 0.3 {
+				b.WriteString(glitchChars[rand.Intn(len(glitchChars))])
+			} else {
+				b.WriteString(" ")
+			}
 		}
-
-		time.Sleep(time.Millisecond * 16)
+		noiseLines[i] = b.String()
 	}
 
-	fmt.Print("\033[2J\033[H")
-
-	centerRow := height / 2
-	message := "🦆 CLEARED 🦆"
-	centerCol := (width - len(message)) / 2
-	if centerCol < 0 {
-		centerCol = 0
+	// Flash noise for a brief moment
+	colors := []*color.Color{
+		color.New(color.FgHiCyan),
+		color.New(color.FgHiMagenta),
+		color.New(color.FgHiWhite),
+		color.New(color.FgHiRed), // Add red for that "critical" glitch feel
 	}
 
-	accent := color.New(color.FgHiCyan, color.Bold)
-	glow := color.New(color.FgHiMagenta)
+	// Frame count for the glitch phase
+	glitchFrames := 5
+	for i := 0; i < glitchFrames; i++ {
+		fmt.Print("\033[H") // Reset cursor to top-left
+		for r := 0; r < height; r++ {
+			if rand.Float32() < 0.4 { // Only draw on some lines
+				lineIdx := rand.Intn(len(noiseLines))
+				col := colors[rand.Intn(len(colors))]
+				// Shift line randomly
+				start := rand.Intn(renderWidth / 2)
+				lineBody := noiseLines[lineIdx]
+				if start < len(lineBody) {
+					lineBody = lineBody[start:]
+				}
+				fmt.Printf("\033[%d;1H%s", r+1, col.Sprint(lineBody))
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
-	fmt.Printf("\033[%d;%dH%s%s%s", centerRow, centerCol, glow.Sprint("🦆 "), accent.Sprint("CLEARED"), glow.Sprint(" 🦆"))
-	time.Sleep(time.Millisecond * 260)
+	// Phase 2: Thinning Lines (Cleanup)
+	// Rapidly wipe with thin horizontal lines that disappear
+	thinChars := []string{"─", " ", " ", " "} // Mostly empty to "thin out"
 
-	fmt.Print("\033[2J\033[H")
+	wipeFrames := 8
+	for i := 0; i < wipeFrames; i++ {
+		fmt.Print("\033[H")
+		for r := 0; r < height; r++ {
+			// Probability of drawing a line decreases with frames
+			if rand.Float32() < (0.8 - float32(i)*0.1) {
+				var b strings.Builder
+				widthFrac := renderWidth - (i * (renderWidth / wipeFrames)) // Line gets shorter
+				if widthFrac < 0 {
+					widthFrac = 0
+				}
+
+				for j := 0; j < widthFrac; j++ {
+					b.WriteString(thinChars[rand.Intn(len(thinChars))])
+				}
+				col := color.New(color.FgHiBlue) // Cool blue for the wipe
+				fmt.Printf("\033[%d;1H%s", r+1, col.Sprint(b.String()))
+			} else {
+				// Clear the line
+				fmt.Printf("\033[%d;1H\033[2K", r+1)
+			}
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+
+	// Phase 3: Empty Frame (ensure clean history)
+	// Explicitly clear all lines to remove any "leftovers" from the buffer
+	// before the final screen wipe. This helps prevents artifacts in scrollback.
+	fmt.Print("\033[H")
+	for r := 0; r < height; r++ {
+		fmt.Printf("\033[%d;1H\033[2K", r+1)
+	}
+	// Small pause to let the empty frame register
+	time.Sleep(10 * time.Millisecond)
+
+	// Final Clean: Clear screen and scrollback buffer
+	// \033[2J clears the entire screen
+	// \033[3J clears the scrollback buffer (extension supported by many terminals like iTerm2, xterm, VSCode)
+	// \033[H moves cursor to home
+	fmt.Print("\033[2J\033[3J\033[H")
 }

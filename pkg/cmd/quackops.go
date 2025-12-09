@@ -253,6 +253,23 @@ func startChatSession(cfg *config.Config, args []string) error {
 			return 0, false // swallow ESC
 		}
 
+		// Toggle detailed output of last command with Ctrl-R (ASCII 18)
+		if r == 18 { // Ctrl-R
+			if rl != nil && len(cfg.SessionHistory) > 0 {
+				lastEvent := cfg.SessionHistory[len(cfg.SessionHistory)-1]
+
+				// Clear screen
+				lib.CoolClearEffect(cfg)
+
+				// Re-render the session event in verbose mode
+				fmt.Print(mcp.RenderSessionEvent(lastEvent, true, cfg))
+
+				// Refresh prompt
+				rl.Refresh()
+			}
+			return 0, false // swallow Ctrl-R
+		}
+
 		return r, true
 	}
 
@@ -582,6 +599,18 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
 		}
 		return true, "prompts"
+	case "/history":
+
+		if len(cfg.SessionHistory) == 0 {
+			fmt.Println(dim.Sprint("No history available for this session."))
+		} else {
+			fmt.Println(accent.Sprint("Session History:"))
+			for _, event := range cfg.SessionHistory {
+				fmt.Print(mcp.RenderSessionEvent(event, true, cfg))
+				fmt.Println(dim.Sprint(strings.Repeat("-", 40)))
+			}
+		}
+		return true, "history"
 	default:
 		// Check for MCP prompt with user query (e.g., "/code-mode check issues")
 		if cfg.MCPClientEnabled && strings.HasPrefix(lowered, "/") {
