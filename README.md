@@ -178,6 +178,22 @@ $ kubectl quackops 'analyze the connection between my failing deployments and th
 ## 📦 Installation
 
 QuackOps is packaged as a kubectl plugin, which is a standalone executable file whose name begins with `kubectl-`.
+
+### Install via Krew (recommended)
+
+1. Make sure [Krew](https://krew.sigs.k8s.io/docs/user-guide/setup/install/) is installed.
+2. Add the custom index and install:
+   ```sh
+   kubectl krew index add mikahe1 https://github.com/mikhae1/kubectl-quackops
+   kubectl krew install mikahe1/quackops
+   ```
+3. Verify:
+   ```sh
+   kubectl quackops --help
+   ```
+
+### Manual install (tarball)
+
 You can install it by moving the executable file to any directory included in your `$PATH`.
 
 1. **Download the QuackOps binary**
