@@ -1,0 +1,87 @@
+stages:
+  - release
+
+release_krew_manifest:
+  stage: release
+  image: alpine:3.20
+  variables:
+    KREW_INDEX_FILE: plugins/quackops.yaml
+    DEFAULT_BRANCH: master
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+([\-A-Za-z0-9._]+)?$/'
+      when: on_success
+    - when: never
+  before_script:
+    - set -euo pipefail
+    - apk add --no-cache curl git
+    - |
+      if [ -z "${GIT_PUSH_TOKEN:-}" ]; then
+        echo "Missing GIT_PUSH_TOKEN (token with write_repository scope) – set it in CI/CD variables." >&2
+        exit 1
+      fi
+  script:
+    - VERSION="${CI_COMMIT_TAG}"
+    - echo "Updating Krew manifest for ${VERSION}"
+    - curl -sSL -O "https://github.com/mikhae1/kubectl-quackops/releases/download/${VERSION}/checksums.txt"
+    - SHA_LINUX_AMD64=$(awk '/linux-amd64/ {print $1}' checksums.txt)
+    - SHA_LINUX_ARM64=$(awk '/linux-arm64/ {print $1}' checksums.txt)
+    - SHA_DARWIN_AMD64=$(awk '/darwin-amd64/ {print $1}' checksums.txt)
+    - SHA_DARWIN_ARM64=$(awk '/darwin-arm64/ {print $1}' checksums.txt)
+    - git fetch origin "${DEFAULT_BRANCH}"
+    - git checkout "${DEFAULT_BRANCH}"
+    - git reset --hard "origin/${DEFAULT_BRANCH}"
+    - mkdir -p plugins
+    - |
+      cat > "${KREW_INDEX_FILE}" <<EOF
+      apiVersion: krew.googlecontainertools.github.com/v1alpha2
+      kind: Plugin
+      metadata:
+        name: quackops
+      spec:
+        version: ${VERSION}
+        homepage: https://github.com/mikhae1/kubectl-quackops
+        shortDescription: AI-powered kubectl plugin for Kubernetes troubleshooting
+        description: |
+          QuackOps is a kubectl plugin that opens an interactive AI assistant to
+          help you diagnose and resolve Kubernetes issues. It keeps session
+          context, can suggest commands, and supports local or cloud LLM providers.
+        platforms:
+        - selector:
+            matchLabels:
+              os: linux
+              arch: amd64
+          uri: https://github.com/mikhae1/kubectl-quackops/releases/download/${VERSION}/kubectl-quackops-linux-amd64.tar.gz
+          sha256: ${SHA_LINUX_AMD64}
+          bin: kubectl-quackops
+        - selector:
+            matchLabels:
+              os: linux
+              arch: arm64
+          uri: https://github.com/mikhae1/kubectl-quackops/releases/download/${VERSION}/kubectl-quackops-linux-arm64.tar.gz
+          sha256: ${SHA_LINUX_ARM64}
+          bin: kubectl-quackops
+        - selector:
+            matchLabels:
+              os: darwin
+              arch: amd64
+          uri: https://github.com/mikhae1/kubectl-quackops/releases/download/${VERSION}/kubectl-quackops-darwin-amd64.tar.gz
+          sha256: ${SHA_DARWIN_AMD64}
+          bin: kubectl-quackops
+        - selector:
+            matchLabels:
+              os: darwin
+              arch: arm64
+          uri: https://github.com/mikhae1/kubectl-quackops/releases/download/${VERSION}/kubectl-quackops-darwin-arm64.tar.gz
+          sha256: ${SHA_DARWIN_ARM64}
+          bin: kubectl-quackops
+      EOF
+    - git add "${KREW_INDEX_FILE}"
+    - |
+      if git diff --cached --quiet; then
+        echo "Manifest already up to date; nothing to commit."
+        exit 0
+      fi
+    - git config user.email "ci@quackops.app"
+    - git config user.name "QuackOps CI"
+    - git commit -m "chore: update krew manifest for ${VERSION}"
+    - git push "https://${GIT_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" HEAD:${DEFAULT_BRANCH}

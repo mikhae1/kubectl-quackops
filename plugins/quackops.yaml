@@ -1,0 +1,41 @@
+apiVersion: krew.googlecontainertools.github.com/v1alpha2
+kind: Plugin
+metadata:
+  name: quackops
+spec:
+  version: v2.0.2
+  homepage: https://github.com/mikhae1/kubectl-quackops
+  shortDescription: AI-powered kubectl plugin for Kubernetes troubleshooting
+  description: |
+    QuackOps is a kubectl plugin that opens an interactive AI assistant to
+    help you diagnose and resolve Kubernetes issues. It keeps session
+    context, can suggest commands, and supports local or cloud LLM providers.
+  platforms:
+  - selector:
+      matchLabels:
+        os: linux
+        arch: amd64
+    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.0.2/kubectl-quackops-linux-amd64.tar.gz
+    sha256: 91cc4515a3cd49b1356951f4434960460f3ada1286939ffc6164537696837ba0
+    bin: kubectl-quackops
+  - selector:
+      matchLabels:
+        os: linux
+        arch: arm64
+    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.0.2/kubectl-quackops-linux-arm64.tar.gz
+    sha256: fa206ae2207f0aab973eced26a024495cb1afcc230799ff84b6dc1884543d5f6
+    bin: kubectl-quackops
+  - selector:
+      matchLabels:
+        os: darwin
+        arch: amd64
+    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.0.2/kubectl-quackops-darwin-amd64.tar.gz
+    sha256: c0f6927bf3b3d732b1fbf89c7370a3df7922fcaa8c1d98c2fddd3efa4fcad943
+    bin: kubectl-quackops
+  - selector:
+      matchLabels:
+        os: darwin
+        arch: arm64
+    uri: https://github.com/mikhae1/kubectl-quackops/releases/download/v2.0.2/kubectl-quackops-darwin-arm64.tar.gz
+    sha256: dfb825ff285f93caf842c6b848c40198cf4f1031a431d1b49ab1a910e9f5eebb
+    bin: kubectl-quackops
