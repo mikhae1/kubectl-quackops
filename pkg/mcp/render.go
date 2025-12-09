@@ -8,6 +8,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 )
 
@@ -119,12 +120,16 @@ func RenderSessionEvent(event config.SessionEvent, verbose bool, cfg *config.Con
 			// For now, let's keep it simple but clear
 			sb.WriteString("\n")
 			if !cfg.DisableMarkdownFormat {
-				// We can't easily perform the full markdown rendering here without a writer,
-				// so we'll approximate or just print plain text if not streaming.
-				// Since this is for history/repaint, plain text with some color is safer/faster
-				// or we could use the GLAM renderer if we extracted it.
-				// For now, let's print it directly.
-				sb.WriteString(event.AIResponse)
+				// Use the MarkdownFormatter to render the response with syntax highlighting
+				f := formatter.NewMarkdownFormatter(
+					formatter.WithColorEnabled(true),
+				)
+				// Process the entire response at once
+				formatted := f.ProcessChunk([]byte(event.AIResponse))
+				// Process any remaining content (flush)
+				formatted = append(formatted, f.Flush()...)
+
+				sb.Write(formatted)
 			} else {
 				sb.WriteString(event.AIResponse)
 			}
