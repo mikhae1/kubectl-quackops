@@ -158,7 +158,7 @@ func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage
 
 		// Create spinner for history trimming using SpinnerManager
 		spinnerManager := lib.GetSpinnerManager(cfg)
-		cancelTrimSpinner := spinnerManager.ShowThrottle("✂️ "+config.Colors.Info.Sprint("Trimming")+" "+config.Colors.Dim.Sprint("conversation history..."), time.Second*2)
+		cancelTrimSpinner := spinnerManager.ShowThrottle("✂️ "+config.Colors.Info.Render("Trimming")+" "+config.Colors.Dim.Render("conversation history..."), time.Second*2)
 		defer cancelTrimSpinner()
 
 		// Truncate the thread if it exceeds the maximum token length

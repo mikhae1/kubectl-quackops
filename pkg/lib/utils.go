@@ -144,21 +144,60 @@ func FormatPrice(price float64) string {
 	}
 }
 
-// FormatPricingInfo formats pricing info for display in model selector
-// Returns short form like "$0.15/$0.6" for autocomplete and detailed for selection
-func FormatPricingInfo(promptPrice, completionPrice float64, detailed bool) string {
-	if promptPrice == 0.0 && completionPrice == 0.0 {
+// FormatPriceColored formats a price with color based on cost level
+func FormatPriceColored(price float64) string {
+	if price == 0.0 {
+		return config.Colors.Primary.Render("Free")
+	}
+
+	priceStr := FormatPrice(price)
+
+	// Color based on price level
+	if price > 0.00001 { // >$10/1M tokens
+		return config.Colors.Error.Render(priceStr)
+	} else if price > 0.000001 { // >$1/1M tokens
+		return config.Colors.Warn.Render(priceStr)
+	} else {
+		return config.Colors.Primary.Render(priceStr)
+	}
+}
+
+// FormatColoredPricingDisplay creates a colored pricing display with fancy colored arrows
+func FormatColoredPricingDisplay(inputPrice, outputPrice float64) string {
+	var coloredParts []string
+
+	if inputPrice > 0.0 {
+		// Use cyan/blue for input arrow to represent "input/incoming"
+		fancyInputArrow := config.Colors.Info.Render("↑")
+		coloredPrice := FormatPriceColored(inputPrice)
+		coloredParts = append(coloredParts, fancyInputArrow+coloredPrice)
+	}
+
+	if outputPrice > 0.0 {
+		// Use magenta/purple for output arrow to represent "output/outgoing"
+		fancyOutputArrow := config.Colors.Accent.Render("↓")
+		coloredPrice := FormatPriceColored(outputPrice)
+		coloredParts = append(coloredParts, fancyOutputArrow+coloredPrice)
+	}
+
+	if len(coloredParts) == 0 {
 		return ""
 	}
 
-	promptStr := FormatPrice(promptPrice)
-	completionStr := FormatPrice(completionPrice)
+	// Use dim color for the separator slash to keep it subtle
+	separator := config.Colors.Dim.Render("/")
+	return strings.Join(coloredParts, separator)
+}
 
-	if detailed {
-		return fmt.Sprintf("Input: %s/1M tokens, Output: %s/1M tokens", promptStr, completionStr)
-	} else {
-		return fmt.Sprintf("%s/%s", promptStr, completionStr)
+// FormatModelInfo creates a standardized model info string for display (e.g. in history)
+func FormatModelInfo(modelID string, inputPrice, outputPrice float64) string {
+	pricingDisplay := FormatColoredPricingDisplay(inputPrice, outputPrice)
+	modelDisplay := config.Colors.Model.Render(modelID)
+
+	if pricingDisplay != "" {
+		return fmt.Sprintf("%s (%s)", modelDisplay, pricingDisplay)
 	}
+	return modelDisplay
 }
 
 // ConfirmWithSingleKey prompts the user and returns true only for 'y'/'Y'.
@@ -401,8 +440,8 @@ func FormatTotalCostDisplay(summary *CostSummary) string {
 	// Use existing color scheme
 	border := config.Colors.Dim
 	title := config.Colors.Info
-	inputArrow := config.Colors.Info.Sprint("↑")
-	outputArrow := config.Colors.Accent.Sprint("↓")
+	inputArrow := config.Colors.Info.Render("↑")
+	outputArrow := config.Colors.Accent.Render("↓")
 	dim := config.Colors.Dim
 
 	// Format costs with color based on amount
@@ -421,11 +460,11 @@ func FormatTotalCostDisplay(summary *CostSummary) string {
 		}
 
 		if cost > 0.10 { // > $0.10
-			return config.Colors.Error.Sprint(costStr)
+			return config.Colors.Error.Render(costStr)
 		} else if cost > 0.01 { // > $0.01
-			return config.Colors.Warn.Sprint(costStr)
+			return config.Colors.Warn.Render(costStr)
 		} else {
-			return config.Colors.Primary.Sprint(costStr)
+			return config.Colors.Primary.Render(costStr)
 		}
 	}
 
@@ -433,12 +472,12 @@ func FormatTotalCostDisplay(summary *CostSummary) string {
 	boxWidth := 45
 
 	// Title
-	borderText := config.Colors.Dim.Sprint("│ ")
-	titleText := config.Colors.Accent.Sprint("Session Cost Estimate")
+	borderText := config.Colors.Dim.Render("│ ")
+	titleText := config.Colors.Accent.Render("Session Cost Estimate")
 	lines = append(lines, borderText+titleText)
 
 	if summary.ModelID != "" {
-		modelText := fmt.Sprintf("Model: %s", config.Colors.Model.Sprint(summary.ModelID))
+		modelText := fmt.Sprintf("Model: %s", config.Colors.Model.Render(summary.ModelID))
 		lines = append(lines, borderText+modelText)
 	}
 
@@ -478,13 +517,13 @@ func FormatTotalCostDisplay(summary *CostSummary) string {
 
 	// Total cost line
 	totalText := "Total: "
-	totalLine := borderText + title.Sprint(totalText) + formatCostColored(summary.TotalCost)
+	totalLine := borderText + title.Render(totalText) + formatCostColored(summary.TotalCost)
 	lines = append(lines, totalLine)
 
 	// Disclaimer
 	disclaimerText := "(Estimate - actual costs may vary)"
 	disclaimerPadding := boxWidth - 2 - len(disclaimerText)
-	lines = append(lines, border.Sprint("│ ")+dim.Sprint(disclaimerText)+strings.Repeat(" ", disclaimerPadding))
+	lines = append(lines, border.Render("│ ")+dim.Render(disclaimerText)+strings.Repeat(" ", disclaimerPadding))
 
 	return strings.Join(lines, "\n")
 }

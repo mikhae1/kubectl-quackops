@@ -11,10 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
+	"github.com/mikhae1/kubectl-quackops/pkg/style"
 )
 
 // cmdStatus represents the status of a command execution
@@ -70,7 +71,7 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 
 	// Spinner for progress feedback using SpinnerManager
 	spinnerManager := lib.GetSpinnerManager(cfg)
-	cancelSpinner := spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %s %s...", config.Colors.Info.Sprint(fmt.Sprintf("%d", len(commands))), "kubectl commands"))
+	cancelSpinner := spinnerManager.ShowDiagnostic(fmt.Sprintf("Executing %s %s...", style.Info.Render(fmt.Sprintf("%d", len(commands))), "kubectl commands"))
 	defer cancelSpinner()
 
 	// Briefly show the kubectl diagnostics plan as a bullet list (left bullets)
@@ -116,7 +117,7 @@ func ExecDiagCmds(cfg *config.Config, commands []string) ([]config.CmdRes, error
 				}
 
 				spinnerManager.Update(fmt.Sprintf("⚡ Executing %s %s... %s completed",
-					config.Colors.Info.Sprint(fmt.Sprintf("%d", len(commands))), config.Colors.Dim.Sprint("kubectl commands"), config.Colors.Ok.Sprint(fmt.Sprintf("%d/%d", completed, len(commands)))))
+					style.Info.Render(fmt.Sprintf("%d", len(commands))), style.Dim.Render("kubectl commands"), style.Ok.Render(fmt.Sprintf("%d/%d", completed, len(commands)))))
 			}
 		}
 	}()
@@ -225,13 +226,13 @@ func promptForCommandConfirmation(command string, index int, statusChan chan<- c
 
 		// Only restart spinner if there are more commands to process
 		if index < cap(statusChan)-1 {
-			spinnerManager.ShowDiagnostic(config.Colors.Info.Sprint("Executing kubectl commands..."))
+			spinnerManager.ShowDiagnostic(style.Info.Render("Executing kubectl commands..."))
 		}
 		return false
 	}
 
 	// Restart spinner for command execution
-	spinnerManager.ShowDiagnostic(config.Colors.Info.Sprint("Executing kubectl commands..."))
+	spinnerManager.ShowDiagnostic(style.Info.Render("Executing kubectl commands..."))
 	return true
 }
 
@@ -278,7 +279,7 @@ func printKubectlDiagnosticsList(cfg *config.Config, commands []string) {
 
 	// Render using simple Markdown bullets to leverage left-bullet styling downstream
 	fmt.Println()
-	fmt.Println(color.New(color.Bold).Sprint("Suggested kubectl commands for diagnostics:"))
+	fmt.Println(lipgloss.NewStyle().Bold(true).Render("Suggested kubectl commands for diagnostics:"))
 	for _, kc := range kubectlCmds {
 		fmt.Printf("- %s\n", kc)
 	}
@@ -330,7 +331,7 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 	printedLines := 0
 	redraw := func() {
 		// Build lines to render
-		header := color.New(color.Bold).Sprint("Select commands to run (j/k to move, space to toggle, a all, Enter accept, ESC cancel):")
+		header := style.Bold.Render("Select commands to run (j/k to move, space to toggle, a all, Enter accept, ESC cancel):")
 		lines := make([]string, 0, len(items)+1)
 		lines = append(lines, header)
 		for i, it := range items {
@@ -340,7 +341,7 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 			}
 			pointer := "  "
 			if i == cursor {
-				pointer = color.New(color.FgHiBlue).Sprint("➤ ")
+				pointer = style.Info.Render("➤ ")
 			}
 			lines = append(lines, fmt.Sprintf("%s- %s %s", pointer, box, it.cmd))
 		}
@@ -459,10 +460,10 @@ func printCommandResult(
 	firstCommandCompleted *bool,
 	firstCommandCompletedMutex *sync.Mutex,
 ) {
-	checkmark := config.Colors.Ok.Sprint("✓")
-	cmdLabel := config.Colors.Info.Sprint("running:")
+	checkmark := config.Colors.Ok.Render("✓")
+	cmdLabel := config.Colors.Info.Render("running:")
 	if cmdErr != nil {
-		checkmark = config.Colors.Error.Sprint("✗")
+		checkmark = config.Colors.Error.Render("✗")
 	}
 
 	firstCommandCompletedMutex.Lock()
@@ -479,8 +480,8 @@ func printCommandResult(
 	fmt.Printf("\n%s %s %s %s\n",
 		checkmark,
 		cmdLabel,
-		config.Colors.Command.Sprint(command),
-		config.Colors.Dim.Sprintf("in %s", lib.FormatDuration(cmdDuration.Milliseconds())))
+		config.Colors.Command.Render(command),
+		config.Colors.Dim.Render(fmt.Sprintf("in %s", lib.FormatDuration(cmdDuration.Milliseconds()))))
 }
 
 // renderDiagnosticResult renders command output with enhanced formatting
@@ -568,14 +569,14 @@ func printExecutionSummary(commands []string, statusData *struct {
 	totalCommands := len(commands)
 
 	// Choose color based on results
-	var summaryColor *color.Color
+	var summaryStyle lipgloss.Style
 	var checkmark string
 	if statusData.failedCount > 0 {
-		summaryColor = config.Colors.Warn
-		checkmark = config.Colors.Warn.Sprint("✓")
+		summaryStyle = config.Colors.Warn
+		checkmark = config.Colors.Warn.Render("✓")
 	} else {
-		summaryColor = config.Colors.Ok
-		checkmark = config.Colors.Ok.Sprint("✓")
+		summaryStyle = config.Colors.Ok
+		checkmark = config.Colors.Ok.Render("✓")
 	}
 
 	// Build status info
@@ -591,13 +592,13 @@ func printExecutionSummary(commands []string, statusData *struct {
 
 	fmt.Printf("%s %s %s\n",
 		checkmark,
-		config.Colors.Info.Sprintf("Executing %d command(s):", totalCommands),
-		summaryColor.Sprintf("%d/%d completed in %s%s%s",
+		config.Colors.Info.Render(fmt.Sprintf("Executing %d command(s):", totalCommands)),
+		summaryStyle.Render(fmt.Sprintf("%d/%d completed in %s%s%s",
 			successCount,
 			totalCommands,
-			config.Colors.Dim.Sprint(lib.FormatDuration(totalDuration.Milliseconds())),
+			config.Colors.Dim.Render(lib.FormatDuration(totalDuration.Milliseconds())),
 			failedInfo,
-			skippedInfo))
+			skippedInfo)))
 }
 
 // processResults processes command results and collects errors
@@ -740,8 +741,8 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 	// Print command output for interactive commands (those with $ prefix),
 	// always in edit mode, or when verbose mode is enabled
 	if cfg.Verbose || cfg.EditMode || (cfg != nil && strings.HasPrefix(result.Cmd, cfg.CommandPrefix)) {
-		dim := color.New(color.Faint).SprintFunc()
-		bold := color.New(color.Bold).SprintFunc()
+		dim := style.Dim.Render
+		bold := style.Bold.Render
 
 		prefix := "!"
 		if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {

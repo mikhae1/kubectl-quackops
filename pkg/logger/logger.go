@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Debug flag
@@ -16,7 +16,7 @@ var DEBUG = os.Getenv("DEBUG") == "true" || os.Getenv("DEBUG") == "1"
 type logWriter struct {
 	logger *log.Logger
 	prefix string
-	color  func(a ...interface{}) string
+	style  lipgloss.Style
 }
 
 func (l *logWriter) Write(p []byte) (int, error) {
@@ -29,7 +29,11 @@ func (l *logWriter) Write(p []byte) (int, error) {
 		if strings.TrimSpace(line) == "" {
 			continue // Skip empty lines
 		}
-		l.logger.Println(l.color(l.prefix + line))
+		// Colorize the prefix and the line
+		// Use lipgloss to render the prefix + line
+		// Wait, the original code colorized (prefix + line).
+		msg := l.style.Render(l.prefix + line)
+		l.logger.Println(msg)
 	}
 	return len(p), nil
 }
@@ -37,12 +41,12 @@ func (l *logWriter) Write(p []byte) (int, error) {
 // LoggerMap holds different loggers
 var LoggerMap = map[string]*log.Logger{}
 
-// initLogger initializes a new logger with a given prefix and color function
-func initLogger(level string, prefix string, colorFunc func(a ...interface{}) string, flags int, output io.Writer) {
+// initLogger initializes a new logger with a given prefix and lipgloss style
+func initLogger(level string, prefix string, style lipgloss.Style, flags int, output io.Writer) {
 	logger := log.New(&logWriter{
 		logger: log.New(output, "", flags),
 		prefix: prefix,
-		color:  colorFunc,
+		style:  style,
 	}, "", 0)
 
 	LoggerMap[level] = logger
@@ -50,18 +54,24 @@ func initLogger(level string, prefix string, colorFunc func(a ...interface{}) st
 
 // InitLoggers initializes all loggers with different levels and colors
 func InitLoggers(output io.Writer, flags int) {
-	initLogger("info", "INFO: ", color.New(color.FgCyan).SprintFunc(), flags, output)
-	initLogger("debug", "DEBUG: ", color.New(color.FgHiBlack).SprintFunc(), flags, output)
-	initLogger("warn", "WARN: ", color.New(color.FgYellow).SprintFunc(), flags, output)
-	initLogger("err", "ERR: ", color.New(color.FgRed).SprintFunc(), flags, output)
+	// Define styles locally to avoid circular dependency with pkg/style if possible,
+	// or use simple colors.
+	// Since logger is a low-level package, it should probably avoid depending on `pkg/style` if `pkg/style` depends on logging (it doesn't seems so).
+	// But `pkg/style` imports `lipgloss`.
+	// Let's use raw lipgloss styles here to be safe and self-contained.
+
+	initLogger("info", "INFO: ", lipgloss.NewStyle().Foreground(lipgloss.Color("86")), flags, output)    // Cyan
+	initLogger("debug", "DEBUG: ", lipgloss.NewStyle().Foreground(lipgloss.Color("240")), flags, output) // Dark Gray
+	initLogger("warn", "WARN: ", lipgloss.NewStyle().Foreground(lipgloss.Color("220")), flags, output)   // Yellow
+	initLogger("err", "ERR: ", lipgloss.NewStyle().Foreground(lipgloss.Color("196")), flags, output)     // Red
 
 	// Custom loggers
-	initLogger("llmIn", "[LLM] > ", color.New(color.FgHiBlue).SprintFunc(), flags, output)
-	initLogger("llmOut", "[LLM] < ", color.New(color.FgBlue).SprintFunc(), flags, output)
-	initLogger("llmSys", "[LLM:SYS] > ", color.New(color.FgHiMagenta).SprintFunc(), flags, output)
-	initLogger("llmUser", "[LLM:USER] > ", color.New(color.FgHiCyan).SprintFunc(), flags, output)
-	initLogger("in", "> ", color.New(color.FgHiGreen).SprintFunc(), flags, output)
-	initLogger("out", "< ", color.New(color.FgGreen).SprintFunc(), flags, output)
+	initLogger("llmIn", "[LLM] > ", lipgloss.NewStyle().Foreground(lipgloss.Color("33")), flags, output)        // Blue
+	initLogger("llmOut", "[LLM] < ", lipgloss.NewStyle().Foreground(lipgloss.Color("27")), flags, output)       // Blueish
+	initLogger("llmSys", "[LLM:SYS] > ", lipgloss.NewStyle().Foreground(lipgloss.Color("201")), flags, output)  // Magenta
+	initLogger("llmUser", "[LLM:USER] > ", lipgloss.NewStyle().Foreground(lipgloss.Color("45")), flags, output) // Cyan
+	initLogger("in", "> ", lipgloss.NewStyle().Foreground(lipgloss.Color("46")), flags, output)                 // Green
+	initLogger("out", "< ", lipgloss.NewStyle().Foreground(lipgloss.Color("34")), flags, output)                // Dark Green
 }
 
 // Log function to use defined loggers

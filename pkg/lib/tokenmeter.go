@@ -5,8 +5,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/style"
 )
 
 // TokenMeter renders a compact real-time token counter to stderr.
@@ -52,11 +53,11 @@ func (tm *TokenMeter) Render() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	up := color.New(color.FgHiYellow, color.Bold).Sprint("↑")
-	down := color.New(color.FgHiCyan, color.Bold).Sprint("↓")
-	sep := color.New(color.FgHiBlack).Sprint("|")
-	leftBracket := color.New(color.FgHiBlack).Sprint("[")
-	rightBracket := color.New(color.FgHiBlack).Sprint("]")
+	up := style.Warning.Bold(true).Render("↑")
+	down := style.Info.Bold(true).Render("↓")
+	sep := style.Debug.Render("|")
+	leftBracket := style.Debug.Render("[")
+	rightBracket := style.Debug.Render("]")
 	// Context usage percentage based on this request's outgoing tokens (prompt + history)
 	pct := 0.0
 	if tm.cfg != nil {
@@ -69,19 +70,19 @@ func (tm *TokenMeter) Render() {
 		}
 	}
 	// Color percent similarly to prompt: green <50, yellow <80, red otherwise
-	var pctColor *color.Color
+	var pctStyle lipgloss.Style
 	switch {
 	case pct < 50:
-		pctColor = color.New(color.FgGreen)
+		pctStyle = style.Success
 	case pct < 80:
-		pctColor = color.New(color.FgYellow)
+		pctStyle = style.Warning
 	default:
-		pctColor = color.New(color.FgRed)
+		pctStyle = style.Error
 	}
-	pctStr := pctColor.Sprintf("%.0f%%", pct)
+	pctStr := pctStyle.Render(fmt.Sprintf("%.0f%%", pct))
 
-	outNum := color.New(color.FgHiYellow).Sprint(FormatCompactNumber(tm.outgoing))
-	inNum := color.New(color.FgHiCyan).Sprint(FormatCompactNumber(tm.incoming.Load()))
+	outNum := style.Warning.Render(FormatCompactNumber(tm.outgoing))
+	inNum := style.Info.Render(FormatCompactNumber(tm.incoming.Load()))
 	// Compact form: [3%|↑2.9k|↓2.0k]
 	line := fmt.Sprintf("%s%s%s%s%s%s%s", leftBracket, pctStr, sep, up+outNum, sep, down+inNum, rightBracket)
 

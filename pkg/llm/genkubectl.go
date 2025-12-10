@@ -47,7 +47,7 @@ func GenKubectlCmds(cfg *config.Config, prompt string, userMsgCount int) ([]stri
 
 	// Create spinner for command generation using SpinnerManager
 	spinnerManager := lib.GetSpinnerManager(cfg)
-	cancelSpinner := spinnerManager.ShowGeneration("🛠️ " + config.Colors.Info.Sprint("Generating") + " " + config.Colors.Dim.Sprint("diagnostic commands..."))
+	cancelSpinner := spinnerManager.ShowGeneration("🛠️ " + config.Colors.Info.Render("Generating") + " " + config.Colors.Dim.Render("diagnostic commands..."))
 	defer cancelSpinner()
 
 	// Execute request without updating the conversation history, silently

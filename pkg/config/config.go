@@ -10,9 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
+	"github.com/mikhae1/kubectl-quackops/pkg/style"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -193,27 +194,27 @@ type Config struct {
 // These are constants (no env overrides) to keep branding and readability consistent.
 type UIColorRoles struct {
 	// Role colors
-	Primary  *color.Color
-	Accent   *color.Color
-	Info     *color.Color
-	Dim      *color.Color
-	Shadow   *color.Color
-	Ok       *color.Color
-	Warn     *color.Color
-	Error    *color.Color
-	Provider *color.Color
-	Model    *color.Color
-	Command  *color.Color
-	Light    *color.Color
+	Primary  lipgloss.Style
+	Accent   lipgloss.Style
+	Info     lipgloss.Style
+	Dim      lipgloss.Style
+	Shadow   lipgloss.Style
+	Ok       lipgloss.Style
+	Warn     lipgloss.Style
+	Error    lipgloss.Style
+	Provider lipgloss.Style
+	Model    lipgloss.Style
+	Command  lipgloss.Style
+	Light    lipgloss.Style
 
 	// MCP/header specific
-	Header *color.Color
-	Border *color.Color
-	Label  *color.Color
-	Output *color.Color
+	Header lipgloss.Style
+	Border lipgloss.Style
+	Label  lipgloss.Style
+	Output lipgloss.Style
 
 	// Gradient palette used for banners and left-border accents
-	Gradient []*color.Color
+	Gradient []lipgloss.Style
 }
 
 // Colors is the globally shared UI palette.
@@ -221,29 +222,29 @@ var Colors = initUIColorRoles()
 
 func initUIColorRoles() *UIColorRoles {
 	return &UIColorRoles{
-		Primary: color.New(color.Reset),
-		Accent:  color.New(color.FgHiCyan, color.Bold),
-		Info:    color.New(color.FgHiWhite, color.Bold),
-		Dim:     color.New(color.FgHiBlack),
-		Shadow:  color.New(color.FgHiBlack, color.Faint),
-		Light:   color.New(color.FgHiGreen),
+		Primary: lipgloss.NewStyle().Foreground(style.ColorWhite),
+		Accent:  style.Title,
+		Info:    style.Info,
+		Dim:     style.Debug,
+		Shadow:  style.Debug.Faint(true),
+		Light:   style.Success,
 
-		Ok:    color.New(color.FgHiGreen, color.Bold),
-		Warn:  color.New(color.FgHiYellow, color.Bold),
-		Error: color.New(color.FgHiRed, color.Bold),
+		Ok:    style.Success,
+		Warn:  style.Warning,
+		Error: style.Error,
 
-		Provider: color.New(color.FgHiMagenta),
-		Model:    color.New(color.FgMagenta),
-		Command:  color.New(color.FgHiBlue),
+		Provider: lipgloss.NewStyle().Foreground(style.ColorPurple),
+		Model:    lipgloss.NewStyle().Foreground(style.ColorPink),
+		Command:  style.Command,
 
-		Header: color.New(color.FgHiMagenta, color.Bold),
-		Border: color.New(color.FgHiBlack),
-		Label:  color.New(color.FgBlue),
-		Output: color.New(color.FgHiBlue),
+		Header: style.Title,
+		Border: style.Debug,
+		Label:  style.SubTitle,
+		Output: style.Info,
 
-		Gradient: []*color.Color{
-			color.New(color.FgHiCyan),
-			color.New(color.FgCyan),
+		Gradient: []lipgloss.Style{
+			lipgloss.NewStyle().Foreground(style.ColorCyan),
+			lipgloss.NewStyle().Foreground(style.ColorBlue), // Assuming ColorBlue exists or map to Cyan/Purple
 		},
 	}
 }

@@ -63,7 +63,7 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 		var cancelRAGSpinner func()
 		if !cfg.SafeMode {
 			spinnerManager := lib.GetSpinnerManager(cfg)
-			cancelRAGSpinner = spinnerManager.ShowRAG("🔍 " + config.Colors.Info.Sprint("Gathering") + " " + config.Colors.Dim.Sprint("diagnostic information..."))
+			cancelRAGSpinner = spinnerManager.ShowRAG("🔍 " + config.Colors.Info.Render("Gathering") + " " + config.Colors.Dim.Render("diagnostic information..."))
 			defer cancelRAGSpinner()
 		}
 

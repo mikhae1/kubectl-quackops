@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/ergochat/readline"
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/completer"
@@ -18,6 +19,7 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
+	"github.com/mikhae1/kubectl-quackops/pkg/style"
 	"github.com/mikhae1/kubectl-quackops/pkg/version"
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
@@ -86,17 +88,17 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 
 // printEnvVarsHelp prints information about environment variables used by the application
 func printEnvVarsHelp() {
-	// Colors for readability
-	titleColor := color.New(color.FgHiYellow, color.Bold)
-	bodyColor := color.New(color.FgHiWhite)
+	// Colors for readability - using style package
+	titleStyle := style.Warning
+	bodyStyle := style.Info
 
 	fmt.Println()
-	titleColor.Println("ENVIRONMENT VARIABLES:")
-	fmt.Println(bodyColor.Sprint("See the Environment Variables section in README.md for the full list, defaults, and descriptions."))
+	fmt.Println(titleStyle.Render("ENVIRONMENT VARIABLES:"))
+	fmt.Println(bodyStyle.Render("See the Environment Variables section in README.md for the full list, defaults, and descriptions."))
 
 	// Show currently set env vars as a convenience
 	fmt.Println()
-	titleColor.Println("CURRENTLY SET (detected in environment):")
+	fmt.Println(titleStyle.Render("CURRENTLY SET (detected in environment):"))
 	var any bool
 	for _, e := range os.Environ() {
 		// Only show variables from this project's QU_* or provider API keys
@@ -316,10 +318,11 @@ func startChatSession(cfg *config.Config, args []string) error {
 	defer cleanupAndExit("", -1) // just cleanup
 
 	printWelcomeBanner(cfg)
+	printWelcomeBanner(cfg)
 	if cfg.MCPClientEnabled {
-		info := color.New(color.FgHiWhite)
-		dim := color.New(color.FgHiBlack)
-		accent := color.New(color.FgHiCyan)
+		info := style.Info
+		dim := style.Debug
+		accent := style.Success
 		servers := mcp.Servers(cfg)
 		tools := mcp.Tools(cfg)
 		srvStr := "none"
@@ -327,10 +330,10 @@ func startChatSession(cfg *config.Config, args []string) error {
 			srvStr = strings.Join(servers, ", ")
 		}
 		if srvStr != "none" {
-			srvStr = accent.Sprint(srvStr)
+			srvStr = accent.Render(srvStr)
 		}
 		line := fmt.Sprintf("on · servers:[%s] · tools:%d · strict:%t", srvStr, len(tools), cfg.MCPStrict)
-		fmt.Println(dim.Sprint("MCP:") + " " + info.Sprint(line))
+		fmt.Println(dim.Render("MCP:") + " " + info.Render(line))
 	}
 
 	// Chat loop
@@ -486,7 +489,7 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		return false, ""
 	}
 
-	body := color.New(color.FgCyan)
+	body := style.Info
 	accent := config.Colors.Accent
 	dim := config.Colors.Dim
 	info := config.Colors.Info
@@ -497,13 +500,13 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		printInlineHelp(cfg)
 		return true, "help"
 	case "/version":
-		fmt.Println(info.Sprint(version.Version))
+		fmt.Println(info.Render(version.Version))
 		return true, "version"
 	case "/reset":
 		cfg.ChatMessages = nil
 		cfg.StoredUserCmdResults = nil
 		cfg.SelectedPrompt = ""
-		fmt.Println(body.Sprint("Context reset"))
+		fmt.Println(body.Render("Context reset"))
 		return true, "reset"
 	case "/clear":
 		cfg.ChatMessages = nil
@@ -511,13 +514,13 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		cfg.LastOutgoingTokens = 0
 		cfg.LastIncomingTokens = 0
 		cfg.SelectedPrompt = ""
-		fmt.Println(accent.Sprint("🦆 Context cleared!"))
+		fmt.Println(accent.Render("🦆 Context cleared!"))
 		return true, "clear"
 	case "/mcp":
 		if cfg.MCPClientEnabled {
 			printMCPDetails(cfg)
 		} else {
-			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
+			fmt.Println(dim.Render("MCP client: ") + warn.Render("disabled"))
 		}
 		return true, "mcp"
 	case "/model", "/models":
@@ -533,24 +536,24 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 
 		// Check if there are any additional arguments (for future extension)
 		// For now, always launch the interactive selector
-		fmt.Printf("%s\n", body.Sprintf("Current: %s/%s", prov, m))
-		fmt.Println(dim.Sprint("Launching interactive model selector..."))
+		fmt.Printf("%s\n", body.Render(fmt.Sprintf("Current: %s/%s", prov, m)))
+		fmt.Println(dim.Render("Launching interactive model selector..."))
 
 		// Create model selector and launch interactive selection
 		selector := lib.NewModelSelector(cfg)
 		selectedModel, err := selector.SelectModel()
 		if err != nil {
 			if strings.Contains(err.Error(), "cancelled") {
-				fmt.Println(dim.Sprint("Model selection cancelled."))
+				fmt.Println(dim.Render("Model selection cancelled."))
 			} else {
-				fmt.Printf("%s %v\n", warn.Sprint("Error selecting model:"), err)
+				fmt.Printf("%s %v\n", warn.Render("Error selecting model:"), err)
 			}
 			return true, "model"
 		}
 
 		// Update configuration with selected model
 		cfg.Model = selectedModel
-		fmt.Printf("%s %s\n", body.Sprint("Model updated to:"), config.Colors.Model.Sprint(selectedModel))
+		fmt.Printf("%s %s\n", body.Render("Model updated to:"), config.Colors.Model.Render(selectedModel))
 
 		// Auto-detect max tokens for the new model
 		cfg.ConfigDetectMaxTokens()
@@ -560,24 +563,24 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		if cfg.MCPClientEnabled {
 			list := mcp.Servers(cfg)
 			if len(list) == 0 {
-				fmt.Println(dim.Sprint("No MCP servers configured"))
+				fmt.Println(dim.Render("No MCP servers configured"))
 			} else {
-				fmt.Println(accent.Sprint("MCP servers:"))
+				fmt.Println(accent.Render("MCP servers:"))
 				for _, s := range list {
-					fmt.Printf(" - %s\n", info.Sprint(s))
+					fmt.Printf(" - %s\n", info.Render(s))
 				}
 			}
 		} else {
-			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
+			fmt.Println(dim.Render("MCP client: ") + warn.Render("disabled"))
 		}
 		return true, "servers"
 	case "/tools":
 		if cfg.MCPClientEnabled {
 			toolInfos := mcp.GetToolInfos(cfg)
 			if len(toolInfos) == 0 {
-				fmt.Println(dim.Sprint("No MCP tools discovered"))
+				fmt.Println(dim.Render("No MCP tools discovered"))
 			} else {
-				fmt.Printf("%s\n", accent.Sprintf("MCP tools (%d):", len(toolInfos)))
+				fmt.Printf("%s\n", accent.Render(fmt.Sprintf("MCP tools (%d):", len(toolInfos))))
 				for _, tool := range toolInfos {
 					// Truncate description if too long
 					desc := tool.Description
@@ -585,29 +588,29 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 					if len(desc) > maxLen {
 						desc = desc[:maxLen] + "..."
 					}
-					fmt.Printf(" - %s: %s\n", accent.Sprint(tool.Name), body.Sprint(desc))
+					fmt.Printf(" - %s: %s\n", accent.Render(tool.Name), body.Render(desc))
 				}
 			}
 		} else {
-			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
+			fmt.Println(dim.Render("MCP client: ") + warn.Render("disabled"))
 		}
 		return true, "tools"
 	case "/prompts":
 		if cfg.MCPClientEnabled {
 			printMCPPrompts(cfg)
 		} else {
-			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
+			fmt.Println(dim.Render("MCP client: ") + warn.Render("disabled"))
 		}
 		return true, "prompts"
 	case "/history":
 
 		if len(cfg.SessionHistory) == 0 {
-			fmt.Println(dim.Sprint("No history available for this session."))
+			fmt.Println(dim.Render("No history available for this session."))
 		} else {
-			fmt.Println(accent.Sprint("Session History:"))
+			fmt.Println(accent.Render("Session History:"))
 			for _, event := range cfg.SessionHistory {
 				fmt.Print(mcp.RenderSessionEvent(event, true, cfg))
-				fmt.Println(dim.Sprint(strings.Repeat("-", 40)))
+				fmt.Println(dim.Render(strings.Repeat("-", 40)))
 			}
 		}
 		return true, "history"
@@ -628,8 +631,8 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 				}
 			}
 		}
-		fmt.Printf("%s %s\n", warn.Sprint("Unknown command:"), body.Sprint(userPrompt))
-		fmt.Println(body.Sprint("Type /help for available commands."))
+		fmt.Printf("%s %s\n", warn.Render("Unknown command:"), body.Render(userPrompt))
+		fmt.Println(body.Render("Type /help for available commands."))
 		return true, "unknown"
 	}
 }
@@ -650,13 +653,15 @@ func printWelcomeBanner(cfg *config.Config) {
 	}
 
 	// Rainbow sequence reserved (not used in mono mode)
-	rainbow := []*color.Color{
-		color.New(color.FgHiRed),
-		color.New(color.FgHiYellow),
-		color.New(color.FgHiGreen),
-		color.New(color.FgHiCyan),
-		color.New(color.FgHiBlue),
-		color.New(color.FgHiMagenta),
+	// We keep this structure but populate with lipgloss colors if needed for rainbow mode
+	// defaults are just placeholders here as we use mono palette below
+	rainbow := []lipgloss.Style{
+		lipgloss.NewStyle().Foreground(style.ColorRed),
+		lipgloss.NewStyle().Foreground(style.ColorYellow),
+		lipgloss.NewStyle().Foreground(style.ColorGreen),
+		lipgloss.NewStyle().Foreground(style.ColorCyan),
+		lipgloss.NewStyle().Foreground(style.ColorBlue),
+		lipgloss.NewStyle().Foreground(style.ColorPink),
 	}
 	_ = rainbow
 
@@ -721,7 +726,7 @@ func printWelcomeBanner(cfg *config.Config) {
 		idx := start
 		for _, r := range text {
 			c := monoPalette[idx%len(monoPalette)]
-			b.WriteString(c.Sprint(string(r)))
+			b.WriteString(c.Render(string(r)))
 			idx++
 		}
 		return b.String()
@@ -748,12 +753,12 @@ func printWelcomeBanner(cfg *config.Config) {
 		col := 0
 		for _, r := range text {
 			if isShadowRune(r) {
-				b.WriteString(shadow.Sprint(string(r)))
+				b.WriteString(shadow.Render(string(r)))
 				// do not advance col; excluded from chess pattern
 				continue
 			}
 			c := monoPalette[(row+col)%len(monoPalette)]
-			b.WriteString(c.Sprint(string(r)))
+			b.WriteString(c.Render(string(r)))
 			col++
 		}
 		return b.String()
@@ -799,9 +804,9 @@ func printWelcomeBanner(cfg *config.Config) {
 		indent = strings.Repeat(" ", maxLeft) + gap
 	}
 	if ctxErr != nil {
-		fmt.Println(indent + dim.Sprint("Using Kubernetes context:") + " " + warn.Sprintf("unavailable (%v)", ctxErr))
+		fmt.Println(indent + dim.Render("Using Kubernetes context:") + " " + warn.Render(fmt.Sprintf("unavailable (%v)", ctxErr)))
 	} else if ctxName != "" {
-		fmt.Println(indent + dim.Sprint("Using Kubernetes context:") + " " + info.Sprintf("%s", ctxName))
+		fmt.Println(indent + dim.Render("Using Kubernetes context:") + " " + info.Render(fmt.Sprintf("%s", ctxName)))
 	}
 
 	// Horizontal gradient line under the ASCII art (aligned under right column)
@@ -812,7 +817,7 @@ func printWelcomeBanner(cfg *config.Config) {
 	}
 
 	// Non-rainbow info lines (useful details) - compact one-line with tokens
-	llmStyled := dim.Sprint("LLM:") + " " + accent.Sprintf("%s", provider) + dim.Sprint(" · ") + magenta.Sprintf("%s", model)
+	llmStyled := dim.Render("LLM:") + " " + accent.Render(fmt.Sprintf("%s", provider)) + dim.Render(" · ") + magenta.Render(fmt.Sprintf("%s", model))
 
 	// Fancy tokens/budget line showing max and reservations
 	effective := lib.EffectiveMaxTokens(cfg)
@@ -835,33 +840,32 @@ func printWelcomeBanner(cfg *config.Config) {
 	}
 	// Build colored line: "LLM: PROVIDER · model · max 32.8k ↑ in 6.6k ↓ out 26.2k"
 	tokens_info := llmStyled +
-		dim.Sprint(" · ") +
-		dim.Sprint("max ") + ok.Sprint(lib.FormatCompactNumber(limit)) +
-		dim.Sprint("/") + accent.Sprint("↑") + info.Sprint(lib.FormatCompactNumber(inputReserve)) +
-		dim.Sprint("/") + accent.Sprint("↓") + info.Sprint(lib.FormatCompactNumber(outBudget))
+		dim.Render(" · ") +
+		dim.Render("max ") + ok.Render(lib.FormatCompactNumber(limit)) +
+		dim.Render("/") + accent.Render("↑") + info.Render(lib.FormatCompactNumber(inputReserve)) +
+		dim.Render("/") + accent.Render("↓") + info.Render(lib.FormatCompactNumber(outBudget))
 	fmt.Println(indent + tokens_info)
 	if apiPlain != "" {
-		fmt.Println(indent + dim.Sprint("API:") + " " + info.Sprintf("%s", cfg.OllamaApiURL))
+		fmt.Println(indent + dim.Render("API:") + " " + info.Render(fmt.Sprintf("%s", cfg.OllamaApiURL)))
 	}
-	fmt.Println(indent + dim.Sprint("Safe mode:") + " " + func() string {
+	fmt.Println(indent + dim.Render("Safe mode:") + " " + func() string {
 		if cfg.SafeMode {
-			return ok.Sprint("On")
+			return ok.Render("enabled")
 		}
-		return warn.Sprint("Off")
-	}())
-	fmt.Println(indent + dim.Sprint("History:") + " " + func() string {
-		if !cfg.DisableHistory && cfg.HistoryFile != "" {
-			return info.Sprintf("%s", cfg.HistoryFile)
+		return warn.Render("disabled")
+	}() + " " + dim.Render("· History:") + " " + func() string {
+		if cfg.DisableHistory {
+			return warn.Render("disabled")
 		}
-		return dim.Sprint("disabled")
+		return ok.Render("enabled") + info.Render(fmt.Sprintf(" (%s)", cfg.HistoryFile))
 	}())
 
 	// Tips for getting started
 	fmt.Println()
-	fmt.Println(indent + accent.Sprint("Getting started:"))
-	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Ask questions:") + " " + info.Sprint("find pod issues in nginx namespace"))
-	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Run commands:") + " " + info.Sprint(cfg.CommandPrefix+" kubectl get events -A"))
-	fmt.Println(indent + info.Sprint("- ") + dim.Sprint("Type: ") + ok.Sprint("/help") + " " + info.Sprint("for more information"))
+	fmt.Println(indent + accent.Render("Getting started:"))
+	fmt.Println(indent + info.Render("- ") + dim.Render("Ask questions:") + " " + info.Render("find pod issues in nginx namespace"))
+	fmt.Println(indent + info.Render("- ") + dim.Render("Run commands:") + " " + info.Render(cfg.CommandPrefix+" kubectl get events -A"))
+	fmt.Println(indent + info.Render("- ") + dim.Render("Type: ") + ok.Render("/help") + " " + info.Render("for more information"))
 	fmt.Println()
 }
 
@@ -1120,80 +1124,77 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	return nil
 }
 
-// printMCPDetails displays detailed MCP information with proper formatting
+// printMCPDetails prints detailed information about the MCP configuration
 func printMCPDetails(cfg *config.Config) {
-	titleColor := config.Colors.Header
-	toolColor := config.Colors.Accent
-	descColor := color.New(color.FgCyan)
-	serverColor := config.Colors.Info
+	titleStyle := style.Title
+	info := config.Colors.Info
 	dim := config.Colors.Dim
+	warn := config.Colors.Warn
+	serverStyle := config.Colors.Command
+	toolStyle := config.Colors.Label
 
 	fmt.Println()
-	titleColor.Println("MCP Details:")
+	fmt.Println(titleStyle.Render("MCP CONFIGURATION:"))
 
 	// Show servers
-	srvs := mcp.Servers(cfg)
-	connectedSrvs := mcp.GetConnectedServerNames(cfg)
-	connectedMap := make(map[string]bool)
-	for _, srv := range connectedSrvs {
-		connectedMap[srv] = true
-	}
-
-	if len(srvs) == 0 {
-		fmt.Println(dim.Sprint("- servers: none"))
+	servers := mcp.Servers(cfg)
+	if len(servers) == 0 {
+		fmt.Println("  " + dim.Render("Servers:") + " " + warn.Render("None configured"))
 	} else {
-		fmt.Println(dim.Sprint("- servers:"))
-		for _, s := range srvs {
-			if connectedMap[s] {
-				fmt.Printf("  · %s\n", serverColor.Sprint(s))
-			} else {
-				fmt.Printf("  · %s %s\n", dim.Sprint(s), dim.Sprint("(disconnected)"))
-			}
+		fmt.Println("  " + dim.Render("Servers:") + " " + info.Render(fmt.Sprintf("%d active", len(servers))))
+		for _, s := range servers {
+			fmt.Printf("    - %s\n", serverStyle.Render(s))
 		}
 	}
+	fmt.Println("  " + dim.Render("Strict mode:") + " " + info.Render(fmt.Sprintf("%t", cfg.MCPStrict)))
 
 	// Show tools with descriptions
 	toolInfos := mcp.GetToolInfos(cfg)
 	if len(toolInfos) == 0 {
-		fmt.Println(dim.Sprint("- tools: none"))
+		fmt.Println("  " + dim.Render("Tools:") + " " + warn.Render("None discovered"))
 	} else {
-		fmt.Printf("%s\n", dim.Sprintf("- tools (%d):", len(toolInfos)))
-		for _, tool := range toolInfos {
-			// Truncate description if too long
-			desc := tool.Description
-			if len(desc) > 60 {
-				desc = desc[:57] + "..."
-			}
-			fmt.Printf("  · %s: %s\n", toolColor.Sprint(tool.Name), descColor.Sprint(desc))
+		fmt.Println("  " + dim.Render("Tools:") + " " + info.Render(fmt.Sprintf("%d available", len(toolInfos))))
+	}
+	if cfg.Verbose && len(toolInfos) > 0 {
+		fmt.Println()
+		fmt.Println(dim.Render("  Tool Details:"))
+		for _, t := range toolInfos {
+			fmt.Printf("    - %s: %s\n", toolStyle.Render(t.Name), info.Render(t.Description))
 		}
 	}
 	fmt.Println()
 }
 
-// printMCPPrompts displays MCP prompts with brand-accent styling
+// printMCPPrompts prints available prompts from MCP servers
 func printMCPPrompts(cfg *config.Config) {
-	accent := config.Colors.Accent
-	descColor := color.New(color.FgCyan)
-	serverColor := config.Colors.Label
+	prompts := mcp.GetPromptInfos(cfg)
 
-	promptInfos := mcp.GetPromptInfos(cfg)
-	if len(promptInfos) == 0 {
-		fmt.Println(config.Colors.Dim.Sprint("No MCP prompts discovered"))
+	dim := config.Colors.Dim
+	accent := config.Colors.Accent
+	info := config.Colors.Info
+	serverStyle := config.Colors.Command
+
+	if len(prompts) == 0 {
+		fmt.Println(dim.Render("No MCP prompts discovered"))
 		return
 	}
 
-	fmt.Printf("%s\n", accent.Sprintf("MCP prompts (%d):", len(promptInfos)))
-	for _, pi := range promptInfos {
-		// Format: /$server/$prompt
-		promptPath := "/" + pi.Server + "/" + pi.Name
-		fmt.Printf(" - %s", accent.Sprint(promptPath))
-		if pi.Title != "" {
-			fmt.Printf(" — %s", descColor.Sprint(pi.Title))
-		} else if pi.Description != "" {
-			fmt.Printf(" — %s", descColor.Sprint(pi.Description))
+	fmt.Println(accent.Render(fmt.Sprintf("MCP Prompts (%d):", len(prompts))))
+	// Group by server
+	byServer := make(map[string][]mcp.PromptInfo)
+	for _, p := range prompts {
+		byServer[p.Server] = append(byServer[p.Server], p)
+	}
+
+	for server, pl := range byServer {
+		fmt.Printf("  %s:\n", serverStyle.Render(server))
+		for _, p := range pl {
+			desc := p.Description
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Printf("    - %s: %s\n", accent.Render(p.Name), info.Render(desc))
 		}
-		fmt.Printf(" %s", serverColor.Sprint("["+pi.Server+"]"))
-		fmt.Println()
 	}
 }
 
@@ -1228,47 +1229,48 @@ func handleMCPDynamicPrompt(cfg *config.Config, lowered string) bool {
 
 func renderPromptDetails(pi mcp.PromptInfo) {
 	accent := config.Colors.Accent
-	titleColor := config.Colors.Info
-	descColor := color.New(color.FgCyan)
-	labelColor := config.Colors.Label
+	titleStyle := style.Title
+	descStyle := style.ColorCyan // Assuming ColorCyan is a color, need to wrap in style if we want Render
+	descSt := lipgloss.NewStyle().Foreground(descStyle)
+	labelStyle := config.Colors.Label
 	dim := config.Colors.Dim
-	reqColor := color.New(color.FgHiYellow)
-	optColor := dim
+	reqStyle := config.Colors.Warn
+	optStyle := dim
 
 	// Format: /$server/$prompt
 	promptPath := "/" + pi.Server + "/" + pi.Name
 
 	fmt.Println()
-	fmt.Printf("%s", accent.Sprint(promptPath))
+	fmt.Printf("%s", accent.Render(promptPath))
 	if pi.Title != "" && !strings.EqualFold(pi.Title, pi.Name) {
-		fmt.Printf(" — %s", titleColor.Sprint(pi.Title))
+		fmt.Printf(" — %s", titleStyle.Render(pi.Title))
 	}
 	fmt.Println()
 	if pi.Description != "" {
-		fmt.Println(descColor.Sprint(pi.Description))
+		fmt.Println(descSt.Render(pi.Description))
 	}
-	fmt.Println(dim.Sprint("Server: ") + labelColor.Sprint(pi.Server))
+	fmt.Println(dim.Render("Server: ") + labelStyle.Render(pi.Server))
 	if len(pi.Arguments) > 0 {
-		fmt.Println(dim.Sprint("Arguments:"))
+		fmt.Println(dim.Render("Arguments:"))
 		for _, arg := range pi.Arguments {
 			if arg == nil {
 				continue
 			}
-			argLine := fmt.Sprintf("  - %s", labelColor.Sprint(arg.Name))
+			argLine := fmt.Sprintf("  - %s", labelStyle.Render(arg.Name))
 			if arg.Required {
-				argLine += " " + reqColor.Sprint("(required)")
+				argLine += " " + reqStyle.Render("(required)")
 			} else {
-				argLine += " " + optColor.Sprint("(optional)")
+				argLine += " " + optStyle.Render("(optional)")
 			}
 			if arg.Description != "" {
-				argLine += ": " + descColor.Sprint(arg.Description)
+				argLine += ": " + descSt.Render(arg.Description)
 			}
 			fmt.Println(argLine)
 		}
 		// Show usage hint with arguments
 		fmt.Println()
-		fmt.Print(dim.Sprint("Usage: "))
-		usageLine := accent.Sprint(promptPath) + " "
+		fmt.Print(dim.Render("Usage: "))
+		usageLine := accent.Render(promptPath) + " "
 		for i, arg := range pi.Arguments {
 			if arg == nil {
 				continue
@@ -1277,17 +1279,17 @@ func renderPromptDetails(pi mcp.PromptInfo) {
 				usageLine += " "
 			}
 			if arg.Required {
-				usageLine += reqColor.Sprintf("<%s>", arg.Name)
+				usageLine += reqStyle.Render(fmt.Sprintf("<%s>", arg.Name))
 			} else {
-				usageLine += optColor.Sprintf("[%s]", arg.Name)
+				usageLine += optStyle.Render(fmt.Sprintf("[%s]", arg.Name))
 			}
 		}
 		fmt.Println(usageLine)
 	} else {
 		// No arguments - show simple usage
 		fmt.Println()
-		fmt.Print(dim.Sprint("Usage: "))
-		fmt.Println(accent.Sprint(promptPath) + " " + dim.Sprint("<your query>"))
+		fmt.Print(dim.Render("Usage: "))
+		fmt.Println(accent.Render(promptPath) + " " + dim.Render("<your query>"))
 	}
 	fmt.Println()
 }
@@ -1410,8 +1412,8 @@ func showCostEstimation(cfg *config.Config) {
 
 // printInlineHelp prints quick usage information for interactive mode
 func printInlineHelp(cfg *config.Config) {
-	title := config.Colors.Header
-	body := color.New(color.FgCyan)
+	title := style.Title
+	body := style.Info
 	accent := config.Colors.Accent
 	label := config.Colors.Dim
 	prefix := cfg.CommandPrefix
@@ -1420,17 +1422,17 @@ func printInlineHelp(cfg *config.Config) {
 	}
 
 	fmt.Println()
-	title.Println("Tips for getting started:")
-	fmt.Println(body.Sprintf("- Ask questions, or run commands with the configured prefix (default %q).", prefix))
-	fmt.Println(body.Sprintf("- Example: %s kubectl get events -A", prefix))
-	fmt.Println(body.Sprint("- Type 'exit', 'quit', or 'bye' to leave"))
+	title.Render("Tips for getting started:")
+	fmt.Println(body.Render(fmt.Sprintf("- Ask questions, or run commands with the configured prefix (default %q).", prefix)))
+	fmt.Println(body.Render(fmt.Sprintf("- Example: %s kubectl get events -A", prefix)))
+	fmt.Println(body.Render("- Type 'exit', 'quit', or 'bye' to leave"))
 	fmt.Println()
 
-	title.Println("Available Commands:")
+	title.Render("Available Commands:")
 	// Display slash commands from config
 	for _, cmd := range cfg.SlashCommands {
 		// Show primary command with description
-		fmt.Printf("%s - %s\n", accent.Sprint(cmd.Primary), body.Sprint(cmd.Description))
+		fmt.Printf("%s - %s\n", accent.Render(cmd.Primary), body.Render(cmd.Description))
 
 		// Show variations if there are multiple commands
 		if len(cmd.Commands) > 1 {
@@ -1441,25 +1443,25 @@ func printInlineHelp(cfg *config.Config) {
 				}
 			}
 			if len(variations) > 0 {
-				fmt.Printf("    %s (%s)\n", label.Sprint("Aliases:"), body.Sprint(strings.Join(variations, ", ")))
+				fmt.Printf("    %s (%s)\n", label.Render("Aliases:"), body.Render(strings.Join(variations, ", ")))
 			}
 		}
 	}
 	fmt.Println()
 
-	title.Println("Shell Commands:")
-	fmt.Println(body.Sprintf("- Press %s to toggle command mode; type %s again to exit command mode", prefix, prefix))
-	fmt.Println(body.Sprint("- Press tab for shell auto-completion"))
+	title.Render("Shell Commands:")
+	fmt.Println(body.Render(fmt.Sprintf("- Press %s to toggle command mode; type %s again to exit command mode", prefix, prefix)))
+	fmt.Println(body.Render("- Press tab for shell auto-completion"))
 	fmt.Println()
 
-	title.Println("Examples (cluster diagnostics):")
-	fmt.Println(body.Sprint("- Pods: 'find any issues with pods'"))
-	fmt.Println(body.Sprint("- Ingress: 'why is my ingress not routing traffic properly to backend services?'"))
-	fmt.Println(body.Sprint("- Performance: 'identify pods consuming excessive CPU or memory in the production namespace'"))
-	fmt.Println(body.Sprint("- Security: 'check for overly permissive RBAC settings in my cluster'"))
-	fmt.Println(body.Sprint("- Dependencies: 'analyze the connection between my failing deployments and their dependent configmaps'"))
-	fmt.Println(body.Sprint("- Events: 'summarize recent Warning events in kube-system and suggest next steps'"))
-	fmt.Println(body.Sprint("- Networking: 'debug DNS resolution problems inside pods in staging'"))
-	fmt.Println(body.Sprint("- Rollouts: 'find deployments stuck due to failed rollouts and why'"))
+	title.Render("Examples (cluster diagnostics):")
+	fmt.Println(body.Render("- Pods: 'find any issues with pods'"))
+	fmt.Println(body.Render("- Ingress: 'why is my ingress not routing traffic properly to backend services?'"))
+	fmt.Println(body.Render("- Performance: 'identify pods consuming excessive CPU or memory in the production namespace'"))
+	fmt.Println(body.Render("- Security: 'check for overly permissive RBAC settings in my cluster'"))
+	fmt.Println(body.Render("- Dependencies: 'analyze the connection between my failing deployments and their dependent configmaps'"))
+	fmt.Println(body.Render("- Events: 'summarize recent Warning events in kube-system and suggest next steps'"))
+	fmt.Println(body.Render("- Networking: 'debug DNS resolution problems inside pods in staging'"))
+	fmt.Println(body.Render("- Rollouts: 'find deployments stuck due to failed rollouts and why'"))
 	fmt.Println()
 }

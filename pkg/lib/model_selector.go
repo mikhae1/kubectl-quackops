@@ -28,18 +28,18 @@ func NewModelSelector(cfg *config.Config) *ModelSelector {
 // formatPriceColored formats a price with color based on cost level
 func formatPriceColored(price float64) string {
 	if price == 0.0 {
-		return config.Colors.Primary.Sprint("Free")
+		return config.Colors.Primary.Render("Free")
 	}
 
 	priceStr := FormatPrice(price)
 
 	// Color based on price level
 	if price > 0.00001 { // >$10/1M tokens
-		return config.Colors.Error.Sprint(priceStr)
+		return config.Colors.Error.Render(priceStr)
 	} else if price > 0.000001 { // >$1/1M tokens
-		return config.Colors.Warn.Sprint(priceStr)
+		return config.Colors.Warn.Render(priceStr)
 	} else {
-		return config.Colors.Primary.Sprint(priceStr)
+		return config.Colors.Primary.Render(priceStr)
 	}
 }
 
@@ -49,14 +49,14 @@ func formatColoredPricingDisplay(inputPrice, outputPrice float64) string {
 
 	if inputPrice > 0.0 {
 		// Use cyan/blue for input arrow to represent "input/incoming"
-		fancyInputArrow := config.Colors.Info.Sprint("↑")
+		fancyInputArrow := config.Colors.Info.Render("↑")
 		coloredPrice := formatPriceColored(inputPrice)
 		coloredParts = append(coloredParts, fancyInputArrow+coloredPrice)
 	}
 
 	if outputPrice > 0.0 {
 		// Use magenta/purple for output arrow to represent "output/outgoing"
-		fancyOutputArrow := config.Colors.Accent.Sprint("↓")
+		fancyOutputArrow := config.Colors.Accent.Render("↓")
 		coloredPrice := formatPriceColored(outputPrice)
 		coloredParts = append(coloredParts, fancyOutputArrow+coloredPrice)
 	}
@@ -66,7 +66,7 @@ func formatColoredPricingDisplay(inputPrice, outputPrice float64) string {
 	}
 
 	// Use dim color for the separator slash to keep it subtle
-	separator := config.Colors.Dim.Sprint("/")
+	separator := config.Colors.Dim.Render("/")
 	return strings.Join(coloredParts, separator)
 }
 
@@ -92,7 +92,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 	// Create readline instance with custom completer
 	completer := &modelCompleter{models: models}
 	rl, err := readline.NewFromConfig(&readline.Config{
-		Prompt:       config.Colors.Info.Sprint("Choose a model") + " (or press Tab): ",
+		Prompt:       config.Colors.Info.Render("Choose a model") + " (or press Tab): ",
 		AutoComplete: completer,
 		EOFPrompt:    "exit",
 	})
@@ -169,13 +169,13 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 		}
 		if len(partialMatches) > 1 {
 			lastPartialMatches = partialMatches // Store for numeric selection
-			fmt.Printf("%s\n", config.Colors.Info.Sprint("Multiple matches found:"))
+			fmt.Printf("%s\n", config.Colors.Info.Render("Multiple matches found:"))
 			for i, model := range partialMatches {
 				// Format the number with accent color
-				numStr := config.Colors.Info.Sprintf("%d.", i+1)
+				numStr := config.Colors.Info.Render(fmt.Sprintf("%d.", i+1))
 
 				// Format model ID with info color
-				modelStr := config.Colors.Model.Sprint(model.ID)
+				modelStr := config.Colors.Model.Render(model.ID)
 
 				contextStr := fmt.Sprintf("· %s", FormatCompactNumber(model.ContextLength))
 
@@ -191,7 +191,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 				if model.Description != "" {
 					// Wrap long descriptions
 					description := TrimText(model.Description, 80)
-					descStr := config.Colors.Dim.Sprint(" - " + description)
+					descStr := config.Colors.Dim.Render(" - " + description)
 					if pricingStr != "" {
 						fmt.Printf("  %s %s %s %s%s\n", numStr, modelStr, contextStr, pricingStr, descStr)
 					} else {
@@ -205,7 +205,7 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 					}
 				}
 			}
-			fmt.Printf("%s\n", config.Colors.Dim.Sprint("Please be more specific or type a number to select."))
+			fmt.Printf("%s\n", config.Colors.Dim.Render("Please be more specific or type a number to select."))
 			continue
 		} else {
 			lastPartialMatches = nil // Clear if no partial matches
@@ -220,12 +220,12 @@ func (ms *ModelSelector) SelectModel() (string, error) {
 // selectModel prints selection info and returns the model ID
 func (ms *ModelSelector) selectModel(model *metadata.ModelMetadata) (string, error) {
 	// Format with colors
-	selectedStr := config.Colors.Info.Sprint("Selected:")
-	modelStr := config.Colors.Accent.Sprint(model.ID)
-	contextStr := config.Colors.Primary.Sprintf("(context: %s)", FormatCompactNumber(model.ContextLength))
+	selectedStr := config.Colors.Info.Render("Selected:")
+	modelStr := config.Colors.Accent.Render(model.ID)
+	contextStr := config.Colors.Primary.Render(fmt.Sprintf("(context: %s)", FormatCompactNumber(model.ContextLength)))
 
 	if model.Description != "" {
-		descStr := " - " + config.Colors.Light.Sprint(model.Description)
+		descStr := " - " + config.Colors.Light.Render(model.Description)
 		fmt.Printf("%s %s %s%s\n", selectedStr, modelStr, contextStr, descStr)
 	} else {
 		fmt.Printf("%s %s %s\n", selectedStr, modelStr, contextStr)
@@ -246,7 +246,7 @@ func (ms *ModelSelector) selectModel(model *metadata.ModelMetadata) (string, err
 
 		if len(priceParts) > 0 {
 			detailedPricing := strings.Join(priceParts, ", ")
-			fmt.Printf("%s %s\n", config.Colors.Accent.Sprint("Pricing:"), detailedPricing)
+			fmt.Printf("%s %s\n", config.Colors.Accent.Render("Pricing:"), detailedPricing)
 		}
 	}
 
@@ -310,11 +310,11 @@ func (mc *modelCompleter) Do(line []rune, pos int) (newLine [][]rune, length int
 
 // formatCompletion formats a single completion with context and pricing info
 func (mc *modelCompleter) formatCompletion(modelText string, contextLength int, pricePretty string) string {
-	contextInfo := config.Colors.Dim.Sprintf("·%s", FormatCompactNumber(contextLength))
+	contextInfo := config.Colors.Dim.Render(fmt.Sprintf("·%s", FormatCompactNumber(contextLength)))
 
 	// Add pricing info if available
 	if pricePretty != "" {
-		pricingInfo := config.Colors.Dim.Sprintf("·%s", pricePretty)
+		pricingInfo := config.Colors.Dim.Render(fmt.Sprintf("·%s", pricePretty))
 		return modelText + contextInfo + pricingInfo
 	}
 
