@@ -18,12 +18,14 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
 	"github.com/mikhae1/kubectl-quackops/pkg/version"
+	"github.com/mikhae1/kubectl-quackops/themes"
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
 func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cfg := config.LoadConfig()
+	cfg.Theme = themes.Apply(cfg.Theme)
 	showEnv := false
 	cmd := &cobra.Command{
 		Use:          "kubectl-quackops",
@@ -221,6 +223,23 @@ func startChatSession(cfg *config.Config, args []string) error {
 			}
 		}
 	}
+
+	// Repaint the UI after theme changes: clear screen, banner, history, confirmation
+	repaintAfterThemeChange := func() {
+		lib.CoolClearEffect(cfg)
+
+		if len(cfg.SessionHistory) > 0 {
+			fmt.Println(config.Colors.Accent.Sprint("Session History:"))
+			for _, event := range cfg.SessionHistory {
+				fmt.Print(mcp.RenderSessionEvent(event, true, cfg))
+				fmt.Println(config.Colors.Dim.Sprint(strings.Repeat("-", 40)))
+			}
+		} else {
+			printWelcomeBanner(cfg)
+		}
+
+		fmt.Printf("%s %s\n", config.Colors.Info.Sprint("Theme set to"), config.Colors.Accent.Sprintf("%s", cfg.Theme))
+	}
 	// Capture ESC and ! for edit mode toggle
 	rlConfig.FuncFilterInputRune = func(r rune) (rune, bool) {
 		// Toggle edit mode with ! key press
@@ -364,6 +383,10 @@ func startChatSession(cfg *config.Config, args []string) error {
 					lastTextPrompt = ""
 					userMsgCount = 0
 					lib.CoolClearEffect(cfg)
+					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+					rl.Refresh()
+				} else if action == "theme" {
+					repaintAfterThemeChange()
 					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 					rl.Refresh()
 				}
@@ -519,6 +542,27 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 			fmt.Println(dim.Sprint("MCP client: ") + warn.Sprint("disabled"))
 		}
 		return true, "mcp"
+	case "/theme", "/themes":
+		selector := lib.NewThemeSelector()
+		selected, err := selector.SelectTheme(cfg.Theme)
+		if err != nil {
+			fmt.Println(warn.Sprint(err.Error()))
+			return true, "theme"
+		}
+
+		applied := themes.Apply(selected)
+		cfg.Theme = applied
+
+		if err := config.SaveTheme(applied); err != nil {
+			fmt.Printf("%s %s\n", warn.Sprint("Could not save theme preference:"), err.Error())
+		}
+
+		if envTheme, ok := config.ThemeFromEnv(); ok && envTheme != "" && !strings.EqualFold(envTheme, applied) {
+			fmt.Printf("%s %s\n", warn.Sprint("QU_THEME is set and will override saved config on restart."), dim.Sprintf("Current env: %s", envTheme))
+		}
+
+		fmt.Printf("%s %s\n", info.Sprint("Theme set to"), accent.Sprintf("%s", applied))
+		return true, "theme"
 	case "/model", "/models":
 		// Show current model if no arguments, or launch interactive selector
 		prov := strings.ToUpper(strings.TrimSpace(cfg.Provider))
@@ -720,8 +764,8 @@ func printWelcomeBanner(cfg *config.Config) {
 	}
 
 	// Checkerboard (chess) pattern colorizer for hero text
-	// Corner/line characters like ╔ ╗ ╚ ╝ are rendered with a dim shadow color
-	// and excluded from the chess alternation (do not advance the chess column).
+	// Corner/line characters like ╔ ╗ ╚ ╝ are tinted with shadow but still
+	// count toward the chess column so the pattern stays aligned.
 	chessColorize := func(text string, row int) string {
 		if text == "" {
 			return text
@@ -741,7 +785,8 @@ func printWelcomeBanner(cfg *config.Config) {
 		for _, r := range text {
 			if isShadowRune(r) {
 				b.WriteString(shadow.Sprint(string(r)))
-				// do not advance col; excluded from chess pattern
+				// still advance to keep checker offsets aligned
+				col++
 				continue
 			}
 			c := monoPalette[(row+col)%len(monoPalette)]
@@ -966,6 +1011,18 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		actualUserQuery = strings.TrimSpace(inlineQuery)
 		promptServer = inlineServerName
 		hasPrompt = true
+		// If the trailing query is empty or just punctuation (e.g., "?"),
+		// fall back to using the full input with the prompt path removed.
+		if actualUserQuery == "" || actualUserQuery == "?" {
+			lower := strings.ToLower(userPrompt)
+			pathLower := strings.ToLower("/" + inlineServerName + "/" + inlinePromptName)
+			if idx := strings.Index(lower, pathLower); idx != -1 {
+				withoutPath := strings.TrimSpace(userPrompt[:idx] + userPrompt[idx+len(pathLower):])
+				if withoutPath != "" {
+					actualUserQuery = withoutPath
+				}
+			}
+		}
 
 		logger.Log("debug", "[MCP Prompt] Detected inline prompt: '%s' from server '%s'", cfg.SelectedPrompt, promptServer)
 		logger.Log("debug", "[MCP Prompt] User query: '%s'", actualUserQuery)
@@ -1098,7 +1155,6 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		}
 		// User pressed ESC: keep interactive session alive and skip retries (handled upstream)
 		if lib.IsUserCancel(err) {
-			fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(cancelled)"))
 			fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(cancelled)"))
 			return nil
 		}

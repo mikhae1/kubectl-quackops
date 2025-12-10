@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
 	"github.com/tmc/langchaingo/llms"
 )
+
+const defaultTheme = "dracula"
 
 // CmdRes represents the result of executing a command
 type CmdRes struct {
@@ -79,6 +82,7 @@ type Config struct {
 	HistoryFile           string
 	DisableHistory        bool
 	KubectlBinaryPath     string
+	Theme                 string
 
 	// SuppressContentPrint prevents Chat from printing model message bodies
 	SuppressContentPrint bool
@@ -551,6 +555,7 @@ func LoadConfig() *Config {
 		HistoryFile:           getEnvArg("QU_HISTORY_FILE", defaultHistoryFile).(string),
 		DisableHistory:        getEnvArg("QU_DISABLE_HISTORY", false).(bool),
 		KubectlBinaryPath:     getEnvArg("QU_KUBECTL_BINARY", "kubectl").(string),
+		Theme:                 strings.ToLower(strings.TrimSpace(getEnvArg("QU_THEME", defaultTheme).(string))),
 		SuppressContentPrint:  false,
 		SkipWaits:             getEnvArg("QU_SKIP_WAITS", false).(bool),
 		SpinnerTimeout:        300,
@@ -889,6 +894,57 @@ func loadConfigFromFile(configPath string) map[string]string {
 	return values
 }
 
+// SaveConfigValue writes a single key/value pair into ~/.quackops/config, preserving existing entries.
+func SaveConfigValue(key, value string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(homeDir, ".quackops", "config")
+
+	values := loadConfigFromFile(configPath)
+	if values == nil {
+		values = make(map[string]string)
+	}
+	values[key] = value
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var lines []string
+	for _, k := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", k, values[k]))
+	}
+	content := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		return err
+	}
+
+	if configFileValues == nil {
+		configFileValues = make(map[string]string)
+	}
+	configFileValues[key] = value
+	return nil
+}
+
+// SaveTheme persists the chosen theme to ~/.quackops/config.
+func SaveTheme(theme string) error {
+	return SaveConfigValue("QU_THEME", strings.ToLower(strings.TrimSpace(theme)))
+}
+
+// ThemeFromEnv returns the theme set via QU_THEME, if present.
+func ThemeFromEnv() (string, bool) {
+	val, ok := os.LookupEnv("QU_THEME")
+	return strings.ToLower(strings.TrimSpace(val)), ok
+}
+
 // GetEnv returns the value of the environment variable with the given key.
 func getEnvArg(key string, fallback interface{}) interface{} {
 	getValue := func(value string) interface{} {
@@ -1185,6 +1241,11 @@ func defaultSlashCommands() []SlashCommand {
 			Commands:    []string{"/bye", "/exit", "/quit", "/q"},
 			Primary:     "/quit",
 			Description: "Exit the application",
+		},
+		{
+			Commands:    []string{"/theme"},
+			Primary:     "/theme",
+			Description: "Switch UI theme",
 		},
 	}
 }

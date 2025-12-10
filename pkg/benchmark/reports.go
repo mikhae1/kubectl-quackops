@@ -13,6 +13,7 @@ import (
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
+	"github.com/mikhae1/kubectl-quackops/themes"
 )
 
 // ReportGenerator handles benchmark result formatting and output
@@ -369,6 +370,7 @@ func (rg *ReportGenerator) writeDetailedResultsTable(writer io.Writer) {
 func (rg *ReportGenerator) writeLLMSampleWindows(writer io.Writer) {
 	// Pull UI knobs
 	uiCfg := config.LoadConfig()
+	uiCfg.Theme = themes.Apply(uiCfg.Theme)
 	maxLines := uiCfg.ToolOutputMaxLines
 	maxLineLen := uiCfg.ToolOutputMaxLineLen
 

@@ -9,12 +9,14 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
+	"github.com/mikhae1/kubectl-quackops/themes"
 )
 
 // FormatToolCallBlock builds a colored block for an MCP tool call and its output and returns it as a string.
 // Callers can decide when to print it to avoid interfering with other stdout streams.
 func FormatToolCallBlock(toolName string, args map[string]any, output string) string {
 	cfg := config.LoadConfig()
+	cfg.Theme = themes.Apply(cfg.Theme)
 	maxLineLen := cfg.ToolOutputMaxLineLen
 	maxLines := cfg.ToolOutputMaxLines
 
@@ -33,15 +35,9 @@ func FormatToolCallBlock(toolName string, args map[string]any, output string) st
 
 	// Create render block using shared functionality
 	block := &lib.RenderBlock{
-		Title:         "MCP Tool: " + toolName,
-		MaxLineLen:    maxLineLen,
-		MaxLines:      maxLines,
-		BorderPalette: config.Colors.GradientAlt,
-		TitleColor:    config.Colors.Accent,
-		LabelColor:    config.Colors.Label,
-		KeyColor:      config.Colors.Label,
-		ValueColor:    config.Colors.Output,
-		FallbackColor: config.Colors.Output,
+		Title:      "MCP Tool: " + toolName,
+		MaxLineLen: maxLineLen,
+		MaxLines:   maxLines,
 		Sections: []lib.RenderSection{
 			{Label: "Args", Content: argsBlock},
 			{Label: "Output", Content: output},
@@ -54,6 +50,8 @@ func FormatToolCallBlock(toolName string, args map[string]any, output string) st
 // FormatToolCallVerbose formats an MCP tool call in verbose mode similar to diagnostic commands.
 // This format is best suited for saving full logs.
 func FormatToolCallVerbose(toolName string, args map[string]any, output string) string {
+	cfg := config.LoadConfig()
+	cfg.Theme = themes.Apply(cfg.Theme)
 	dim := config.Colors.ThinkDim.SprintFunc()
 	bold := config.Colors.Bold.SprintFunc()
 

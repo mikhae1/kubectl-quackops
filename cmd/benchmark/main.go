@@ -13,6 +13,7 @@ import (
 
 	"github.com/mikhae1/kubectl-quackops/pkg/benchmark"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/themes"
 )
 
 const (
@@ -55,10 +56,10 @@ func main() {
 		quiet  = flag.Bool("quiet", false, "Suppress progress output")
 
 		// Feature toggles
-		noQuality       = flag.Bool("no-quality", false, "Disable quality evaluation")
-		noCost          = flag.Bool("no-cost", false, "Disable cost tracking")
+		noQuality         = flag.Bool("no-quality", false, "Disable quality evaluation")
+		noCost            = flag.Bool("no-cost", false, "Disable cost tracking")
 		kubectlGeneration = flag.Bool("kubectl-generation", false, "Enable kubectl command generation testing")
-		dryRun    = flag.Bool("dry-run", false, "Show what would be benchmarked without running")
+		dryRun            = flag.Bool("dry-run", false, "Show what would be benchmarked without running")
 
 		// Advanced options
 		listScenarios = flag.Bool("list-scenarios", false, "List available scenarios and exit")
@@ -106,6 +107,7 @@ func main() {
 
 	// Load base configuration
 	cfg := config.LoadConfig()
+	cfg.Theme = themes.Apply(cfg.Theme)
 
 	// Build benchmark configuration
 	benchConfig, err := buildBenchmarkConfig(cfg, &cliOptions{
@@ -213,25 +215,25 @@ type cliOptions struct {
 	configFile, providers, models                         string
 	iterations, timeout, parallel, warmup, cooldown       int
 	scenarios, complexity, category, tags, format, output string
-	noQuality, noCost, verbose, kubectlGeneration          bool
+	noQuality, noCost, verbose, kubectlGeneration         bool
 }
 
 func buildBenchmarkConfig(baseCfg *config.Config, opts *cliOptions) (*benchmark.BenchmarkConfig, error) {
 	// Start with configuration from environment/config files
 	cfg := &benchmark.BenchmarkConfig{
-		Providers:           []benchmark.ProviderConfig{},
-		Iterations:          baseCfg.BenchmarkIterations,
-		Timeout:             time.Duration(baseCfg.BenchmarkTimeout.Seconds()) * time.Second,
-		Parallel:            baseCfg.BenchmarkParallel,
-		WarmupRuns:          baseCfg.BenchmarkWarmupRuns,
-		CooldownDelay:       baseCfg.BenchmarkCooldownDelay,
-		ScenarioFilter:      baseCfg.BenchmarkScenarioFilter,
-		ComplexityFilter:    baseCfg.BenchmarkComplexity,
-		OutputFormat:        baseCfg.BenchmarkOutputFormat,
-		OutputFile:          baseCfg.BenchmarkOutputFile,
-		Verbose:               baseCfg.BenchmarkVerbose,
-		EnableQualityChecks:   baseCfg.BenchmarkEnableQuality,
-		EnableCostTracking:    baseCfg.BenchmarkEnableCost,
+		Providers:               []benchmark.ProviderConfig{},
+		Iterations:              baseCfg.BenchmarkIterations,
+		Timeout:                 time.Duration(baseCfg.BenchmarkTimeout.Seconds()) * time.Second,
+		Parallel:                baseCfg.BenchmarkParallel,
+		WarmupRuns:              baseCfg.BenchmarkWarmupRuns,
+		CooldownDelay:           baseCfg.BenchmarkCooldownDelay,
+		ScenarioFilter:          baseCfg.BenchmarkScenarioFilter,
+		ComplexityFilter:        baseCfg.BenchmarkComplexity,
+		OutputFormat:            baseCfg.BenchmarkOutputFormat,
+		OutputFile:              baseCfg.BenchmarkOutputFile,
+		Verbose:                 baseCfg.BenchmarkVerbose,
+		EnableQualityChecks:     baseCfg.BenchmarkEnableQuality,
+		EnableCostTracking:      baseCfg.BenchmarkEnableCost,
 		EnableKubectlGeneration: false, // Default to false, can be overridden by CLI
 	}
 
@@ -502,7 +504,7 @@ func listAvailableScenarios() {
 			break
 		}
 	}
-	
+
 	scenarios := benchmark.GetScenariosWithOptions(includeKubectlGeneration)
 	stats := benchmark.GetScenarioStats()
 

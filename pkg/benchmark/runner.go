@@ -13,6 +13,7 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
+	"github.com/mikhae1/kubectl-quackops/themes"
 )
 
 // BenchmarkRunner orchestrates benchmarking across multiple providers and models
@@ -135,7 +136,7 @@ func (br *BenchmarkRunner) Run(ctx context.Context) (*BenchmarkResults, error) {
 	// Run benchmarks by scenario (each scenario runs across all models before moving to next scenario)
 	for scenarioIndex, scenario := range scenarios {
 		logger.Log("info", "Running scenario [%d/%d]: %s across %d models", scenarioIndex+1, len(scenarios), scenario.Name, len(targets))
-		
+
 		for modelIndex, target := range targets {
 			logger.Log("info", "Running scenario %s on [%d/%d] %s/%s", scenario.Name, modelIndex+1, len(targets), target.Provider, target.Model)
 
@@ -512,6 +513,7 @@ func (br *BenchmarkRunner) executeKubectlGenerationScenario(cfg *config.Config, 
 // createProviderConfig creates a config for the specific provider/model
 func (br *BenchmarkRunner) createProviderConfig(target BenchmarkTarget) (*config.Config, error) {
 	cfg := config.LoadConfig()
+	cfg.Theme = themes.Apply(cfg.Theme)
 
 	// Override with benchmark-specific settings
 	cfg.Provider = target.Provider

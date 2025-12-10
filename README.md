@@ -443,6 +443,7 @@ QU_MCP_CLIENT=true
 | `QU_DISABLE_HISTORY` | bool | `false` | Disable storing prompt history in a file |
 | `QU_KUBECTL_BINARY` | string | `kubectl` | Path to the kubectl binary |
 | `QU_COMMAND_PREFIX` | string | `$` | Single-character prefix to enter command mode and mark shell commands |
+| `QU_THEME` | string | `dracula` | UI theme (`dracula`, `cyanide`); env overrides config |
 | `QU_ENABLE_BASELINE` | bool | `true` | Enable baseline diagnostic pack before LLM |
 | `QU_BASELINE_LEVEL` | string | `minimal` | Baseline diagnostic level: minimal (13 commands), standard (+ workloads), comprehensive (+ metrics/policies) |
 | `QU_BASELINE_NAMESPACE_FILTER` | string | `` | Comma-separated namespaces for baseline commands (empty = all namespaces) |
