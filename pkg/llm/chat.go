@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
@@ -624,9 +623,9 @@ func generateWithRetries(
 			} else if retriesLeft > 0 {
 				errorMsg := lib.GetErrorMessage(err)
 				if errorMsg != "" {
-					fmt.Printf("%s\n", color.RedString(errorMsg))
+					fmt.Printf("%s\n", config.Colors.Error.Sprint(errorMsg))
 				} else {
-					fmt.Printf("%s\n", color.RedString(err.Error()))
+					fmt.Printf("%s\n", config.Colors.Error.Sprint(err.Error()))
 				}
 				continue
 			}

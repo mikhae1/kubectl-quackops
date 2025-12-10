@@ -9,7 +9,6 @@ import (
 
 	"errors"
 
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 )
@@ -67,27 +66,27 @@ func Display429Error(err error, cfg *config.Config, maxRetries int) {
 	delay, parseErr := ParseRetryDelay(err)
 
 	// Display formatted rate limit information
-	fmt.Printf("\n%s\n", color.RedString("⚠️  Rate Limit Exceeded"))
-	fmt.Printf("Provider: %s\n", color.CyanString(cfg.Provider))
-	fmt.Printf("Model: %s\n", color.CyanString(cfg.Model))
+	fmt.Printf("\n%s\n", config.Colors.Error.Sprint("⚠️  Rate Limit Exceeded"))
+	fmt.Printf("Provider: %s\n", config.Colors.Provider.Sprint(cfg.Provider))
+	fmt.Printf("Model: %s\n", config.Colors.Model.Sprint(cfg.Model))
 
 	// Only show retry information if retries are enabled
 	if maxRetries > 0 {
 		if parseErr == nil {
-			fmt.Printf("Retry after: %s (parsed from provider response)\n", color.YellowString(delay.String()))
+			fmt.Printf("Retry after: %s (parsed from provider response)\n", config.Colors.Warn.Sprint(delay.String()))
 		} else {
 			fmt.Printf("Retry strategy: exponential backoff (couldn't parse provider delay)\n")
 			logger.Log("debug", "Failed to parse retry delay: %v", parseErr)
 		}
 	}
 
-	fmt.Printf("Raw error: %s\n", color.HiBlackString(err.Error()))
+	fmt.Printf("Raw error: %s\n", config.Colors.Dim.Sprint(err.Error()))
 
-	fmt.Printf("\n%s\n", color.YellowString("💡 Suggestions:"))
+	fmt.Printf("\n%s\n", config.Colors.Warn.Sprint("💡 Suggestions:"))
 	fmt.Printf("  • Wait for the retry period to expire\n")
 	fmt.Printf("  • Consider using a different model or provider\n")
 	fmt.Printf("  • Check your API quota and billing status\n")
-	fmt.Printf("  • Enable throttling with %s flag\n", color.CyanString("--throttle-rpm"))
+	fmt.Printf("  • Enable throttling with %s flag\n", config.Colors.AccentAlt.Sprint("--throttle-rpm"))
 	fmt.Printf("\n")
 }
 

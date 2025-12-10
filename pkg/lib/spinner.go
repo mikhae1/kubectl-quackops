@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 )
@@ -50,7 +49,7 @@ type Spinner struct {
 	Interval       time.Duration
 	Suffix         string
 	Writer         io.Writer
-	GradientColors []*color.Color
+	GradientColors []*config.ANSIColor
 	colorize       func(string) string
 	stopCh         chan struct{}
 	doneCh         chan struct{}
@@ -77,30 +76,30 @@ func NewSpinner(charset []string, interval time.Duration) *Spinner {
 
 // Color sets simple color attributes by name using fatih/color. Unknown values are ignored.
 func (s *Spinner) Color(attrs ...string) {
-	var cs []color.Attribute
+	var cs []config.ColorAttribute
 	for _, a := range attrs {
 		switch strings.ToLower(strings.TrimSpace(a)) {
 		case "bold":
-			cs = append(cs, color.Bold)
+			cs = append(cs, config.ColorBold)
 		case "faint", "dim":
-			cs = append(cs, color.Faint)
+			cs = append(cs, config.ColorFaint)
 		case "cyan":
-			cs = append(cs, color.FgCyan)
+			cs = append(cs, config.ColorFgCyan)
 		case "green":
-			cs = append(cs, color.FgGreen)
+			cs = append(cs, config.ColorFgGreen)
 		case "blue":
-			cs = append(cs, color.FgBlue)
+			cs = append(cs, config.ColorFgBlue)
 		case "yellow":
-			cs = append(cs, color.FgYellow)
+			cs = append(cs, config.ColorFgYellow)
 		case "magenta":
-			cs = append(cs, color.FgMagenta)
+			cs = append(cs, config.ColorFgMagenta)
 		case "red":
-			cs = append(cs, color.FgRed)
+			cs = append(cs, config.ColorFgRed)
 		default:
 			// ignore unknown
 		}
 	}
-	c := color.New(cs...)
+	c := config.NewColor(cs...)
 	s.mutex.Lock()
 	s.colorize = func(str string) string { return c.Sprint(str) }
 	s.mutex.Unlock()
@@ -246,31 +245,16 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 	sm.activeSpinner.Writer = os.Stderr
 
 	// Apply colors based on spinner type
-	// Define gradients
-	blueCyanGradient := []*color.Color{
-		color.New(color.FgHiCyan),
-		color.New(color.FgCyan),
-		color.New(color.FgBlue),
-		color.New(color.FgHiBlue),
-	}
-
-	magentaBlueGradient := []*color.Color{
-		color.New(color.FgHiMagenta),
-		color.New(color.FgMagenta),
-		color.New(color.FgHiBlue),
-		color.New(color.FgBlue),
-	}
-
 	// Apply colors based on spinner type
 	switch spinnerType {
 	case SpinnerDiagnostic:
-		sm.activeSpinner.GradientColors = blueCyanGradient
+		sm.activeSpinner.GradientColors = config.Colors.SpinnerDiag
 	case SpinnerLLM:
-		sm.activeSpinner.GradientColors = magentaBlueGradient
+		sm.activeSpinner.GradientColors = config.Colors.SpinnerLLM
 	case SpinnerGeneration:
-		sm.activeSpinner.GradientColors = blueCyanGradient
+		sm.activeSpinner.GradientColors = config.Colors.SpinnerDiag
 	case SpinnerRAG:
-		sm.activeSpinner.GradientColors = blueCyanGradient
+		sm.activeSpinner.GradientColors = config.Colors.SpinnerDiag
 	case SpinnerThrottle:
 		sm.activeSpinner.Color("yellow", "bold")
 	}
@@ -676,17 +660,10 @@ func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, i
 	}
 
 	// Neon palette
-	cometHead := []*color.Color{
-		color.New(color.FgHiCyan, color.Bold),
-		color.New(color.FgHiMagenta, color.Bold),
-	}
-	cometLead := color.New(color.FgHiWhite, color.Bold)
-	cometTrail := []*color.Color{
-		color.New(color.FgCyan),
-		color.New(color.FgBlue),
-		color.New(color.FgHiBlack),
-	}
-	bgColor := color.New(color.Faint)
+	cometHead := config.Colors.SpinnerHead
+	cometLead := config.Colors.SpinnerLead
+	cometTrail := config.Colors.SpinnerTrail
+	bgColor := config.Colors.SpinnerBg
 
 	// Calculate tail position from lead position
 	var tailPos int

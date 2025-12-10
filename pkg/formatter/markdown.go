@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/fatih/color"
+	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"golang.org/x/term"
 )
 
@@ -214,18 +214,14 @@ func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
 		} else if f.inCodeBlock {
 			// If we're inside a code block, don't process Markdown
 			if f.colorEnabled {
-				result.Write([]byte(color.New(color.Italic).Sprint(string(line))))
+				result.Write([]byte(config.Colors.Italic.Sprint(string(line))))
 			} else {
 				result.Write(line)
 			}
 		} else {
-			// Normal Markdown processing
-			if f.colorEnabled {
-				formattedLine := f.formatLine(line)
-				result.Write(formattedLine)
-			} else {
-				result.Write(line)
-			}
+			// Normal Markdown processing (formatting handles color flag internally)
+			formattedLine := f.formatLine(line)
+			result.Write(formattedLine)
 		}
 
 		if i < len(lines)-1 {
@@ -239,6 +235,27 @@ func (f *MarkdownFormatter) formatMarkdown(content []byte) []byte {
 // formatLine formats a single line of markdown content
 func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 	if len(line) == 0 {
+		return line
+	}
+
+	// When color is disabled, keep content intact except normalize unordered list bullets.
+	if !f.colorEnabled {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("- ")) ||
+			bytes.HasPrefix(trimmed, []byte("* ")) ||
+			bytes.HasPrefix(trimmed, []byte("+ ")) {
+			prefixLen := len(line) - len(bytes.TrimLeft(line, " \t"))
+			bulletIdx := prefixLen
+			if bulletIdx+1 < len(line) && (line[bulletIdx] == '-' || line[bulletIdx] == '*' || line[bulletIdx] == '+') && line[bulletIdx+1] == ' ' {
+				var result bytes.Buffer
+				result.Write(line[:prefixLen]) // Preserve leading whitespace
+				result.Write([]byte("-"))      // Normalize bullet
+				result.WriteByte(' ')
+				restOfLine := bytes.TrimLeft(line[bulletIdx+2:], " \t")
+				result.Write(restOfLine)
+				return result.Bytes()
+			}
+		}
 		return line
 	}
 
@@ -261,18 +278,18 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 
 			switch level {
 			case 1:
-				return []byte(color.New(color.FgBlue, color.Bold).Sprint(string(line)))
+				return []byte(config.Colors.Heading.Sprint(string(line)))
 			case 2:
-				return []byte(color.New(color.FgBlue, color.Bold).Sprint(string(line)))
+				return []byte(config.Colors.Heading.Sprint(string(line)))
 			default:
-				return []byte(color.New(color.FgBlue, color.Bold).Sprint(string(line)))
+				return []byte(config.Colors.Heading.Sprint(string(line)))
 			}
 		}
 	}
 
 	// Blockquotes
 	if bytes.HasPrefix(line, []byte(">")) {
-		return []byte(color.New(color.FgGreen).Sprint(string(line)))
+		return []byte(config.Colors.Blockquote.Sprint(string(line)))
 	}
 
 	// Lists (unordered)
@@ -287,11 +304,12 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 		// Guard against malformed lines
 		if bulletIdx+1 < len(line) && (line[bulletIdx] == '-' || line[bulletIdx] == '*' || line[bulletIdx] == '+') && line[bulletIdx+1] == ' ' {
 			var result bytes.Buffer
-			result.Write(line[:prefixLen])                              // Preserve leading whitespace
-			result.Write([]byte(color.New(color.FgHiBlue).Sprint("-"))) // Render bullet as dash
-			result.WriteByte(' ')                                       // One space after bullet
-			restOfLine := bytes.TrimLeft(line[bulletIdx+2:], " \t")     // Skip original spacing
-			formattedRest := f.formatInlineElements(restOfLine)         // Format remaining text
+			result.Write(line[:prefixLen]) // Preserve leading whitespace
+			bullet := config.Colors.ListBullet.Sprint("-")
+			result.Write([]byte(bullet))                            // Render bullet as dash
+			result.WriteByte(' ')                                   // One space after bullet
+			restOfLine := bytes.TrimLeft(line[bulletIdx+2:], " \t") // Skip original spacing
+			formattedRest := f.formatInlineElements(restOfLine)     // Format remaining text
 			result.Write(formattedRest)
 
 			return result.Bytes()
@@ -312,8 +330,9 @@ func (f *MarkdownFormatter) formatLine(line []byte) []byte {
 
 		if numEnd+1 < len(line) && line[numEnd] == '.' && line[numEnd+1] == ' ' {
 			var result bytes.Buffer
-			result.Write(line[:prefixLen])                                                             // Write leading whitespace
-			result.Write([]byte(color.New(color.FgHiBlue).Sprint(string(line[prefixLen : numEnd+1])))) // Color the number and dot
+			result.Write(line[:prefixLen]) // Write leading whitespace
+			num := string(line[prefixLen : numEnd+1])
+			result.Write([]byte(config.Colors.ListNumber.Sprint(num))) // Color the number and dot
 
 			// Process the rest of the line for inline elements
 			restOfLine := bytes.TrimLeft(line[numEnd+2:], " \t") // +2 to skip the dot and space
@@ -341,12 +360,12 @@ func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
 	// Process double backticks first to avoid conflicts with single backticks
 	text = doubleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
 		content := doubleBacktickCodeRegex.FindStringSubmatch(match)[1]
-		return "`" + color.New(color.FgHiCyan, color.Bold).Sprint(content) + "`"
+		return "`" + config.Colors.InlineCodeBold.Sprint(content) + "`"
 	})
 
 	text = singleBacktickCodeRegex.ReplaceAllStringFunc(text, func(match string) string {
 		content := singleBacktickCodeRegex.FindStringSubmatch(match)[1]
-		return "`" + color.New(color.FgHiCyan).Sprint(content) + "`"
+		return "`" + config.Colors.InlineCode.Sprint(content) + "`"
 	})
 
 	// Process links [text](url)
@@ -356,9 +375,9 @@ func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
 		url := parts[2]
 
 		if linkText != "" && url != "" {
-			return color.New(color.FgBlue, color.Underline).Sprintf("%s (%s)", linkText, url)
+			return config.Colors.Link.Sprintf("%s (%s)", linkText, url)
 		} else if linkText != "" {
-			return color.New(color.FgBlue, color.Underline).Sprint(linkText)
+			return config.Colors.Link.Sprint(linkText)
 		}
 		return match
 	})
@@ -367,14 +386,14 @@ func (f *MarkdownFormatter) formatInlineElements(line []byte) []byte {
 	text = boldRegex.ReplaceAllStringFunc(text, func(match string) string {
 		// Extract the bold content (without asterisks)
 		content := boldRegex.FindStringSubmatch(match)[1]
-		return color.New(color.Bold).Sprint(content)
+		return config.Colors.Bold.Sprint(content)
 	})
 
 	// Process italic text
 	text = italicRegex.ReplaceAllStringFunc(text, func(match string) string {
 		// Extract the italic content (without asterisks)
 		content := italicRegex.FindStringSubmatch(match)[1]
-		return color.New(color.Italic).Sprint(content)
+		return config.Colors.Italic.Sprint(content)
 	})
 
 	// Process quoted strings
@@ -396,7 +415,7 @@ func (f *MarkdownFormatter) colorizeQuotedStrings(text []byte) []byte {
 		result.Write(text[lastIndex:match[0]])
 		// Write colored quoted text
 		quotedText := text[match[0]:match[1]]
-		result.Write([]byte(color.New(color.FgGreen).Sprint(string(quotedText))))
+		result.Write([]byte(config.Colors.QuoteDouble.Sprint(string(quotedText))))
 		lastIndex = match[1]
 	}
 	// Write remaining text after last double quote match
@@ -417,7 +436,7 @@ func (f *MarkdownFormatter) colorizeQuotedStrings(text []byte) []byte {
 		result.Write(leadingSpace)
 
 		// Write colored quoted text (which includes the quotes)
-		result.Write([]byte(color.New(color.FgCyan).Sprint(string(quotedContent))))
+		result.Write([]byte(config.Colors.QuoteSingle.Sprint(string(quotedContent))))
 
 		// Update lastIndex to after this match
 		lastIndex = bytes.Index(remainingText[lastIndex:], fullMatch) + lastIndex + len(fullMatch)
@@ -444,9 +463,9 @@ func renderThinkBlock(content string) string {
 	}
 
 	// Brown colors for borders and headers
-	borderColor := color.New(color.FgYellow) // Brown/yellow for borders
-	headerColor := color.New(color.Bold)     // Bold brown for header
-	dimColor := color.New(color.Faint)       // Dimmed text for content
+	borderColor := config.Colors.ThinkBorder
+	headerColor := config.Colors.ThinkHeader
+	dimColor := config.Colors.ThinkDim
 
 	var result strings.Builder
 

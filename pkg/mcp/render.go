@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
@@ -28,7 +27,7 @@ func FormatToolCallBlock(toolName string, args map[string]any, output string) st
 	}
 	argsLines := strings.Split(argJSON, "\n")
 	if len(argsLines) > 20 {
-		argsLines = append(argsLines[:20], color.New(color.Faint).Sprint("… (args truncated)"))
+		argsLines = append(argsLines[:20], config.Colors.Ellipsis.Sprint("… (args truncated)"))
 	}
 	argsBlock := strings.Join(argsLines, "\n")
 
@@ -49,8 +48,8 @@ func FormatToolCallBlock(toolName string, args map[string]any, output string) st
 // FormatToolCallVerbose formats an MCP tool call in verbose mode similar to diagnostic commands.
 // This format is best suited for saving full logs.
 func FormatToolCallVerbose(toolName string, args map[string]any, output string) string {
-	dim := color.New(color.Faint).SprintFunc()
-	bold := color.New(color.Bold).SprintFunc()
+	dim := config.Colors.ThinkDim.SprintFunc()
+	bold := config.Colors.Bold.SprintFunc()
 
 	// Prepare args content
 	argJSON := "{}"

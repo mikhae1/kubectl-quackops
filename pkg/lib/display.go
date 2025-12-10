@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/tmc/langchaingo/llms"
 	"golang.org/x/term"
@@ -40,10 +39,10 @@ func KubeCtxInfo(cfg *config.Config) error {
 
 	info := strings.TrimSpace(string(clusterOutput))
 	if info == "" {
-		fmt.Println(color.HiRedString("Current Kubernetes context is empty or not set."))
+		fmt.Println(config.Colors.Error.Sprint("Current Kubernetes context is empty or not set."))
 	} else {
 		infoLines := strings.Split(info, "\n")
-		fmt.Printf(color.HiYellowString("Using Kubernetes context")+": %s\n%s", ctxName, strings.Join(infoLines[:len(infoLines)-1], "\n"))
+		fmt.Printf("%s: %s\n%s", config.Colors.Warn.Sprint("Using Kubernetes context"), ctxName, strings.Join(infoLines[:len(infoLines)-1], "\n"))
 	}
 
 	return nil
@@ -146,9 +145,9 @@ func FormatContextPrompt(cfg *config.Config, isCommand bool) string {
 		if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
 			prefix = cfg.CommandPrefix
 		}
-		promptStr = color.New(color.FgHiRed, color.Bold).Sprint(prefix + " ❯ ")
+		promptStr = config.Colors.PromptCommand.Sprint(prefix + " ❯ ")
 	} else {
-		promptStr = color.New(color.Bold).Sprint("❯ ")
+		promptStr = config.Colors.PromptDefault.Sprint("❯ ")
 	}
 
 	return contextIndicator + " " + promptStr
@@ -160,13 +159,13 @@ func FormatContextIndicator(cfg *config.Config) string {
 	percentage := CalculateContextPercentage(cfg)
 
 	// Choose color based on context usage
-	var contextColor *color.Color
+	var contextColor *config.ANSIColor
 	if percentage < 50 {
-		contextColor = color.New(color.FgHiCyan)
+		contextColor = config.Colors.ContextLow
 	} else if percentage < 80 {
-		contextColor = color.New(color.FgYellow)
+		contextColor = config.Colors.ContextMid
 	} else {
-		contextColor = color.New(color.FgHiRed)
+		contextColor = config.Colors.ContextHigh
 	}
 
 	// Build progress bar
@@ -178,10 +177,10 @@ func FormatContextIndicator(cfg *config.Config) string {
 	// Build token counts (compact, no decimals)
 	tokenStr := ""
 	if cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0 {
-		up := color.New(color.FgHiBlue, color.Bold).Sprint("↑")
-		down := color.New(color.FgHiGreen, color.Bold).Sprint("↓")
-		outNum := color.New(color.FgHiBlack).Sprint(formatCompact2Digit(cfg.LastOutgoingTokens))
-		inNum := color.New(color.FgHiBlack).Sprint(formatCompact2Digit(cfg.LastIncomingTokens))
+		up := config.Colors.TokenUp.Sprint("↑")
+		down := config.Colors.TokenDown.Sprint("↓")
+		outNum := config.Colors.TokenBracket.Sprint(formatCompact2Digit(cfg.LastOutgoingTokens))
+		inNum := config.Colors.TokenBracket.Sprint(formatCompact2Digit(cfg.LastIncomingTokens))
 		tokenStr = fmt.Sprintf(" %s%s%s%s", up, outNum, down, inNum)
 	}
 
@@ -228,7 +227,7 @@ func formatCompact2Digit(value int) string {
 
 // FormatProgressBar creates a visual progress bar for context usage
 // Uses ▰ for filled and ▱ for empty segments
-func FormatProgressBar(percentage float64, width int, barColor *color.Color) string {
+func FormatProgressBar(percentage float64, width int, barColor *config.ANSIColor) string {
 	if width <= 0 {
 		width = 8
 	}
@@ -241,8 +240,8 @@ func FormatProgressBar(percentage float64, width int, barColor *color.Color) str
 		filled = 0
 	}
 
-	leftBracket := color.New(color.FgHiBlack).Sprint("[")
-	rightBracket := color.New(color.FgHiBlack).Sprint("]")
+	leftBracket := config.Colors.TokenBracket.Sprint("[")
+	rightBracket := config.Colors.TokenBracket.Sprint("]")
 
 	var bar strings.Builder
 	bar.WriteString(leftBracket)
@@ -251,7 +250,7 @@ func FormatProgressBar(percentage float64, width int, barColor *color.Color) str
 		if i < filled {
 			bar.WriteString(barColor.Sprint("▰"))
 		} else {
-			bar.WriteString(color.New(color.FgHiBlack).Sprint("▱"))
+			bar.WriteString(config.Colors.TokenBracket.Sprint("▱"))
 		}
 	}
 
@@ -288,7 +287,7 @@ func FormatEditPromptWith(cfg *config.Config) string {
 	if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {
 		prefix = cfg.CommandPrefix
 	}
-	return color.New(color.FgHiRed, color.Bold).Sprint(prefix + " ❯ ")
+	return config.Colors.PromptCommand.Sprint(prefix + " ❯ ")
 }
 
 // getTerminalSize returns the width and height of the terminal
@@ -336,7 +335,7 @@ func FormatPromptHighlight(promptPath string) string {
 		return ""
 	}
 	// Yellow background with black text for high visibility
-	promptColor := color.New(color.BgHiYellow, color.FgBlack)
+	promptColor := config.Colors.Highlight
 	if !strings.HasPrefix(promptPath, "/") {
 		promptPath = "/" + promptPath
 	}
@@ -416,12 +415,7 @@ func CoolClearEffect(cfg *config.Config) {
 	}
 
 	// Flash noise for a brief moment
-	colors := []*color.Color{
-		color.New(color.FgHiCyan),
-		color.New(color.FgHiMagenta),
-		color.New(color.FgHiWhite),
-		color.New(color.FgHiRed), // Add red for that "critical" glitch feel
-	}
+	colors := config.Colors.EffectGlitch
 
 	// Frame count for the glitch phase
 	glitchFrames := 5
@@ -462,8 +456,7 @@ func CoolClearEffect(cfg *config.Config) {
 				for j := 0; j < widthFrac; j++ {
 					b.WriteString(thinChars[rand.Intn(len(thinChars))])
 				}
-				col := color.New(color.FgHiBlue) // Cool blue for the wipe
-				fmt.Printf("\033[%d;1H%s", r+1, col.Sprint(b.String()))
+				fmt.Printf("\033[%d;1H%s", r+1, config.Colors.Output.Sprint(b.String()))
 			} else {
 				// Clear the line
 				fmt.Printf("\033[%d;1H\033[2K", r+1)

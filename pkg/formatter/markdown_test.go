@@ -3,8 +3,6 @@ package formatter
 import (
 	"bytes"
 	"testing"
-
-	"github.com/fatih/color"
 )
 
 func TestMarkdownFormatter_ProcessChunk(t *testing.T) {
@@ -141,10 +139,6 @@ func TestStreamingWriter(t *testing.T) {
 }
 
 func TestMarkdownFormatter_ListSpacing(t *testing.T) {
-	// Disable ANSI output while keeping formatting logic active
-	color.NoColor = true
-	defer func() { color.NoColor = false }()
-
 	lines := []string{
 		"* item one\n",
 		"+ item two\n",
@@ -154,7 +148,7 @@ func TestMarkdownFormatter_ListSpacing(t *testing.T) {
 		"2. second item\n",
 	}
 
-	f := NewMarkdownFormatter()
+	f := NewMarkdownFormatter(WithColorDisabled())
 	var output bytes.Buffer
 
 	for _, line := range lines {

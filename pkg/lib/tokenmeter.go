@@ -5,7 +5,6 @@ import (
 	"os"
 	"sync"
 
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 )
 
@@ -52,11 +51,11 @@ func (tm *TokenMeter) Render() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	up := color.New(color.FgHiYellow, color.Bold).Sprint("↑")
-	down := color.New(color.FgHiCyan, color.Bold).Sprint("↓")
-	sep := color.New(color.FgHiBlack).Sprint("|")
-	leftBracket := color.New(color.FgHiBlack).Sprint("[")
-	rightBracket := color.New(color.FgHiBlack).Sprint("]")
+	up := config.Colors.TokenUp.Sprint("↑")
+	down := config.Colors.TokenDown.Sprint("↓")
+	sep := config.Colors.TokenSep.Sprint("|")
+	leftBracket := config.Colors.TokenBracket.Sprint("[")
+	rightBracket := config.Colors.TokenBracket.Sprint("]")
 	// Context usage percentage based on this request's outgoing tokens (prompt + history)
 	pct := 0.0
 	if tm.cfg != nil {
@@ -69,19 +68,19 @@ func (tm *TokenMeter) Render() {
 		}
 	}
 	// Color percent similarly to prompt: green <50, yellow <80, red otherwise
-	var pctColor *color.Color
+	var pctColor *config.ANSIColor
 	switch {
 	case pct < 50:
-		pctColor = color.New(color.FgGreen)
+		pctColor = config.Colors.ContextLow
 	case pct < 80:
-		pctColor = color.New(color.FgYellow)
+		pctColor = config.Colors.ContextMid
 	default:
-		pctColor = color.New(color.FgRed)
+		pctColor = config.Colors.ContextHigh
 	}
 	pctStr := pctColor.Sprintf("%.0f%%", pct)
 
-	outNum := color.New(color.FgHiYellow).Sprint(FormatCompactNumber(tm.outgoing))
-	inNum := color.New(color.FgHiCyan).Sprint(FormatCompactNumber(tm.incoming.Load()))
+	outNum := config.Colors.TokenOut.Sprint(FormatCompactNumber(tm.outgoing))
+	inNum := config.Colors.TokenIn.Sprint(FormatCompactNumber(tm.incoming.Load()))
 	// Compact form: [3%|↑2.9k|↓2.0k]
 	line := fmt.Sprintf("%s%s%s%s%s%s%s", leftBracket, pctStr, sep, up+outNum, sep, down+inNum, rightBracket)
 

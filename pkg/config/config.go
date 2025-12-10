@@ -12,7 +12,6 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
-	"github.com/mikhae1/kubectl-quackops/pkg/logger"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -192,41 +191,123 @@ type Config struct {
 // UIColorRoles defines terminal color roles and gradient palette for consistent UI styling.
 // These are constants (no env overrides) to keep branding and readability consistent.
 type UIColorRoles struct {
-	// Role colors
-	Primary  *color.Color
-	Accent   *color.Color
-	Info     *color.Color
-	Dim      *color.Color
-	Shadow   *color.Color
-	Ok       *color.Color
-	Warn     *color.Color
-	Error    *color.Color
+	// Base role colors
+	Primary   *color.Color
+	Accent    *color.Color
+	AccentAlt *color.Color
+	Info      *color.Color
+	InfoAlt   *color.Color
+	Dim       *color.Color
+	DimItalic *color.Color
+	Shadow    *color.Color
+	Light     *color.Color
+	Faint     *color.Color
+	Bold      *color.Color
+	Italic    *color.Color
+	Underline *color.Color
+
+	// Status
+	Ok    *color.Color
+	Warn  *color.Color
+	Error *color.Color
+
+	// Entity roles
 	Provider *color.Color
 	Model    *color.Color
 	Command  *color.Color
-	Light    *color.Color
 
 	// MCP/header specific
-	Header *color.Color
-	Border *color.Color
-	Label  *color.Color
-	Output *color.Color
+	Header    *color.Color
+	Border    *color.Color
+	Label     *color.Color
+	Output    *color.Color
+	Highlight *color.Color
+
+	// Markdown/UI helpers
+	Heading        *color.Color
+	Blockquote     *color.Color
+	ListBullet     *color.Color
+	ListNumber     *color.Color
+	InlineCode     *color.Color
+	InlineCodeBold *color.Color
+	Link           *color.Color
+	QuoteDouble    *color.Color
+	QuoteSingle    *color.Color
+	ThinkBorder    *color.Color
+	ThinkHeader    *color.Color
+	ThinkDim       *color.Color
+	TruncateLine   *color.Color
+	TruncateItalic *color.Color
+	Ellipsis       *color.Color
+
+	// Prompt/prompt bars
+	PromptCommand *color.Color
+	PromptDefault *color.Color
+	ContextLow    *color.Color
+	ContextMid    *color.Color
+	ContextHigh   *color.Color
+	TokenUp       *color.Color
+	TokenDown     *color.Color
+	TokenSep      *color.Color
+	TokenBracket  *color.Color
+	TokenOut      *color.Color
+	TokenIn       *color.Color
 
 	// Gradient palette used for banners and left-border accents
-	Gradient []*color.Color
+	Gradient    []*color.Color
+	GradientAlt []*color.Color
+
+	// Spinner/animation palettes
+	EffectGlitch []*color.Color
+	SpinnerDiag  []*color.Color
+	SpinnerLLM   []*color.Color
+	SpinnerHead  []*color.Color
+	SpinnerLead  *color.Color
+	SpinnerTrail []*color.Color
+	SpinnerBg    *color.Color
+
+	// Misc palettes
+	Rainbow []*color.Color
 }
 
 // Colors is the globally shared UI palette.
 var Colors = initUIColorRoles()
 
+// ANSIColor is an alias for fatih/color to allow downstream packages to avoid
+// importing the vendor directly.
+type ANSIColor = color.Color
+
+// ColorAttribute mirrors fatih/color.Attribute for downstream helpers.
+type ColorAttribute = color.Attribute
+
+const (
+	ColorBold      ColorAttribute = color.Bold
+	ColorFaint     ColorAttribute = color.Faint
+	ColorFgCyan    ColorAttribute = color.FgCyan
+	ColorFgGreen   ColorAttribute = color.FgGreen
+	ColorFgBlue    ColorAttribute = color.FgBlue
+	ColorFgYellow  ColorAttribute = color.FgYellow
+	ColorFgMagenta ColorAttribute = color.FgMagenta
+	ColorFgRed     ColorAttribute = color.FgRed
+	ColorFgHiBlack ColorAttribute = color.FgHiBlack
+	ColorUnderline ColorAttribute = color.Underline
+)
+
 func initUIColorRoles() *UIColorRoles {
 	return &UIColorRoles{
-		Primary: color.New(color.Reset),
-		Accent:  color.New(color.FgHiCyan, color.Bold),
-		Info:    color.New(color.FgHiWhite, color.Bold),
-		Dim:     color.New(color.FgHiBlack),
-		Shadow:  color.New(color.FgHiBlack, color.Faint),
-		Light:   color.New(color.FgHiGreen),
+		Primary:   color.New(color.Reset),
+		Accent:    color.New(color.FgHiCyan, color.Bold),
+		AccentAlt: color.New(color.FgHiCyan),
+		Info:      color.New(color.FgHiWhite, color.Bold),
+		InfoAlt:   color.New(color.FgHiWhite),
+		Dim:       color.New(color.FgHiBlack),
+		DimItalic: color.New(color.FgHiBlack, color.Italic),
+		Shadow:    color.New(color.FgHiBlack, color.Faint),
+		Light:     color.New(color.FgHiGreen),
+		Faint:     color.New(color.Faint),
+		Bold:      color.New(color.Bold),
+		Italic:    color.New(color.Italic),
+		Underline: color.New(color.Underline),
 
 		Ok:    color.New(color.FgHiGreen, color.Bold),
 		Warn:  color.New(color.FgHiYellow, color.Bold),
@@ -236,16 +317,93 @@ func initUIColorRoles() *UIColorRoles {
 		Model:    color.New(color.FgMagenta),
 		Command:  color.New(color.FgHiBlue),
 
-		Header: color.New(color.FgHiMagenta, color.Bold),
-		Border: color.New(color.FgHiBlack),
-		Label:  color.New(color.FgBlue),
-		Output: color.New(color.FgHiBlue),
+		Header:    color.New(color.FgHiMagenta, color.Bold),
+		Border:    color.New(color.FgHiBlack),
+		Label:     color.New(color.FgBlue),
+		Output:    color.New(color.FgHiBlue),
+		Highlight: color.New(color.BgHiYellow, color.FgBlack),
+
+		Heading:        color.New(color.FgBlue, color.Bold),
+		Blockquote:     color.New(color.FgGreen),
+		ListBullet:     color.New(color.FgHiBlue),
+		ListNumber:     color.New(color.FgHiBlue),
+		InlineCode:     color.New(color.FgHiCyan),
+		InlineCodeBold: color.New(color.FgHiCyan, color.Bold),
+		Link:           color.New(color.FgBlue, color.Underline),
+		QuoteDouble:    color.New(color.FgGreen),
+		QuoteSingle:    color.New(color.FgCyan),
+		ThinkBorder:    color.New(color.FgYellow),
+		ThinkHeader:    color.New(color.Bold),
+		ThinkDim:       color.New(color.Faint),
+		TruncateLine:   color.New(color.FgHiBlack),
+		TruncateItalic: color.New(color.FgHiBlack, color.Italic),
+		Ellipsis:       color.New(color.Faint),
+
+		PromptCommand: color.New(color.FgHiRed, color.Bold),
+		PromptDefault: color.New(color.Bold),
+		ContextLow:    color.New(color.FgHiCyan),
+		ContextMid:    color.New(color.FgYellow),
+		ContextHigh:   color.New(color.FgHiRed),
+		TokenUp:       color.New(color.FgHiBlue, color.Bold),
+		TokenDown:     color.New(color.FgHiGreen, color.Bold),
+		TokenSep:      color.New(color.FgHiBlack),
+		TokenBracket:  color.New(color.FgHiBlack),
+		TokenOut:      color.New(color.FgHiYellow),
+		TokenIn:       color.New(color.FgHiCyan),
 
 		Gradient: []*color.Color{
 			color.New(color.FgHiCyan),
 			color.New(color.FgCyan),
 		},
+		GradientAlt: []*color.Color{
+			color.New(color.FgHiMagenta),
+			color.New(color.FgMagenta),
+			color.New(color.FgHiBlue),
+			color.New(color.FgBlue),
+		},
+		EffectGlitch: []*color.Color{
+			color.New(color.FgHiCyan),
+			color.New(color.FgHiMagenta),
+			color.New(color.FgHiWhite),
+			color.New(color.FgHiRed),
+		},
+		SpinnerDiag: []*color.Color{
+			color.New(color.FgHiCyan),
+			color.New(color.FgCyan),
+			color.New(color.FgBlue),
+			color.New(color.FgHiBlue),
+		},
+		SpinnerLLM: []*color.Color{
+			color.New(color.FgHiMagenta),
+			color.New(color.FgMagenta),
+			color.New(color.FgHiBlue),
+			color.New(color.FgBlue),
+		},
+		SpinnerHead: []*color.Color{
+			color.New(color.FgHiCyan, color.Bold),
+			color.New(color.FgHiMagenta, color.Bold),
+		},
+		SpinnerLead: color.New(color.FgHiWhite, color.Bold),
+		SpinnerTrail: []*color.Color{
+			color.New(color.FgCyan),
+			color.New(color.FgBlue),
+			color.New(color.FgHiBlack),
+		},
+		SpinnerBg: color.New(color.Faint),
+		Rainbow: []*color.Color{
+			color.New(color.FgHiRed),
+			color.New(color.FgHiYellow),
+			color.New(color.FgHiGreen),
+			color.New(color.FgHiCyan),
+			color.New(color.FgHiBlue),
+			color.New(color.FgHiMagenta),
+		},
 	}
+}
+
+// NewColor is a centralized helper to build custom color attributes from the shared palette module.
+func NewColor(attrs ...color.Attribute) *color.Color {
+	return color.New(attrs...)
 }
 
 // envFirst returns the first non-empty value among provided environment variable keys
@@ -897,7 +1055,7 @@ func (cfg *Config) ConfigDetectMaxTokens() {
 	}
 
 	// Update DefaultMaxTokens with auto-detected value
-	logger.Log("info", "Auto-detected max tokens for model %s: %d\n", cfg.Model, contextLength)
+	fmt.Fprintf(os.Stderr, "Auto-detected max tokens for model %s: %d\n", cfg.Model, contextLength)
 	cfg.DefaultMaxTokens = contextLength
 }
 

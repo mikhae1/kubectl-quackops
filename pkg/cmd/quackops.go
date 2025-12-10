@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/ergochat/readline"
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/completer"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/exec"
@@ -87,8 +86,8 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 // printEnvVarsHelp prints information about environment variables used by the application
 func printEnvVarsHelp() {
 	// Colors for readability
-	titleColor := color.New(color.FgHiYellow, color.Bold)
-	bodyColor := color.New(color.FgHiWhite)
+	titleColor := config.Colors.Warn
+	bodyColor := config.Colors.InfoAlt
 
 	fmt.Println()
 	titleColor.Println("ENVIRONMENT VARIABLES:")
@@ -317,9 +316,9 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 	printWelcomeBanner(cfg)
 	if cfg.MCPClientEnabled {
-		info := color.New(color.FgHiWhite)
-		dim := color.New(color.FgHiBlack)
-		accent := color.New(color.FgHiCyan)
+		info := config.Colors.InfoAlt
+		dim := config.Colors.Dim
+		accent := config.Colors.AccentAlt
 		servers := mcp.Servers(cfg)
 		tools := mcp.Tools(cfg)
 		srvStr := "none"
@@ -486,7 +485,7 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		return false, ""
 	}
 
-	body := color.New(color.FgCyan)
+	body := config.Colors.AccentAlt
 	accent := config.Colors.Accent
 	dim := config.Colors.Dim
 	info := config.Colors.Info
@@ -650,14 +649,7 @@ func printWelcomeBanner(cfg *config.Config) {
 	}
 
 	// Rainbow sequence reserved (not used in mono mode)
-	rainbow := []*color.Color{
-		color.New(color.FgHiRed),
-		color.New(color.FgHiYellow),
-		color.New(color.FgHiGreen),
-		color.New(color.FgHiCyan),
-		color.New(color.FgHiBlue),
-		color.New(color.FgHiMagenta),
-	}
+	rainbow := config.Colors.Rainbow
 	_ = rainbow
 
 	// Duck ASCII art disabled: keep left column empty to left-align banner text
@@ -1004,7 +996,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		logger.Log("debug", "[MCP Prompt] Calling GetPrompt for '%s' with userQuery='%s'", cfg.SelectedPrompt, actualUserQuery)
 		promptMessages, err := mcp.GetPromptContent(cfg, cfg.SelectedPrompt, nil, actualUserQuery)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s\n", color.YellowString("Warning: Failed to fetch prompt content: %v", err))
+			fmt.Fprintf(os.Stderr, "%s\n", config.Colors.Warn.Sprintf("Warning: Failed to fetch prompt content: %v", err))
 			logger.Log("debug", "[MCP Prompt] Error fetching prompt: %v", err)
 		} else {
 			// Build prompt content from MCP messages
@@ -1037,7 +1029,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		// Execute the command and store the result; do not run LLM
 		cmdResults, err := exec.ExecDiagCmds(cfg, []string{effectiveCmd})
 		if err != nil {
-			fmt.Println(color.HiRedString(err.Error()))
+			fmt.Println(config.Colors.Error.Sprint(err.Error()))
 		}
 		if len(cmdResults) > 0 {
 			cfg.StoredUserCmdResults = append(cfg.StoredUserCmdResults, cmdResults...)
@@ -1059,7 +1051,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 		if err != nil {
 			if lib.IsUserCancel(err) {
-				fmt.Fprintln(os.Stderr, color.YellowString("(cancelled)"))
+				fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(cancelled)"))
 				return nil
 			}
 			logger.Log("err", "Error retrieving RAG: %v", err)
@@ -1106,7 +1098,8 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		}
 		// User pressed ESC: keep interactive session alive and skip retries (handled upstream)
 		if lib.IsUserCancel(err) {
-			fmt.Fprintln(os.Stderr, color.YellowString("(cancelled)"))
+			fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(cancelled)"))
+			fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(cancelled)"))
 			return nil
 		}
 		return fmt.Errorf("error requesting LLM: %w", err)
@@ -1124,7 +1117,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 func printMCPDetails(cfg *config.Config) {
 	titleColor := config.Colors.Header
 	toolColor := config.Colors.Accent
-	descColor := color.New(color.FgCyan)
+	descColor := config.Colors.AccentAlt
 	serverColor := config.Colors.Info
 	dim := config.Colors.Dim
 
@@ -1173,7 +1166,7 @@ func printMCPDetails(cfg *config.Config) {
 // printMCPPrompts displays MCP prompts with brand-accent styling
 func printMCPPrompts(cfg *config.Config) {
 	accent := config.Colors.Accent
-	descColor := color.New(color.FgCyan)
+	descColor := config.Colors.AccentAlt
 	serverColor := config.Colors.Label
 
 	promptInfos := mcp.GetPromptInfos(cfg)
@@ -1229,10 +1222,10 @@ func handleMCPDynamicPrompt(cfg *config.Config, lowered string) bool {
 func renderPromptDetails(pi mcp.PromptInfo) {
 	accent := config.Colors.Accent
 	titleColor := config.Colors.Info
-	descColor := color.New(color.FgCyan)
+	descColor := config.Colors.AccentAlt
 	labelColor := config.Colors.Label
 	dim := config.Colors.Dim
-	reqColor := color.New(color.FgHiYellow)
+	reqColor := config.Colors.Warn
 	optColor := dim
 
 	// Format: /$server/$prompt
@@ -1411,7 +1404,7 @@ func showCostEstimation(cfg *config.Config) {
 // printInlineHelp prints quick usage information for interactive mode
 func printInlineHelp(cfg *config.Config) {
 	title := config.Colors.Header
-	body := color.New(color.FgCyan)
+	body := config.Colors.AccentAlt
 	accent := config.Colors.Accent
 	label := config.Colors.Dim
 	prefix := cfg.CommandPrefix

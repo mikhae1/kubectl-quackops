@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
@@ -278,7 +277,7 @@ func printKubectlDiagnosticsList(cfg *config.Config, commands []string) {
 
 	// Render using simple Markdown bullets to leverage left-bullet styling downstream
 	fmt.Println()
-	fmt.Println(color.New(color.Bold).Sprint("Suggested kubectl commands for diagnostics:"))
+	fmt.Println(config.Colors.Bold.Sprint("Suggested kubectl commands for diagnostics:"))
 	for _, kc := range kubectlCmds {
 		fmt.Printf("- %s\n", kc)
 	}
@@ -330,7 +329,7 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 	printedLines := 0
 	redraw := func() {
 		// Build lines to render
-		header := color.New(color.Bold).Sprint("Select commands to run (j/k to move, space to toggle, a all, Enter accept, ESC cancel):")
+		header := config.Colors.Bold.Sprint("Select commands to run (j/k to move, space to toggle, a all, Enter accept, ESC cancel):")
 		lines := make([]string, 0, len(items)+1)
 		lines = append(lines, header)
 		for i, it := range items {
@@ -340,7 +339,7 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 			}
 			pointer := "  "
 			if i == cursor {
-				pointer = color.New(color.FgHiBlue).Sprint("➤ ")
+				pointer = config.Colors.Command.Sprint("➤ ")
 			}
 			lines = append(lines, fmt.Sprintf("%s- %s %s", pointer, box, it.cmd))
 		}
@@ -568,7 +567,7 @@ func printExecutionSummary(commands []string, statusData *struct {
 	totalCommands := len(commands)
 
 	// Choose color based on results
-	var summaryColor *color.Color
+	var summaryColor *config.ANSIColor
 	var checkmark string
 	if statusData.failedCount > 0 {
 		summaryColor = config.Colors.Warn
@@ -740,8 +739,8 @@ func ExecKubectlCmd(cfg *config.Config, command string) (result config.CmdRes) {
 	// Print command output for interactive commands (those with $ prefix),
 	// always in edit mode, or when verbose mode is enabled
 	if cfg.Verbose || cfg.EditMode || (cfg != nil && strings.HasPrefix(result.Cmd, cfg.CommandPrefix)) {
-		dim := color.New(color.Faint).SprintFunc()
-		bold := color.New(color.Bold).SprintFunc()
+		dim := config.Colors.ThinkDim.SprintFunc()
+		bold := config.Colors.Bold.SprintFunc()
 
 		prefix := "!"
 		if cfg != nil && strings.TrimSpace(cfg.CommandPrefix) != "" {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 )
 
@@ -88,9 +87,9 @@ func (rb *RenderBlock) processContent(content string) string {
 			indent = LeadingWhitespace(head[len(head)-1])
 		}
 
-		above := indent + color.New(color.FgHiBlack).Sprint("┈┈┈")
-		center := indent + color.New(color.FgHiBlack, color.Italic).Sprintf("… (%d lines truncated, press CTRL-R to view) …", truncatedCount)
-		below := indent + color.New(color.FgHiBlack).Sprint("┈┈┈")
+		above := indent + config.Colors.TruncateLine.Sprint("┈┈┈")
+		center := indent + config.Colors.TruncateItalic.Sprintf("… (%d lines truncated, press CTRL-R to view) …", truncatedCount)
+		below := indent + config.Colors.TruncateLine.Sprint("┈┈┈")
 
 		outLines = append(append(head, above, center, below), tail...)
 	}
@@ -116,7 +115,7 @@ func TrimLine(s string, maxRunes int) string {
 	if len(runes) > maxRunes {
 		runes = runes[:maxRunes]
 	}
-	return string(runes) + color.New(color.Faint).Sprint(" …")
+	return string(runes) + config.Colors.Ellipsis.Sprint(" …")
 }
 
 // RuneCount returns the number of runes in a string
@@ -182,7 +181,7 @@ func isErrorContent(line string) bool {
 }
 
 // ColorizeKVOrFallback applies mono-palette coloring to JSON-like key/value lines
-func ColorizeKVOrFallback(line string, keyColor *color.Color, valueColor *color.Color, fallback *color.Color) string {
+func ColorizeKVOrFallback(line string, keyColor *config.ANSIColor, valueColor *config.ANSIColor, fallback *config.ANSIColor) string {
 	colored, ok := ColorizeJSONKeyValueLine(line, keyColor, valueColor)
 	if ok {
 		return colored
@@ -197,15 +196,15 @@ func ColorizeKVOrFallback(line string, keyColor *color.Color, valueColor *color.
 }
 
 // NextMono returns the next color in a small mono palette sequence starting at offset
-func NextMono(palette []*color.Color, start int) *color.Color {
+func NextMono(palette []*config.ANSIColor, start int) *config.ANSIColor {
 	if len(palette) == 0 {
-		return color.New(color.FgHiWhite)
+		return config.Colors.InfoAlt
 	}
 	return palette[(start+1)%len(palette)]
 }
 
 // ColorizeJSONKeyValueLine attempts to detect and color a JSON key/value pair on a single line
-func ColorizeJSONKeyValueLine(line string, keyColor *color.Color, valueColor *color.Color) (string, bool) {
+func ColorizeJSONKeyValueLine(line string, keyColor *config.ANSIColor, valueColor *config.ANSIColor) (string, bool) {
 	if line == "" {
 		return line, false
 	}

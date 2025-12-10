@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fatih/color"
+	"github.com/mikhae1/kubectl-quackops/pkg/config"
 )
 
 // Debug flag
@@ -50,18 +50,18 @@ func initLogger(level string, prefix string, colorFunc func(a ...interface{}) st
 
 // InitLoggers initializes all loggers with different levels and colors
 func InitLoggers(output io.Writer, flags int) {
-	initLogger("info", "INFO: ", color.New(color.FgCyan).SprintFunc(), flags, output)
-	initLogger("debug", "DEBUG: ", color.New(color.FgHiBlack).SprintFunc(), flags, output)
-	initLogger("warn", "WARN: ", color.New(color.FgYellow).SprintFunc(), flags, output)
-	initLogger("err", "ERR: ", color.New(color.FgRed).SprintFunc(), flags, output)
+	initLogger("info", "INFO: ", config.Colors.AccentAlt.SprintFunc(), flags, output)
+	initLogger("debug", "DEBUG: ", config.Colors.Dim.SprintFunc(), flags, output)
+	initLogger("warn", "WARN: ", config.Colors.Warn.SprintFunc(), flags, output)
+	initLogger("err", "ERR: ", config.Colors.Error.SprintFunc(), flags, output)
 
 	// Custom loggers
-	initLogger("llmIn", "[LLM] > ", color.New(color.FgHiBlue).SprintFunc(), flags, output)
-	initLogger("llmOut", "[LLM] < ", color.New(color.FgBlue).SprintFunc(), flags, output)
-	initLogger("llmSys", "[LLM:SYS] > ", color.New(color.FgHiMagenta).SprintFunc(), flags, output)
-	initLogger("llmUser", "[LLM:USER] > ", color.New(color.FgHiCyan).SprintFunc(), flags, output)
-	initLogger("in", "> ", color.New(color.FgHiGreen).SprintFunc(), flags, output)
-	initLogger("out", "< ", color.New(color.FgGreen).SprintFunc(), flags, output)
+	initLogger("llmIn", "[LLM] > ", config.Colors.Output.SprintFunc(), flags, output)
+	initLogger("llmOut", "[LLM] < ", config.Colors.Label.SprintFunc(), flags, output)
+	initLogger("llmSys", "[LLM:SYS] > ", config.Colors.Header.SprintFunc(), flags, output)
+	initLogger("llmUser", "[LLM:USER] > ", config.Colors.Accent.SprintFunc(), flags, output)
+	initLogger("in", "> ", config.Colors.Light.SprintFunc(), flags, output)
+	initLogger("out", "< ", config.Colors.Ok.SprintFunc(), flags, output)
 }
 
 // Log function to use defined loggers
