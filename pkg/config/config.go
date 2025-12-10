@@ -273,6 +273,38 @@ type UIColorRoles struct {
 // Colors is the globally shared UI palette.
 var Colors = initUIColorRoles()
 
+// Dracula-inspired palette mapped to 256-color indexes for consistent UI.
+const (
+	draculaBg         = 236 // #282a36
+	draculaSurface    = 237 // #44475a
+	draculaText       = 255 // #f8f8f2
+	draculaComment    = 61  // #6272a4
+	draculaCyan       = 117 // #8be9fd
+	draculaGreen      = 84  // #50fa7b
+	draculaOrange     = 215 // #ffb86c
+	draculaPink       = 205 // #ff79c6
+	draculaPurple     = 141 // #bd93f9
+	draculaPurpleMid  = 135 // #af87ff
+	draculaPurpleDark = 99  // #875fd7
+	draculaRed        = 203 // #ff5555
+	draculaYellow     = 228 // #f1fa8c
+)
+
+func draculaFg(idx int, extra ...color.Attribute) *color.Color {
+	attrs := []color.Attribute{color.Attribute(38), color.Attribute(5), color.Attribute(idx)}
+	attrs = append(attrs, extra...)
+	return color.New(attrs...)
+}
+
+func draculaFgBg(fgIdx, bgIdx int, extra ...color.Attribute) *color.Color {
+	attrs := []color.Attribute{
+		color.Attribute(38), color.Attribute(5), color.Attribute(fgIdx),
+		color.Attribute(48), color.Attribute(5), color.Attribute(bgIdx),
+	}
+	attrs = append(attrs, extra...)
+	return color.New(attrs...)
+}
+
 // ANSIColor is an alias for fatih/color to allow downstream packages to avoid
 // importing the vendor directly.
 type ANSIColor = color.Color
@@ -295,108 +327,105 @@ const (
 
 func initUIColorRoles() *UIColorRoles {
 	return &UIColorRoles{
-		Primary:   color.New(color.Reset),
-		Accent:    color.New(color.FgHiCyan, color.Bold),
-		AccentAlt: color.New(color.FgHiCyan),
-		Info:      color.New(color.FgHiWhite, color.Bold),
-		InfoAlt:   color.New(color.FgHiWhite),
-		Dim:       color.New(color.FgHiBlack),
-		DimItalic: color.New(color.FgHiBlack, color.Italic),
-		Shadow:    color.New(color.FgHiBlack, color.Faint),
-		Light:     color.New(color.FgHiGreen),
-		Faint:     color.New(color.Faint),
-		Bold:      color.New(color.Bold),
-		Italic:    color.New(color.Italic),
-		Underline: color.New(color.Underline),
+		Primary:   draculaFg(draculaText),
+		Accent:    draculaFg(draculaPink, color.Bold),
+		AccentAlt: draculaFg(draculaCyan, color.Bold),
+		Info:      draculaFg(draculaText, color.Bold),
+		InfoAlt:   draculaFg(draculaText),
+		Dim:       draculaFg(draculaComment),
+		DimItalic: draculaFg(draculaComment, color.Italic),
+		Shadow:    draculaFg(draculaBg, color.Faint),
+		Light:     draculaFg(draculaGreen),
+		Faint:     draculaFg(draculaSurface),
+		Bold:      draculaFg(draculaText, color.Bold),
+		Italic:    draculaFg(draculaText, color.Italic),
+		Underline: draculaFg(draculaText, color.Underline),
 
-		Ok:    color.New(color.FgHiGreen, color.Bold),
-		Warn:  color.New(color.FgHiYellow, color.Bold),
-		Error: color.New(color.FgHiRed, color.Bold),
+		Ok:    draculaFg(draculaGreen, color.Bold),
+		Warn:  draculaFg(draculaYellow, color.Bold),
+		Error: draculaFg(draculaRed, color.Bold),
 
-		Provider: color.New(color.FgHiMagenta),
-		Model:    color.New(color.FgMagenta),
-		Command:  color.New(color.FgHiBlue),
+		Provider: draculaFg(draculaPink),
+		Model:    draculaFg(draculaCyan),
+		Command:  draculaFg(draculaYellow),
 
-		Header:    color.New(color.FgHiMagenta, color.Bold),
-		Border:    color.New(color.FgHiBlack),
-		Label:     color.New(color.FgBlue),
-		Output:    color.New(color.FgHiBlue),
-		Highlight: color.New(color.BgHiYellow, color.FgBlack),
+		Header:    draculaFg(draculaPurple, color.Bold),
+		Border:    draculaFg(draculaComment),
+		Label:     draculaFg(draculaCyan),
+		Output:    draculaFg(draculaText),
+		Highlight: draculaFgBg(draculaBg, draculaPink, color.Bold),
 
-		Heading:        color.New(color.FgBlue, color.Bold),
-		Blockquote:     color.New(color.FgGreen),
-		ListBullet:     color.New(color.FgHiBlue),
-		ListNumber:     color.New(color.FgHiBlue),
-		InlineCode:     color.New(color.FgHiCyan),
-		InlineCodeBold: color.New(color.FgHiCyan, color.Bold),
-		Link:           color.New(color.FgBlue, color.Underline),
-		QuoteDouble:    color.New(color.FgGreen),
-		QuoteSingle:    color.New(color.FgCyan),
-		ThinkBorder:    color.New(color.FgYellow),
-		ThinkHeader:    color.New(color.Bold),
-		ThinkDim:       color.New(color.Faint),
-		TruncateLine:   color.New(color.FgHiBlack),
-		TruncateItalic: color.New(color.FgHiBlack, color.Italic),
-		Ellipsis:       color.New(color.Faint),
+		Heading:        draculaFg(draculaPink, color.Bold),
+		Blockquote:     draculaFg(draculaCyan),
+		ListBullet:     draculaFg(draculaPurple),
+		ListNumber:     draculaFg(draculaCyan),
+		InlineCode:     draculaFg(draculaOrange),
+		InlineCodeBold: draculaFg(draculaOrange, color.Bold),
+		Link:           draculaFg(draculaCyan, color.Underline),
+		QuoteDouble:    draculaFg(draculaGreen),
+		QuoteSingle:    draculaFg(draculaPink),
+		ThinkBorder:    draculaFg(draculaPurple),
+		ThinkHeader:    draculaFg(draculaText, color.Bold),
+		ThinkDim:       draculaFg(draculaComment, color.Faint),
+		TruncateLine:   draculaFg(draculaComment),
+		TruncateItalic: draculaFg(draculaComment, color.Italic),
+		Ellipsis:       draculaFg(draculaSurface),
 
-		PromptCommand: color.New(color.FgHiRed, color.Bold),
-		PromptDefault: color.New(color.Bold),
-		ContextLow:    color.New(color.FgHiCyan),
-		ContextMid:    color.New(color.FgYellow),
-		ContextHigh:   color.New(color.FgHiRed),
-		TokenUp:       color.New(color.FgHiBlue, color.Bold),
-		TokenDown:     color.New(color.FgHiGreen, color.Bold),
-		TokenSep:      color.New(color.FgHiBlack),
-		TokenBracket:  color.New(color.FgHiBlack),
-		TokenOut:      color.New(color.FgHiYellow),
-		TokenIn:       color.New(color.FgHiCyan),
+		PromptCommand: draculaFg(draculaPink, color.Bold),
+		PromptDefault: draculaFg(draculaPink, color.Bold),
+		ContextLow:    draculaFg(draculaGreen),
+		ContextMid:    draculaFg(draculaYellow),
+		ContextHigh:   draculaFg(draculaRed),
+		TokenUp:       draculaFg(draculaPink, color.Bold),
+		TokenDown:     draculaFg(draculaGreen, color.Bold),
+		TokenSep:      draculaFg(draculaComment),
+		TokenBracket:  draculaFg(draculaComment),
+		TokenOut:      draculaFg(draculaPink),
+		TokenIn:       draculaFg(draculaGreen),
 
+		// Two-tone palette to render the banner in a clear chess/checker pattern
 		Gradient: []*color.Color{
-			color.New(color.FgHiCyan),
-			color.New(color.FgCyan),
+			draculaFg(draculaPurple),
+			draculaFg(draculaPurpleDark),
 		},
 		GradientAlt: []*color.Color{
-			color.New(color.FgHiMagenta),
-			color.New(color.FgMagenta),
-			color.New(color.FgHiBlue),
-			color.New(color.FgBlue),
+			draculaFg(draculaPurpleMid),
+			draculaFg(draculaPurple),
 		},
 		EffectGlitch: []*color.Color{
-			color.New(color.FgHiCyan),
-			color.New(color.FgHiMagenta),
-			color.New(color.FgHiWhite),
-			color.New(color.FgHiRed),
+			draculaFg(draculaPink),
+			draculaFg(draculaCyan),
+			draculaFg(draculaYellow),
+			draculaFg(draculaText),
 		},
 		SpinnerDiag: []*color.Color{
-			color.New(color.FgHiCyan),
-			color.New(color.FgCyan),
-			color.New(color.FgBlue),
-			color.New(color.FgHiBlue),
+			draculaFg(draculaCyan),
+			draculaFg(draculaPurple),
+			draculaFg(draculaPink),
 		},
 		SpinnerLLM: []*color.Color{
-			color.New(color.FgHiMagenta),
-			color.New(color.FgMagenta),
-			color.New(color.FgHiBlue),
-			color.New(color.FgBlue),
+			draculaFg(draculaPink),
+			draculaFg(draculaPurple),
+			draculaFg(draculaCyan),
 		},
 		SpinnerHead: []*color.Color{
-			color.New(color.FgHiCyan, color.Bold),
-			color.New(color.FgHiMagenta, color.Bold),
+			draculaFg(draculaPink, color.Bold),
+			draculaFg(draculaCyan, color.Bold),
 		},
-		SpinnerLead: color.New(color.FgHiWhite, color.Bold),
+		SpinnerLead: draculaFg(draculaText, color.Bold),
 		SpinnerTrail: []*color.Color{
-			color.New(color.FgCyan),
-			color.New(color.FgBlue),
-			color.New(color.FgHiBlack),
+			draculaFg(draculaPurple),
+			draculaFg(draculaPink),
+			draculaFg(draculaComment),
 		},
-		SpinnerBg: color.New(color.Faint),
+		SpinnerBg: draculaFg(draculaSurface),
 		Rainbow: []*color.Color{
-			color.New(color.FgHiRed),
-			color.New(color.FgHiYellow),
-			color.New(color.FgHiGreen),
-			color.New(color.FgHiCyan),
-			color.New(color.FgHiBlue),
-			color.New(color.FgHiMagenta),
+			draculaFg(draculaPink),
+			draculaFg(draculaPurple),
+			draculaFg(draculaCyan),
+			draculaFg(draculaGreen),
+			draculaFg(draculaYellow),
+			draculaFg(draculaRed),
 		},
 	}
 }

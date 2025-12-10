@@ -58,7 +58,7 @@ func InitLoggers(output io.Writer, flags int) {
 	// Custom loggers
 	initLogger("llmIn", "[LLM] > ", config.Colors.Output.SprintFunc(), flags, output)
 	initLogger("llmOut", "[LLM] < ", config.Colors.Label.SprintFunc(), flags, output)
-	initLogger("llmSys", "[LLM:SYS] > ", config.Colors.Header.SprintFunc(), flags, output)
+	initLogger("llmSys", "[LLM:SYS] > ", config.Colors.Label.SprintFunc(), flags, output)
 	initLogger("llmUser", "[LLM:USER] > ", config.Colors.Accent.SprintFunc(), flags, output)
 	initLogger("in", "> ", config.Colors.Light.SprintFunc(), flags, output)
 	initLogger("out", "< ", config.Colors.Ok.SprintFunc(), flags, output)

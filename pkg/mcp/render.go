@@ -33,9 +33,15 @@ func FormatToolCallBlock(toolName string, args map[string]any, output string) st
 
 	// Create render block using shared functionality
 	block := &lib.RenderBlock{
-		Title:      "MCP Tool: " + toolName,
-		MaxLineLen: maxLineLen,
-		MaxLines:   maxLines,
+		Title:         "MCP Tool: " + toolName,
+		MaxLineLen:    maxLineLen,
+		MaxLines:      maxLines,
+		BorderPalette: config.Colors.GradientAlt,
+		TitleColor:    config.Colors.Accent,
+		LabelColor:    config.Colors.Label,
+		KeyColor:      config.Colors.Label,
+		ValueColor:    config.Colors.Output,
+		FallbackColor: config.Colors.Output,
 		Sections: []lib.RenderSection{
 			{Label: "Args", Content: argsBlock},
 			{Label: "Output", Content: output},

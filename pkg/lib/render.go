@@ -9,10 +9,16 @@ import (
 
 // RenderBlock builds a colored block with gradient borders and content
 type RenderBlock struct {
-	Title      string
-	Sections   []RenderSection
-	MaxLineLen int
-	MaxLines   int
+	Title         string
+	Sections      []RenderSection
+	MaxLineLen    int
+	MaxLines      int
+	TitleColor    *config.ANSIColor   // Optional override for title color
+	LabelColor    *config.ANSIColor   // Optional override for section labels
+	KeyColor      *config.ANSIColor   // Optional override for JSON key color
+	ValueColor    *config.ANSIColor   // Optional override for JSON value color
+	FallbackColor *config.ANSIColor   // Optional override for non-JSON content color
+	BorderPalette []*config.ANSIColor // Optional override for border/gradient palette
 }
 
 // RenderSection represents a section within a render block
@@ -23,14 +29,43 @@ type RenderSection struct {
 
 // Format builds the complete formatted block as a string
 func (rb *RenderBlock) Format() string {
-	header := config.Colors.Gradient[0].Sprint("╭─ ") + config.Colors.Accent.Sprint(rb.Title)
+	palette := rb.BorderPalette
+	if len(palette) == 0 {
+		palette = config.Colors.Gradient
+	}
+	if len(palette) == 0 {
+		palette = []*config.ANSIColor{config.Colors.Border}
+	}
+
+	titleColor := rb.TitleColor
+	if titleColor == nil {
+		titleColor = config.Colors.Accent
+	}
+
+	labelColor := rb.LabelColor
+	if labelColor == nil {
+		labelColor = config.Colors.Label
+	}
+
+	keyColor := rb.KeyColor
+	if keyColor == nil {
+		keyColor = palette[0]
+	}
+
+	valueColor := rb.ValueColor
+	if valueColor == nil {
+		valueColor = NextMono(palette, 0)
+	}
+
+	fallbackColor := rb.FallbackColor
+	if fallbackColor == nil {
+		fallbackColor = palette[0]
+	}
+
+	header := palette[0].Sprint("╭─ ") + titleColor.Sprint(rb.Title)
 
 	// Gradient color helper for the left border "│"
 	gradientBar := func(i int) string {
-		palette := config.Colors.Gradient
-		if len(palette) == 0 {
-			return config.Colors.Border.Sprint("│")
-		}
 		return palette[i%len(palette)].Sprint("│")
 	}
 
@@ -42,20 +77,20 @@ func (rb *RenderBlock) Format() string {
 	for _, section := range rb.Sections {
 		// Print section label
 		if section.Label != "" {
-			fmt.Fprintln(&b, gradientBar(lineIdx)+" "+config.Colors.Label.Sprint(section.Label+":"))
+			fmt.Fprintln(&b, gradientBar(lineIdx)+" "+labelColor.Sprint(section.Label+":"))
 			lineIdx++
 		}
 
 		// Process section content
 		processedContent := rb.processContent(section.Content)
 		for _, ln := range strings.Split(processedContent, "\n") {
-			colored := ColorizeKVOrFallback(ln, config.Colors.Gradient[0], NextMono(config.Colors.Gradient, 0), config.Colors.Gradient[0])
+			colored := ColorizeKVOrFallback(ln, keyColor, valueColor, fallbackColor)
 			fmt.Fprintln(&b, gradientBar(lineIdx)+" "+colored)
 			lineIdx++
 		}
 	}
 
-	fmt.Fprintln(&b, config.Colors.Gradient[0].Sprint("╰"))
+	fmt.Fprintln(&b, palette[0].Sprint("╰"))
 	return b.String()
 }
 
