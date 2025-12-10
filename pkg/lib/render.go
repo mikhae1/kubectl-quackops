@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/mikhae1/kubectl-quackops/pkg/style"
+	"github.com/fatih/color"
+	"github.com/mikhae1/kubectl-quackops/pkg/config"
 )
 
 // RenderBlock builds a colored block with gradient borders and content
@@ -24,12 +24,15 @@ type RenderSection struct {
 
 // Format builds the complete formatted block as a string
 func (rb *RenderBlock) Format() string {
-	header := style.Title.Render("╭─ ") + style.Title.Render(rb.Title)
+	header := config.Colors.Gradient[0].Sprint("╭─ ") + config.Colors.Accent.Sprint(rb.Title)
 
 	// Gradient color helper for the left border "│"
 	gradientBar := func(i int) string {
-		// Use a simpler vertical bar style for now or cycle styles if we had a list of styles
-		return style.Debug.Render("│")
+		palette := config.Colors.Gradient
+		if len(palette) == 0 {
+			return config.Colors.Border.Sprint("│")
+		}
+		return palette[i%len(palette)].Sprint("│")
 	}
 
 	var b strings.Builder
@@ -40,21 +43,20 @@ func (rb *RenderBlock) Format() string {
 	for _, section := range rb.Sections {
 		// Print section label
 		if section.Label != "" {
-			fmt.Fprintln(&b, gradientBar(lineIdx)+" "+style.SubTitle.Render(section.Label+":"))
+			fmt.Fprintln(&b, gradientBar(lineIdx)+" "+config.Colors.Label.Sprint(section.Label+":"))
 			lineIdx++
 		}
 
 		// Process section content
 		processedContent := rb.processContent(section.Content)
 		for _, ln := range strings.Split(processedContent, "\n") {
-			// For now fallback to simple coloring or reuse the logic but with lipgloss
-			colored := ColorizeKVOrFallback(ln, style.Info, style.Success, style.Info)
+			colored := ColorizeKVOrFallback(ln, config.Colors.Gradient[0], NextMono(config.Colors.Gradient, 0), config.Colors.Gradient[0])
 			fmt.Fprintln(&b, gradientBar(lineIdx)+" "+colored)
 			lineIdx++
 		}
 	}
 
-	fmt.Fprintln(&b, style.Title.Render("╰"))
+	fmt.Fprintln(&b, config.Colors.Gradient[0].Sprint("╰"))
 	return b.String()
 }
 
@@ -86,9 +88,9 @@ func (rb *RenderBlock) processContent(content string) string {
 			indent = LeadingWhitespace(head[len(head)-1])
 		}
 
-		above := indent + style.Debug.Render("┈┈┈")
-		center := indent + style.Debug.Italic(true).Render(fmt.Sprintf("… (%d lines truncated, press CTRL-R to view) …", truncatedCount))
-		below := indent + style.Debug.Render("┈┈┈")
+		above := indent + color.New(color.FgHiBlack).Sprint("┈┈┈")
+		center := indent + color.New(color.FgHiBlack, color.Italic).Sprintf("… (%d lines truncated, press CTRL-R to view) …", truncatedCount)
+		below := indent + color.New(color.FgHiBlack).Sprint("┈┈┈")
 
 		outLines = append(append(head, above, center, below), tail...)
 	}
@@ -114,7 +116,7 @@ func TrimLine(s string, maxRunes int) string {
 	if len(runes) > maxRunes {
 		runes = runes[:maxRunes]
 	}
-	return string(runes) + style.Debug.Faint(true).Render(" …")
+	return string(runes) + color.New(color.Faint).Sprint(" …")
 }
 
 // RuneCount returns the number of runes in a string
@@ -180,22 +182,30 @@ func isErrorContent(line string) bool {
 }
 
 // ColorizeKVOrFallback applies mono-palette coloring to JSON-like key/value lines
-func ColorizeKVOrFallback(line string, keyStyle lipgloss.Style, valueStyle lipgloss.Style, fallback lipgloss.Style) string {
-	colored, ok := ColorizeJSONKeyValueLine(line, keyStyle, valueStyle)
+func ColorizeKVOrFallback(line string, keyColor *color.Color, valueColor *color.Color, fallback *color.Color) string {
+	colored, ok := ColorizeJSONKeyValueLine(line, keyColor, valueColor)
 	if ok {
 		return colored
 	}
 
 	// Check if this line contains error content and colorize accordingly
 	if isErrorContent(line) {
-		return style.Error.Render(line)
+		return config.Colors.Error.Sprint(line)
 	}
 
-	return fallback.Render(line)
+	return fallback.Sprint(line)
+}
+
+// NextMono returns the next color in a small mono palette sequence starting at offset
+func NextMono(palette []*color.Color, start int) *color.Color {
+	if len(palette) == 0 {
+		return color.New(color.FgHiWhite)
+	}
+	return palette[(start+1)%len(palette)]
 }
 
 // ColorizeJSONKeyValueLine attempts to detect and color a JSON key/value pair on a single line
-func ColorizeJSONKeyValueLine(line string, keyStyle lipgloss.Style, valueStyle lipgloss.Style) (string, bool) {
+func ColorizeJSONKeyValueLine(line string, keyColor *color.Color, valueColor *color.Color) (string, bool) {
 	if line == "" {
 		return line, false
 	}
@@ -257,8 +267,8 @@ func ColorizeJSONKeyValueLine(line string, keyStyle lipgloss.Style, valueStyle l
 		return line, false
 	}
 
-	coloredKey := keyStyle.Render(keyToken)
-	coloredVal := valueStyle.Render(valuePart)
+	coloredKey := keyColor.Sprint(keyToken)
+	coloredVal := valueColor.Sprint(valuePart)
 	colored := indent + coloredKey + preColon + ":" + postColon[:spaceAfter] + coloredVal + commaSuffix
 	return colored, true
 }
@@ -269,7 +279,7 @@ func ColorizeJSONKeyValueLine(line string, keyStyle lipgloss.Style, valueStyle l
 func RenderTerminalWindow(title string, content string, maxLines int, maxLineLen int) string {
 	// Title bar with macOS-like traffic lights and gradient title
 
-	header := style.Debug.Render("╭─ ") + style.Title.Render(title)
+	header := config.Colors.Border.Sprint("╭─ ") + config.Colors.Accent.Sprint(title)
 
 	// Prepare body via existing RenderBlock processing (handles trimming and truncation nicely)
 	rb := &RenderBlock{
@@ -287,12 +297,12 @@ func RenderTerminalWindow(title string, content string, maxLines int, maxLineLen
 	for _, ln := range strings.Split(processed, "\n") {
 		if strings.TrimSpace(ln) == "" {
 			// Keep empty lines visually minimal but aligned with border
-			fmt.Fprintln(&b, style.Debug.Render("│ "))
+			fmt.Fprintln(&b, config.Colors.Border.Sprint("│ "))
 			continue
 		}
-		colored := ColorizeKVOrFallback(ln, style.Info, style.Success, style.Code)
-		fmt.Fprintln(&b, style.Debug.Render("│ ")+colored)
+		colored := ColorizeKVOrFallback(ln, config.Colors.Gradient[0], NextMono(config.Colors.Gradient, 0), config.Colors.Output)
+		fmt.Fprintln(&b, config.Colors.Border.Sprint("│ ")+colored)
 	}
-	fmt.Fprintln(&b, style.Debug.Render("╰"))
+	fmt.Fprintln(&b, config.Colors.Border.Sprint("╰"))
 	return b.String()
 }

@@ -1,16 +1,17 @@
 package lib
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"errors"
+
+	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
-	"github.com/mikhae1/kubectl-quackops/pkg/style"
 )
 
 // Is429Error checks if the error is a 429 rate limit error
@@ -66,27 +67,27 @@ func Display429Error(err error, cfg *config.Config, maxRetries int) {
 	delay, parseErr := ParseRetryDelay(err)
 
 	// Display formatted rate limit information
-	fmt.Printf("\n%s\n", style.Error.Render("⚠️  Rate Limit Exceeded"))
-	fmt.Printf("Provider: %s\n", style.Info.Render(cfg.Provider))
-	fmt.Printf("Model: %s\n", style.Info.Render(cfg.Model))
+	fmt.Printf("\n%s\n", color.RedString("⚠️  Rate Limit Exceeded"))
+	fmt.Printf("Provider: %s\n", color.CyanString(cfg.Provider))
+	fmt.Printf("Model: %s\n", color.CyanString(cfg.Model))
 
 	// Only show retry information if retries are enabled
 	if maxRetries > 0 {
 		if parseErr == nil {
-			fmt.Printf("Retry after: %s (parsed from provider response)\n", style.Warning.Render(delay.String()))
+			fmt.Printf("Retry after: %s (parsed from provider response)\n", color.YellowString(delay.String()))
 		} else {
 			fmt.Printf("Retry strategy: exponential backoff (couldn't parse provider delay)\n")
 			logger.Log("debug", "Failed to parse retry delay: %v", parseErr)
 		}
 	}
 
-	fmt.Printf("Raw error: %s\n", style.Debug.Render(err.Error()))
+	fmt.Printf("Raw error: %s\n", color.HiBlackString(err.Error()))
 
-	fmt.Printf("\n%s\n", style.Warning.Render("💡 Suggestions:"))
+	fmt.Printf("\n%s\n", color.YellowString("💡 Suggestions:"))
 	fmt.Printf("  • Wait for the retry period to expire\n")
 	fmt.Printf("  • Consider using a different model or provider\n")
 	fmt.Printf("  • Check your API quota and billing status\n")
-	fmt.Printf("  • Enable throttling with %s flag\n", style.Info.Render("--throttle-rpm"))
+	fmt.Printf("  • Enable throttling with %s flag\n", color.CyanString("--throttle-rpm"))
 	fmt.Printf("\n")
 }
 

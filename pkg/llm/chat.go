@@ -141,8 +141,8 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	}
 
 	spinnerManager := lib.GetSpinnerManager(cfg)
-	message := fmt.Sprintf("Waiting for %s/%s... %s %s"+config.Colors.Dim.Render(" (ESC to cancel)"),
-		config.Colors.Provider.Render(cfg.Provider), config.Colors.Model.Render(cfg.Model), config.Colors.Output.Render("[")+config.Colors.Label.Render("↑"+lib.FormatCompactNumber(outgoingTokens)), config.Colors.Output.Render("tokens]"))
+	message := fmt.Sprintf("Waiting for %s/%s... %s %s"+config.Colors.Dim.Sprint(" (ESC to cancel)"),
+		config.Colors.Provider.Sprint(cfg.Provider), config.Colors.Model.Sprint(cfg.Model), config.Colors.Output.Sprint("[")+config.Colors.Label.Sprint("↑"+lib.FormatCompactNumber(outgoingTokens)), config.Colors.Output.Sprint("tokens]"))
 	cancelSpinner := spinnerManager.ShowLLM(message)
 
 	var stopOnce sync.Once
@@ -183,10 +183,10 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 		// 3. Print full history (verbose)
 		if len(cfg.SessionHistory) > 0 {
-			fmt.Println(config.Colors.Accent.Render("Session History:"))
+			fmt.Println(config.Colors.Accent.Sprint("Session History:"))
 			for _, event := range cfg.SessionHistory {
 				fmt.Print(mcp.RenderSessionEvent(event, true, cfg))
-				fmt.Println(config.Colors.Dim.Render(strings.Repeat("-", 40)))
+				fmt.Println(config.Colors.Dim.Sprint(strings.Repeat("-", 40)))
 			}
 		}
 
@@ -205,11 +205,12 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 			currentEvent.AIResponse = displayedContent
 		}
 
-		fmt.Println(config.Colors.Accent.Render("Current Interaction:"))
+		fmt.Println(config.Colors.Accent.Sprint("Current Interaction:"))
 		fmt.Print(mcp.RenderSessionEvent(currentEvent, true, cfg))
 
 		// 5. Restore spinner
 		if wasActive {
+			// Add a small delay/newline to separate history from spinner?
 			// RenderSessionEvent ends with newline usually.
 			spinnerManager.Show(currentSpinnerType, currentSpinnerMsg)
 		}
@@ -316,7 +317,7 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 					}
 
 					// Apply throttling delay before each MCP tool execution with iteration info
-					customMessage := fmt.Sprintf("🔧 %s %s %s...", config.Colors.Info.Render("Processing"), config.Colors.Dim.Render("MCP tool call:"), config.Colors.Accent.Render(fmt.Sprintf("%d of %d", toolCallCount+1, maxToolCalls)))
+					customMessage := fmt.Sprintf("🔧 %s %s %s...", config.Colors.Info.Sprint("Processing"), config.Colors.Dim.Sprint("MCP tool call:"), config.Colors.Accent.Sprint(fmt.Sprintf("%d of %d", toolCallCount+1, maxToolCalls)))
 					if err := applyThrottleDelayWithCustomMessageManager(cfg, spinnerManager, customMessage); err != nil {
 						if lib.IsUserCancel(err) {
 							return "", lib.NewUserCancelError("canceled by user")
@@ -500,8 +501,8 @@ func applyRetryDelayWithCountdown(
 	}
 
 	baseMessage := fmt.Sprintf("%s - retrying %s/%s %s %s",
-		config.Colors.Warn.Render(messageType), config.Colors.Provider.Render(cfg.Provider), config.Colors.Model.Render(cfg.Model),
-		config.Colors.Dim.Render(fmt.Sprintf("(attempt %d/%d)", attempt, maxRetries)), config.Colors.Info.Render(fmt.Sprintf("[↑%s tokens]", lib.FormatCompactNumber(outgoingTokens))))
+		config.Colors.Warn.Sprint(messageType), config.Colors.Provider.Sprint(cfg.Provider), config.Colors.Model.Sprint(cfg.Model),
+		config.Colors.Dim.Sprint(fmt.Sprintf("(attempt %d/%d)", attempt, maxRetries)), config.Colors.Info.Sprint("[↑"+lib.FormatCompactNumber(outgoingTokens)+" tokens]"))
 
 	// Start spinner with initial message
 	cancelRetrySpinner := spinnerManager.Show(lib.SpinnerThrottle, baseMessage)

@@ -10,10 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/fatih/color"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
-	"github.com/mikhae1/kubectl-quackops/pkg/style"
 )
 
 // SpinnerType defines different spinner contexts and their visual styles
@@ -51,7 +50,7 @@ type Spinner struct {
 	Interval       time.Duration
 	Suffix         string
 	Writer         io.Writer
-	GradientStyles []lipgloss.Style
+	GradientColors []*color.Color
 	colorize       func(string) string
 	stopCh         chan struct{}
 	doneCh         chan struct{}
@@ -76,33 +75,34 @@ func NewSpinner(charset []string, interval time.Duration) *Spinner {
 	return s
 }
 
-// Color sets simple color attributes by name using lipgloss. Unknown values are ignored.
+// Color sets simple color attributes by name using fatih/color. Unknown values are ignored.
 func (s *Spinner) Color(attrs ...string) {
-	var st lipgloss.Style
+	var cs []color.Attribute
 	for _, a := range attrs {
 		switch strings.ToLower(strings.TrimSpace(a)) {
 		case "bold":
-			st = st.Bold(true)
+			cs = append(cs, color.Bold)
 		case "faint", "dim":
-			st = st.Faint(true)
+			cs = append(cs, color.Faint)
 		case "cyan":
-			st = st.Foreground(style.ColorCyan)
+			cs = append(cs, color.FgCyan)
 		case "green":
-			st = st.Foreground(style.ColorGreen)
+			cs = append(cs, color.FgGreen)
 		case "blue":
-			st = st.Foreground(style.ColorCyan) // Map blue to cyan in our palette or keep blue if needed
+			cs = append(cs, color.FgBlue)
 		case "yellow":
-			st = st.Foreground(style.ColorYellow)
+			cs = append(cs, color.FgYellow)
 		case "magenta":
-			st = st.Foreground(style.ColorPurple)
+			cs = append(cs, color.FgMagenta)
 		case "red":
-			st = st.Foreground(style.ColorRed)
+			cs = append(cs, color.FgRed)
 		default:
 			// ignore unknown
 		}
 	}
+	c := color.New(cs...)
 	s.mutex.Lock()
-	s.colorize = func(str string) string { return st.Render(str) }
+	s.colorize = func(str string) string { return c.Sprint(str) }
 	s.mutex.Unlock()
 }
 
@@ -134,10 +134,10 @@ func (s *Spinner) Start() {
 				frame := s.Frames[s.frameIdx%len(s.Frames)]
 
 				var colored string
-				if len(s.GradientStyles) > 0 {
+				if len(s.GradientColors) > 0 {
 					// Cycle through gradient colors
-					c := s.GradientStyles[s.frameIdx%len(s.GradientStyles)]
-					colored = c.Render(frame)
+					c := s.GradientColors[s.frameIdx%len(s.GradientColors)]
+					colored = c.Sprint(frame)
 				} else {
 					colored = s.colorize(frame)
 				}
@@ -247,30 +247,30 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 
 	// Apply colors based on spinner type
 	// Define gradients
-	blueCyanGradient := []lipgloss.Style{
-		lipgloss.NewStyle().Foreground(style.ColorCyan),
-		lipgloss.NewStyle().Foreground(style.ColorCyan), // Slightly different shade would be better if available
-		lipgloss.NewStyle().Foreground(style.ColorGray), // Transition color
-		lipgloss.NewStyle().Foreground(style.ColorCyan),
+	blueCyanGradient := []*color.Color{
+		color.New(color.FgHiCyan),
+		color.New(color.FgCyan),
+		color.New(color.FgBlue),
+		color.New(color.FgHiBlue),
 	}
 
-	magentaBlueGradient := []lipgloss.Style{
-		lipgloss.NewStyle().Foreground(style.ColorPurple),
-		lipgloss.NewStyle().Foreground(style.ColorPink),
-		lipgloss.NewStyle().Foreground(style.ColorPurple),
-		lipgloss.NewStyle().Foreground(style.ColorGray),
+	magentaBlueGradient := []*color.Color{
+		color.New(color.FgHiMagenta),
+		color.New(color.FgMagenta),
+		color.New(color.FgHiBlue),
+		color.New(color.FgBlue),
 	}
 
 	// Apply colors based on spinner type
 	switch spinnerType {
 	case SpinnerDiagnostic:
-		sm.activeSpinner.GradientStyles = blueCyanGradient
+		sm.activeSpinner.GradientColors = blueCyanGradient
 	case SpinnerLLM:
-		sm.activeSpinner.GradientStyles = magentaBlueGradient
+		sm.activeSpinner.GradientColors = magentaBlueGradient
 	case SpinnerGeneration:
-		sm.activeSpinner.GradientStyles = blueCyanGradient
+		sm.activeSpinner.GradientColors = blueCyanGradient
 	case SpinnerRAG:
-		sm.activeSpinner.GradientStyles = blueCyanGradient
+		sm.activeSpinner.GradientColors = blueCyanGradient
 	case SpinnerThrottle:
 		sm.activeSpinner.Color("yellow", "bold")
 	}
@@ -524,14 +524,14 @@ func spotlightFormatClean(cleanMessage string, position int, width int) (string,
 		if inWindow(i) {
 			if inCenter(i) {
 				// Center: Bright/Bold
-				b.WriteString(style.Info.Render(ch))
+				b.WriteString(config.Colors.Info.Sprint(ch))
 			} else {
 				// Edges: Normal White
-				b.WriteString(lipgloss.NewStyle().Foreground(style.ColorWhite).Render(ch))
+				b.WriteString(config.Colors.Primary.Sprint(ch))
 			}
 		} else {
 			// Background: Dimmed
-			b.WriteString(style.Debug.Render(ch))
+			b.WriteString(config.Colors.Dim.Sprint(ch))
 		}
 	}
 
@@ -602,7 +602,7 @@ func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, i
 		head := message[:stopIdx]
 		tail := message[stopIdx:]
 		cleanMessage = stripAnsiColors(head)
-		tailDimmed = style.Info.Render(stripAnsiColors(tail))
+		tailDimmed = config.Colors.Info.Sprint(stripAnsiColors(tail))
 	} else {
 		cleanMessage = stripAnsiColors(message)
 	}
@@ -676,17 +676,17 @@ func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, i
 	}
 
 	// Neon palette
-	cometHead := []lipgloss.Style{
-		lipgloss.NewStyle().Foreground(style.ColorCyan).Bold(true),
-		lipgloss.NewStyle().Foreground(style.ColorPurple).Bold(true),
+	cometHead := []*color.Color{
+		color.New(color.FgHiCyan, color.Bold),
+		color.New(color.FgHiMagenta, color.Bold),
 	}
-	cometLead := lipgloss.NewStyle().Foreground(style.ColorWhite).Bold(true)
-	cometTrail := []lipgloss.Style{
-		lipgloss.NewStyle().Foreground(style.ColorCyan),
-		lipgloss.NewStyle().Foreground(style.ColorCyan).Faint(true),
-		lipgloss.NewStyle().Foreground(style.ColorGray),
+	cometLead := color.New(color.FgHiWhite, color.Bold)
+	cometTrail := []*color.Color{
+		color.New(color.FgCyan),
+		color.New(color.FgBlue),
+		color.New(color.FgHiBlack),
 	}
-	bgColor := style.Debug
+	bgColor := color.New(color.Faint)
 
 	// Calculate tail position from lead position
 	var tailPos int
@@ -738,10 +738,10 @@ func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, i
 
 		switch seg {
 		case 2:
-			b.WriteString(cometLead.Render(ch))
+			b.WriteString(cometLead.Sprint(ch))
 		case 1:
 			headIdx := (step + i) % len(cometHead)
-			b.WriteString(cometHead[headIdx].Render(ch))
+			b.WriteString(cometHead[headIdx].Sprint(ch))
 		case 0:
 			depth := trailLen - 1 - relPos
 			if depth < 0 {
@@ -751,9 +751,9 @@ func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, i
 			if trailIdx >= len(cometTrail) {
 				trailIdx = len(cometTrail) - 1
 			}
-			b.WriteString(cometTrail[trailIdx].Render(ch))
+			b.WriteString(cometTrail[trailIdx].Sprint(ch))
 		default:
-			b.WriteString(bgColor.Render(ch))
+			b.WriteString(bgColor.Sprint(ch))
 		}
 	}
 
