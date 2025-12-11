@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,6 +45,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "LLM model to use")
 	cmd.Flags().StringVarP(&cfg.OllamaApiURL, "api-url", "u", cfg.OllamaApiURL, "URL for LLM API, used with 'ollama' provider")
 	cmd.Flags().BoolVarP(&cfg.SafeMode, "safe-mode", "s", cfg.SafeMode, "Enable safe mode to prevent executing commands without confirmation")
+	cmd.Flags().BoolVarP(&cfg.PlanMode, "plan", "", cfg.PlanMode, "Generate a plan, show it, and ask for confirmation before executing")
 	cmd.Flags().IntVarP(&cfg.Retries, "retries", "r", cfg.Retries, "Number of retries for kubectl commands")
 	cmd.Flags().IntVarP(&cfg.Timeout, "timeout", "t", cfg.Timeout, "Timeout for kubectl commands in seconds")
 	cmd.Flags().IntVarP(&cfg.UserMaxTokens, "max-tokens", "x", cfg.UserMaxTokens, "Maximum number of tokens in LLM context window (override; >0 disables auto-detect)")
@@ -1117,6 +1119,17 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 	if augPrompt == "" {
 		augPrompt = userPrompt
+	}
+
+	if cfg.PlanMode {
+		result, err := llm.RunPlanFlow(context.Background(), cfg, augPrompt, os.Stdin)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(result) != "" {
+			fmt.Println(result)
+		}
+		return nil
 	}
 
 	// Build role-separated prompts using MessageBuilder

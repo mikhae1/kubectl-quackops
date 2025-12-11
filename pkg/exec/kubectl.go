@@ -327,9 +327,18 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 	cursor := 0
 
 	printedLines := 0
+	clearScreen := func() {
+		if printedLines > 0 {
+			for i := 0; i < printedLines; i++ {
+				fmt.Print("\033[1A\033[2K")
+			}
+		}
+		printedLines = 0
+	}
+
 	redraw := func() {
-		// Build lines to render
-		header := config.Colors.Bold.Sprint("Select commands to run (j/k to move, space to toggle, a all, Enter accept, ESC cancel):")
+		clearScreen()
+		header := config.Colors.Bold.Sprint("Select commands (Up/Down move, space toggle, a all, Enter accept, ESC cancel, Ctrl-C cancel):")
 		lines := make([]string, 0, len(items)+1)
 		lines = append(lines, header)
 		for i, it := range items {
@@ -344,18 +353,7 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 			lines = append(lines, fmt.Sprintf("%s- %s %s", pointer, box, it.cmd))
 		}
 
-		// On subsequent redraws, move cursor up and clear existing lines
-		if printedLines == 0 {
-			fmt.Println()
-		} else {
-			for i := 0; i < printedLines; i++ {
-				// Move up one line
-				fmt.Print("\033[1A")
-			}
-		}
-		// Print lines, clearing each line before writing
 		for _, ln := range lines {
-			fmt.Print("\r\033[2K")
 			fmt.Println(ln)
 		}
 		printedLines = len(lines)
@@ -366,11 +364,17 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 	// Raw key loop using ReadKey (supports arrows)
 	for {
 		key := lib.ReadKey("")
+		// ctrl-c in raw mode returns byte 3
+		if len(key) == 1 && key[0] == 3 {
+			clearScreen()
+			return nil
+		}
 		switch key {
 		case "esc":
+			clearScreen()
 			return nil
 		case "enter":
-			// Accept
+			clearScreen()
 			var out []string
 			// Build final command list preserving original strings
 			for i, it := range items {
@@ -379,12 +383,12 @@ func editCommandSelection(cfg *config.Config, commands []string) []string {
 				}
 			}
 			return out
-		case "down", "j":
+		case "down":
 			if cursor < len(items)-1 {
 				cursor++
 				redraw()
 			}
-		case "up", "k":
+		case "up":
 			if cursor > 0 {
 				cursor--
 				redraw()
