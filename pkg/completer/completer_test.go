@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"reflect"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 )
@@ -234,6 +235,70 @@ func TestIsValidCommand(t *testing.T) {
 				t.Errorf("isValidCommand(%q) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestCompleteSlashCommandsIncludesPlanMidLine(t *testing.T) {
+	cfg := &config.Config{
+		MaxCompletions:   10,
+		MCPClientEnabled: false,
+		SlashCommands: []config.SlashCommand{
+			{Commands: []string{"/plan"}, Primary: "/plan", Description: "Generate plan"},
+			{Commands: []string{"/help", "/h"}, Primary: "/help", Description: "Help"},
+		},
+	}
+	c := NewShellAutoCompleter(cfg)
+
+	comps, _ := c.CompleteSlashCommands("/p", false)
+	found := false
+	for _, r := range comps {
+		if string(r) == "lan" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected mid-line completion to include /plan, got %v", comps)
+	}
+
+	comps2, _ := c.CompleteSlashCommands("/", false)
+	found2 := false
+	for _, r := range comps2 {
+		if string(r) == "plan" {
+			found2 = true
+			break
+		}
+	}
+	if !found2 {
+		t.Fatalf("expected mid-line '/' completion to include plan, got %v", comps2)
+	}
+}
+
+func TestAutoCompleterDoCompletesPlanTokenMidLine(t *testing.T) {
+	cfg := &config.Config{
+		MaxCompletions:   10,
+		MCPClientEnabled: false,
+		SlashCommands: []config.SlashCommand{
+			{Commands: []string{"/plan"}, Primary: "/plan"},
+		},
+	}
+	ac := NewShellAutoCompleter(cfg)
+
+	line := []rune("please /p")
+	pos := utf8.RuneCountInString(string(line))
+	comps, l := ac.Do(line, pos)
+	if l != 2 {
+		t.Fatalf("expected replacement length 2, got %d", l)
+	}
+	found := false
+	for _, r := range comps {
+		if string(r) == "lan" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected Do() to suggest lan, got %v", comps)
 	}
 }
 

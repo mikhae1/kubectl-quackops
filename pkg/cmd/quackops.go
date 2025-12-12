@@ -45,7 +45,6 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVarP(&cfg.Model, "model", "m", cfg.Model, "LLM model to use")
 	cmd.Flags().StringVarP(&cfg.OllamaApiURL, "api-url", "u", cfg.OllamaApiURL, "URL for LLM API, used with 'ollama' provider")
 	cmd.Flags().BoolVarP(&cfg.SafeMode, "safe-mode", "s", cfg.SafeMode, "Enable safe mode to prevent executing commands without confirmation")
-	cmd.Flags().BoolVarP(&cfg.PlanMode, "plan", "", cfg.PlanMode, "Generate a plan, show it, and ask for confirmation before executing")
 	cmd.Flags().IntVarP(&cfg.Retries, "retries", "r", cfg.Retries, "Number of retries for kubectl commands")
 	cmd.Flags().IntVarP(&cfg.Timeout, "timeout", "t", cfg.Timeout, "Timeout for kubectl commands in seconds")
 	cmd.Flags().IntVarP(&cfg.UserMaxTokens, "max-tokens", "x", cfg.UserMaxTokens, "Maximum number of tokens in LLM context window (override; >0 disables auto-detect)")
@@ -431,7 +430,11 @@ func startChatSession(cfg *config.Config, args []string) error {
 			_, query, isPrompt := completer.IsMCPPrompt(cfg, originalUserPrompt)
 			isMCPPromptQuery = isPrompt && query != ""
 		}
-		if (!strings.HasPrefix(originalUserPrompt, "/") || isMCPPromptQuery) && !cfg.DisableHistory && cfg.HistoryFile != "" {
+		isPlanPrompt := false
+		if strings.Contains(strings.ToLower(originalUserPrompt), "/plan") {
+			_, isPlanPrompt = findInlinePlanWithQuery(originalUserPrompt)
+		}
+		if (!strings.HasPrefix(originalUserPrompt, "/") || isMCPPromptQuery || isPlanPrompt) && !cfg.DisableHistory && cfg.HistoryFile != "" {
 			var entryToSave string
 
 			if wasCommand {
@@ -498,12 +501,10 @@ func startChatSession(cfg *config.Config, args []string) error {
 	}
 }
 
-// Centralized slash command handler
-// Returns (handled, action, promptName, userQuery) where:
-//   - handled: true if this was a slash command that was fully processed
-//   - action: the action type (e.g., "help", "clear", "prompt_query")
-//   - For MCP prompts with queries, returns (false, "prompt_query", promptName, userQuery)
-//     to indicate the caller should process as an MCP prompt injection
+// Centralized slash command handler.
+// Returns (handled, action) where:
+//   - handled: true if this slash command was fully processed here
+//   - action: hint for the caller when not handled (e.g., "prompt_query", "plan")
 func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 	lowered := strings.ToLower(strings.TrimSpace(userPrompt))
 	if !strings.HasPrefix(lowered, "/") {
@@ -515,6 +516,11 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 	dim := config.Colors.Dim
 	info := config.Colors.Info
 	warn := config.Colors.Warn
+
+	// /plan is handled by processUserPrompt so it can reuse RAG and plan execution.
+	if lowered == "/plan" || strings.HasPrefix(lowered, "/plan ") || strings.HasPrefix(lowered, "/plan\t") {
+		return false, "plan"
+	}
 
 	switch lowered {
 	case "/help", "/h", "/?":
@@ -981,6 +987,91 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	if handled {
 		return nil
 	}
+	if action == "plan" {
+		trimmed := strings.TrimSpace(userPrompt)
+		planQuery := ""
+		if len(trimmed) >= len("/plan") {
+			planQuery = strings.TrimSpace(trimmed[len("/plan"):])
+		}
+		if planQuery == "" {
+			planQuery = strings.TrimSpace(lastTextPrompt)
+		}
+		if planQuery == "" {
+			fmt.Println(config.Colors.Warn.Sprint("Usage: /plan <task>"))
+			return nil
+		}
+
+		planAug := ""
+		if userMsgCount%2 == 1 || lib.EffectiveMaxTokens(cfg) > 16000 {
+			if len(cfg.StoredUserCmdResults) > 0 {
+				planAug, err = llm.CreateAugPromptFromCmdResults(cfg, planQuery, cfg.StoredUserCmdResults)
+				cfg.StoredUserCmdResults = nil
+			} else {
+				planAug, err = llm.RetrieveRAG(cfg, planQuery, lastTextPrompt, userMsgCount)
+			}
+			if err != nil {
+				if lib.IsUserCancel(err) {
+					fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(cancelled)"))
+					return nil
+				}
+				logger.Log("err", "Error retrieving RAG for /plan: %v", err)
+			}
+		}
+		if planAug == "" {
+			planAug = planQuery
+		}
+
+		result, err := llm.RunPlanFlowFunc(context.Background(), cfg, planAug, os.Stdin)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(result) != "" {
+			fmt.Println(result)
+		}
+		return nil
+	}
+
+	// Inline /plan (anywhere in the prompt) behaves like MCP inline prompt injection:
+	// - if there is trailing text after /plan, use that as the plan task
+	// - otherwise use the full prompt with /plan removed
+	if planQuery, found := findInlinePlanWithQuery(userPrompt); found {
+		if strings.TrimSpace(planQuery) == "" {
+			planQuery = strings.TrimSpace(lastTextPrompt)
+		}
+		if strings.TrimSpace(planQuery) == "" {
+			fmt.Println(config.Colors.Warn.Sprint("Usage: /plan <task>"))
+			return nil
+		}
+
+		planAug := ""
+		if userMsgCount%2 == 1 || lib.EffectiveMaxTokens(cfg) > 16000 {
+			if len(cfg.StoredUserCmdResults) > 0 {
+				planAug, err = llm.CreateAugPromptFromCmdResults(cfg, planQuery, cfg.StoredUserCmdResults)
+				cfg.StoredUserCmdResults = nil
+			} else {
+				planAug, err = llm.RetrieveRAG(cfg, planQuery, lastTextPrompt, userMsgCount)
+			}
+			if err != nil {
+				if lib.IsUserCancel(err) {
+					fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(cancelled)"))
+					return nil
+				}
+				logger.Log("err", "Error retrieving RAG for inline /plan: %v", err)
+			}
+		}
+		if planAug == "" {
+			planAug = planQuery
+		}
+
+		result, err := llm.RunPlanFlowFunc(context.Background(), cfg, planAug, os.Stdin)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(result) != "" {
+			fmt.Println(result)
+		}
+		return nil
+	}
 
 	// Highlight MCP prompt even when embedded mid-line
 	var inlinePromptName, inlineServerName, inlineQuery string
@@ -1121,17 +1212,6 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		augPrompt = userPrompt
 	}
 
-	if cfg.PlanMode {
-		result, err := llm.RunPlanFlow(context.Background(), cfg, augPrompt, os.Stdin)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(result) != "" {
-			fmt.Println(result)
-		}
-		return nil
-	}
-
 	// Build role-separated prompts using MessageBuilder
 	mb := llm.NewMessageBuilder()
 
@@ -1180,6 +1260,20 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	cfg.MCPPromptServer = ""
 
 	return nil
+}
+
+func findInlinePlanWithQuery(userPrompt string) (string, bool) {
+	re := regexp.MustCompile(`(?i)(^|\s)/plan(\s+|$)`)
+	loc := re.FindStringSubmatchIndex(userPrompt)
+	if loc == nil || len(loc) < 2 {
+		return "", false
+	}
+	after := strings.TrimSpace(userPrompt[loc[1]:])
+	if after != "" {
+		return after, true
+	}
+	without := strings.TrimSpace(userPrompt[:loc[0]] + userPrompt[loc[1]:])
+	return without, true
 }
 
 // printMCPDetails displays detailed MCP information with proper formatting

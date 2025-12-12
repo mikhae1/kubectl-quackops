@@ -96,3 +96,38 @@ func TestRunPlanFlowGuidedReplan(t *testing.T) {
 		t.Fatalf("expected replan output to include new step, got: %s", res)
 	}
 }
+
+func TestRunPlanFlowManualEditReapprovesEditedPlan(t *testing.T) {
+	orig := RequestWithSystem
+	origSelector := SelectPlanSteps
+	t.Cleanup(func() { RequestWithSystem = orig })
+	t.Cleanup(func() { SelectPlanSteps = origSelector })
+
+	genCalls := 0
+	RequestWithSystem = func(cfg *config.Config, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
+		if strings.Contains(systemPrompt, "Plan Generator") {
+			genCalls++
+			return `{"steps":[{"step_number":1,"action":"old","reasoning":"r"}]}`, nil
+		}
+		return "done", nil
+	}
+
+	SelectPlanSteps = func(cfg *config.Config, plan PlanResult, input io.Reader) ([]PlanStep, string, string, error) {
+		if plan.Steps[0].Action == "old" {
+			return nil, "setplan", `{"steps":[{"step_number":1,"action":"edited","reasoning":"r"}]}`, nil
+		}
+		return plan.Steps, "execute", "", nil
+	}
+
+	cfg := config.LoadConfig()
+	res, err := RunPlanFlow(context.Background(), cfg, "inspect cluster", strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("RunPlanFlow returned error: %v", err)
+	}
+	if !strings.Contains(res, "edited") {
+		t.Fatalf("expected edited plan to execute, got: %s", res)
+	}
+	if genCalls != 1 {
+		t.Fatalf("expected 1 plan generation call, got %d", genCalls)
+	}
+}

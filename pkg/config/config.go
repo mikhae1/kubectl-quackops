@@ -78,7 +78,6 @@ type Config struct {
 	DisableSecretFilter   bool
 	DisableMarkdownFormat bool
 	DisableAnimation      bool
-	PlanMode              bool
 	MaxCompletions        int
 	HistoryFile           string
 	DisableHistory        bool
@@ -544,7 +543,6 @@ func LoadConfig() *Config {
 		OllamaApiURL:          getEnvArg("QU_OLLAMA_BASE_URL", "http://localhost:11434").(string),
 		AzOpenAIAPIVersion:    getEnvArg("QU_AZ_OPENAI_API_VERSION", "2025-05-01").(string),
 		SafeMode:              getEnvArg("QU_SAFE_MODE", false).(bool),
-		PlanMode:              getEnvArg("QU_PLAN_MODE", false).(bool),
 		Retries:               getEnvArg("QU_RETRIES", 3).(int),
 		Timeout:               getEnvArg("QU_TIMEOUT", 30).(int),
 		DefaultMaxTokens:      defaultMaxTokens,
@@ -1189,6 +1187,11 @@ func GetProviderBaseURL(cfg *Config) string {
 // defaultSlashCommands returns the default slash commands configuration
 func defaultSlashCommands() []SlashCommand {
 	return []SlashCommand{
+		{
+			Commands:    []string{"/plan"},
+			Primary:     "/plan",
+			Description: "Generate and review a plan for a task",
+		},
 		{
 			Commands:    []string{"/help", "/h", "/?"},
 			Primary:     "/help",

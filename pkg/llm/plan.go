@@ -8,11 +8,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
+	"runtime"
 
+	"github.com/ergochat/readline"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
+	"golang.org/x/term"
 )
 
 // PlanStep represents a single planned action.
@@ -54,6 +59,14 @@ func RunPlanFlow(ctx context.Context, cfg *config.Config, prompt string, confirm
 		case "cancel":
 			// Back out without error; caller can continue its flow
 			return "", nil
+		case "setplan":
+			editedPlan, perr := parsePlan(feedback)
+			if perr != nil {
+				return "", fmt.Errorf("failed to parse edited plan: %w", perr)
+			}
+			currentPlan = editedPlan
+			fmt.Println(config.Colors.Dim.Sprint("Edited plan ready for review:"))
+			continue
 		case "replan":
 			if strings.TrimSpace(feedback) == "" {
 				continue
@@ -62,6 +75,8 @@ func RunPlanFlow(ctx context.Context, cfg *config.Config, prompt string, confirm
 			if err != nil {
 				return "", err
 			}
+			// Make the replan visible before showing the approval UI again.
+			fmt.Println(config.Colors.Dim.Sprint("Updated plan ready for review:"))
 			continue
 		default:
 			if len(selectedSteps) == 0 {
@@ -74,6 +89,10 @@ func RunPlanFlow(ctx context.Context, cfg *config.Config, prompt string, confirm
 	}
 }
 
+// RunPlanFlowFunc is a test-hookable entrypoint for plan flows.
+// cmd package should call this instead of RunPlanFlow directly.
+var RunPlanFlowFunc = RunPlanFlow
+
 // GeneratePlan requests a structured plan from the LLM and parses it. Optional adjustments guide replans.
 func GeneratePlan(ctx context.Context, cfg *config.Config, prompt string, adjustments string) (PlanResult, error) {
 	userPrompt := fmt.Sprintf("Task: %s\nReturn JSON: {\"steps\":[{\"step_number\":1,\"action\":\"...\",\"reasoning\":\"...\",\"required_tools\":[\"kubectl\"]}]} Only JSON.", strings.TrimSpace(prompt))
@@ -81,7 +100,14 @@ func GeneratePlan(ctx context.Context, cfg *config.Config, prompt string, adjust
 		userPrompt += "\nAdjustments: " + strings.TrimSpace(adjustments)
 	}
 
+	// Plan generation returns structured JSON that is only useful for debugging.
+	// Suppress printing in normal mode so users only see the interactive plan UI.
+	origSuppress := cfg.SuppressContentPrint
+	if !logger.DEBUG {
+		cfg.SuppressContentPrint = true
+	}
 	raw, err := RequestWithSystem(cfg, planSystemPrompt, userPrompt, false, false)
+	cfg.SuppressContentPrint = origSuppress
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -156,21 +182,97 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 		input = os.Stdin
 	}
 
+	// If we aren't interactive, avoid ANSI/cursor control sequences and use a simple typed selector.
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		return selectPlanStepsNonTTY(cfg, plan, input)
+	}
+
 	selected := make([]bool, len(plan.Steps))
 	for i := range selected {
 		selected[i] = true
 	}
 	cursor := 0
-	clearScreen := func() {
-		// Clear entire screen and move cursor to home to avoid duplicated blocks.
-		fmt.Print("\033[H\033[2J")
+
+	visibleLen := func(s string) int {
+		inEscape := false
+		length := 0
+		for _, r := range s {
+			if r == '\033' {
+				inEscape = true
+				continue
+			}
+			if inEscape {
+				if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+					inEscape = false
+				}
+				continue
+			}
+			length++
+		}
+		return length
+	}
+
+	countPhysicalLines := func(lines []string) int {
+		width := 80
+		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 {
+			width = w
+		}
+		total := 0
+		for _, ln := range lines {
+			vlen := visibleLen(ln)
+			if vlen <= 0 {
+				total++
+				continue
+			}
+			wrapped := (vlen - 1) / width
+			total += 1 + wrapped
+		}
+		return total
+	}
+
+	renderedPhysicalLines := 0
+	renderBlock := func(lines []string) {
+		// Repaint only this block in-place (preserves scrollback/history above it).
+		// We count physical lines to handle wrapped content.
+		if renderedPhysicalLines > 0 {
+			fmt.Printf("\033[%dA", renderedPhysicalLines)
+			// Clear the full previously-rendered physical block.
+			for i := 0; i < renderedPhysicalLines; i++ {
+				fmt.Print("\r\033[2K\n")
+			}
+			fmt.Printf("\033[%dA", renderedPhysicalLines)
+		}
+		for _, ln := range lines {
+			fmt.Print("\r\033[2K")
+			fmt.Print(ln)
+			fmt.Print("\n")
+		}
+		renderedPhysicalLines = countPhysicalLines(lines)
+	}
+	clearRenderedBlock := func() {
+		if renderedPhysicalLines <= 0 {
+			return
+		}
+		fmt.Printf("\033[%dA", renderedPhysicalLines)
+		for i := 0; i < renderedPhysicalLines; i++ {
+			fmt.Print("\r\033[2K\n")
+		}
+		renderedPhysicalLines = 0
 	}
 
 	redraw := func() {
-		clearScreen()
-		header := config.Colors.Bold.Sprint("Plan (Up/Down move, space toggle, 1-9 select step, a all, r edit, Enter approve, ESC cancel):")
-		lines := make([]string, 0, len(plan.Steps)+2)
-		lines = append(lines, header)
+		lines := make([]string, 0, len(plan.Steps)*2+4)
+
+		selectedCount := 0
+		for _, v := range selected {
+			if v {
+				selectedCount++
+			}
+		}
+		lines = append(lines, config.Colors.Accent.Sprint("Plan Review")+config.Colors.Dim.Sprintf("  (%d/%d selected)", selectedCount, len(plan.Steps)))
+		lines = append(lines, config.Colors.Dim.Sprint("↑/↓ move  Space toggle  a all  e edit locally  r replan with AI  Enter approve  Esc cancel  1-9 toggle"))
+		lines = append(lines, "")
+
 		for i, step := range plan.Steps {
 			box := "[ ]"
 			if selected[i] {
@@ -178,24 +280,22 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 			}
 			pointer := "  "
 			if i == cursor {
-				pointer = config.Colors.Command.Sprint("➤ ")
+				pointer = config.Colors.Command.Sprint("› ")
 			}
-			line := fmt.Sprintf("%s- %s %d. %s", pointer, box, step.StepNumber, strings.TrimSpace(step.Action))
+			action := strings.TrimSpace(step.Action)
+			line := fmt.Sprintf("%s%s %d. %s", pointer, box, step.StepNumber, action)
+			if len(step.RequiredTools) > 0 {
+				line += config.Colors.Dim.Sprintf(" (tools: %s)", strings.Join(step.RequiredTools, ", "))
+			}
 			lines = append(lines, line)
 			if strings.TrimSpace(step.Reasoning) != "" {
-				reasonLine := config.Colors.Dim.Sprintf("    reason: %s", strings.TrimSpace(step.Reasoning))
-				lines = append(lines, reasonLine)
+				lines = append(lines, config.Colors.Dim.Sprintf("   %s", strings.TrimSpace(step.Reasoning)))
 			}
 		}
 
-		for idx, ln := range lines {
-			fmt.Print("\r\033[2K")
-			fmt.Println(ln)
-			// Avoid extra move on last line
-			if idx < len(lines)-1 {
-				// nothing extra; Println already moved cursor
-			}
-		}
+		lines = append(lines, "")
+		lines = append(lines, config.Colors.Dim.Sprint("Tip: press e to edit this plan in your editor, or r to ask the AI to replan."))
+		renderBlock(lines)
 	}
 
 	redraw()
@@ -204,10 +304,8 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 		key := lib.ReadKey("")
 		switch key {
 		case "esc":
-			clearScreen()
 			return nil, "cancel", "", nil
 		case "enter":
-			clearScreen()
 			var steps []PlanStep
 			for i, s := range plan.Steps {
 				if selected[i] {
@@ -240,9 +338,20 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 		case "space":
 			selected[cursor] = !selected[cursor]
 			redraw()
+		case "e":
+			clearRenderedBlock()
+			editedRaw, canceled, err := editPlanInEditor(cfg, plan)
+			if err != nil {
+				return nil, "cancel", "", err
+			}
+			if canceled {
+				return nil, "cancel", "", nil
+			}
+			return nil, "setplan", editedRaw, nil
 		case "r":
-			clearScreen()
-			feedback, err := readLinePrompt("Describe plan adjustments (blank keeps current): ", input)
+			// Clear current plan UI so the adjustments prompt and next plan render cleanly.
+			clearRenderedBlock()
+			feedback, err := readLineWithHistory(cfg, "Describe plan adjustments (blank keeps current): ")
 			if err != nil {
 				return nil, "cancel", "", nil
 			}
@@ -258,6 +367,191 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 			// ignore
 		}
 	}
+}
+
+func selectPlanStepsNonTTY(cfg *config.Config, plan PlanResult, input io.Reader) ([]PlanStep, string, string, error) {
+	renderPlan(cfg, plan)
+
+	for {
+		raw, err := readLinePrompt("Select steps [all] (e.g. 1,3-5 | all | none | e edit | r replan | c cancel): ", input)
+		if err != nil {
+			return nil, "cancel", "", err
+		}
+		s := strings.TrimSpace(strings.ToLower(raw))
+		if s == "" || s == "all" {
+			return plan.Steps, "execute", "", nil
+		}
+		if s == "none" {
+			return nil, "execute", "", nil
+		}
+		if s == "c" || s == "cancel" {
+			return nil, "cancel", "", nil
+		}
+		if s == "r" || s == "replan" {
+			feedback, err := readLinePrompt("Describe plan adjustments (blank keeps current): ", input)
+			if err != nil {
+				return nil, "cancel", "", err
+			}
+			return nil, "replan", strings.TrimSpace(feedback), nil
+		}
+		if s == "e" || s == "edit" {
+			editedRaw, canceled, err := editPlanInEditor(cfg, plan)
+			if err != nil {
+				return nil, "cancel", "", err
+			}
+			if canceled {
+				return nil, "cancel", "", nil
+			}
+			return nil, "setplan", editedRaw, nil
+		}
+
+		selected, parseErr := parseStepSelection(s, len(plan.Steps))
+		if parseErr != nil {
+			fmt.Println(config.Colors.Warn.Sprintf("Invalid selection: %v", parseErr))
+			continue
+		}
+
+		var steps []PlanStep
+		for i, st := range plan.Steps {
+			if selected[i] {
+				steps = append(steps, st)
+			}
+		}
+		return steps, "execute", "", nil
+	}
+}
+
+func parseStepSelection(s string, n int) ([]bool, error) {
+	if n <= 0 {
+		return nil, errors.New("no steps")
+	}
+	out := make([]bool, n)
+	parts := strings.Split(s, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if strings.Contains(p, "-") {
+			bounds := strings.SplitN(p, "-", 2)
+			if len(bounds) != 2 {
+				return nil, fmt.Errorf("bad range %q", p)
+			}
+			a, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			b, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err1 != nil || err2 != nil {
+				return nil, fmt.Errorf("bad range %q", p)
+			}
+			if a > b {
+				a, b = b, a
+			}
+			if a < 1 || b < 1 || a > n || b > n {
+				return nil, fmt.Errorf("range %d-%d out of bounds (1-%d)", a, b, n)
+			}
+			for i := a; i <= b; i++ {
+				out[i-1] = true
+			}
+			continue
+		}
+		i, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, fmt.Errorf("bad step %q", p)
+		}
+		if i < 1 || i > n {
+			return nil, fmt.Errorf("step %d out of bounds (1-%d)", i, n)
+		}
+		out[i-1] = true
+	}
+	return out, nil
+}
+
+func readLineWithHistory(cfg *config.Config, prompt string) (string, error) {
+	// If history is disabled or unavailable, fall back to simple prompt.
+	if cfg == nil || cfg.DisableHistory || strings.TrimSpace(cfg.HistoryFile) == "" {
+		return readLinePrompt(prompt, nil)
+	}
+
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:      config.Colors.Info.Sprint(prompt),
+		Stdin:       os.Stdin,
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
+		HistoryFile: cfg.HistoryFile,
+	})
+	if err != nil {
+		return readLinePrompt(prompt, nil)
+	}
+	defer rl.Close()
+
+	line, err := rl.Readline()
+	if err != nil && !errors.Is(err, io.EOF) && err != readline.ErrInterrupt {
+		return "", err
+	}
+
+	line = strings.TrimRight(line, "\r\n")
+
+	return line, nil
+}
+
+func editPlanInEditor(cfg *config.Config, plan PlanResult) (string, bool, error) {
+	tmp, err := os.CreateTemp("", "quackops-plan-*.json")
+	if err != nil {
+		return "", false, err
+	}
+	defer os.Remove(tmp.Name())
+
+	payload := struct {
+		Steps []PlanStep `json:"steps"`
+	}{Steps: plan.Steps}
+
+	b, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		tmp.Close()
+		return "", false, err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return "", false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", false, err
+	}
+
+	editor := strings.TrimSpace(os.Getenv("VISUAL"))
+	if editor == "" {
+		editor = strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if editor == "" {
+		if runtime.GOOS == "windows" {
+			editor = "notepad"
+		} else {
+			editor = "vi"
+		}
+	}
+
+	fmt.Println(config.Colors.Dim.Sprintf("Opening %s to edit the plan. Save and close to continue.", editor))
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		parts = []string{editor}
+	}
+	cmd := exec.Command(parts[0], append(parts[1:], tmp.Name())...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", false, err
+	}
+
+	editedBytes, err := os.ReadFile(tmp.Name())
+	if err != nil {
+		return "", false, err
+	}
+	edited := strings.TrimSpace(string(editedBytes))
+	if edited == "" {
+		return "", true, nil
+	}
+
+	return edited, false, nil
 }
 
 func confirmPlan(r io.Reader) (bool, error) {

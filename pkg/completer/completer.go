@@ -458,6 +458,13 @@ func (c *shellAutoCompleter) CompleteSlashCommands(input string, includeDefaults
 	var slashCommands []config.SlashCommand
 	if includeDefaults {
 		slashCommands = c.Cfg.SlashCommands
+	} else {
+		// Allow specific built-ins to autocomplete mid-line (same as MCP prompts).
+		for _, cmdInfo := range c.Cfg.SlashCommands {
+			if cmdInfo.Primary == "/plan" {
+				slashCommands = append(slashCommands, cmdInfo)
+			}
+		}
 	}
 	var promptInfos []mcp.PromptInfo
 	if c.Cfg.MCPClientEnabled {
