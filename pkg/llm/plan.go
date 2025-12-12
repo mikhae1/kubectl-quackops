@@ -9,9 +9,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
-	"runtime"
 
 	"github.com/ergochat/readline"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
@@ -57,8 +57,8 @@ func RunPlanFlow(ctx context.Context, cfg *config.Config, prompt string, confirm
 
 		switch action {
 		case "cancel":
-			// Back out without error; caller can continue its flow
-			return "", nil
+			// Treat as a user cancel so callers can uniformly print "(canceled)" and continue.
+			return "", lib.NewUserCancelError("canceled by user")
 		case "setplan":
 			editedPlan, perr := parsePlan(feedback)
 			if perr != nil {
@@ -100,14 +100,29 @@ func GeneratePlan(ctx context.Context, cfg *config.Config, prompt string, adjust
 		userPrompt += "\nAdjustments: " + strings.TrimSpace(adjustments)
 	}
 
+	// Codex-style plan-mode spinner message + minimal checklist while the plan is generated.
+	origSpinnerOverride := cfg.SpinnerMessageOverride
+	cfg.SpinnerMessageOverride = "Asking clarifying questions…"
+	spinnerManager := lib.GetSpinnerManager(cfg)
+	spinnerManager.SetDetailsLines([]string{
+		"  ⎿  ☐ Draft plan",
+	})
+	defer func() {
+		cfg.SpinnerMessageOverride = origSpinnerOverride
+		spinnerManager.ClearDetailsLines()
+	}()
+
 	// Plan generation returns structured JSON that is only useful for debugging.
 	// Suppress printing in normal mode so users only see the interactive plan UI.
 	origSuppress := cfg.SuppressContentPrint
+	origSuppressTools := cfg.SuppressToolPrint
 	if !logger.DEBUG {
 		cfg.SuppressContentPrint = true
+		cfg.SuppressToolPrint = true
 	}
 	raw, err := RequestWithSystem(cfg, planSystemPrompt, userPrompt, false, false)
 	cfg.SuppressContentPrint = origSuppress
+	cfg.SuppressToolPrint = origSuppressTools
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -128,19 +143,105 @@ func ExecutePlan(ctx context.Context, cfg *config.Config, plan PlanResult, origi
 		return "", errors.New("no plan steps to execute")
 	}
 
+	renderer := newPlanProgressRenderer(cfg, plan.Steps)
+	restoreSink := SetPlanProgressSink(renderer.Handle)
+	defer restoreSink()
+	renderer.Init()
+	defer renderer.Clear()
+
+	origSpinnerOverride := cfg.SpinnerMessageOverride
+	cfg.SpinnerMessageOverride = "Executing plan…"
+	defer func() { cfg.SpinnerMessageOverride = origSpinnerOverride }()
+
+	origHideToolBlocksWhenHidden := cfg.HideToolBlocksWhenDetailsHidden
+	cfg.HideToolBlocksWhenDetailsHidden = true
+	defer func() { cfg.HideToolBlocksWhenDetailsHidden = origHideToolBlocksWhenHidden }()
+
 	systemPrompt := buildExecutionSystemPrompt(originalPrompt, plan)
-	var outputs []string
+	stepOutputs := make(map[int]string, len(plan.Steps))
 
 	for _, step := range plan.Steps {
+		emitPlanProgress(PlanProgressEvent{
+			Kind:       PlanProgressStepStarted,
+			StepNumber: step.StepNumber,
+			StepAction: step.Action,
+		})
 		stepPrompt := fmt.Sprintf("Execute step %d: %s\nReason: %s\nOriginal request: %s", step.StepNumber, strings.TrimSpace(step.Action), strings.TrimSpace(step.Reasoning), originalPrompt)
-		resp, err := RequestWithSystem(cfg, systemPrompt, stepPrompt, true, true)
+
+		// We render step output inside the plan spinner (and then replay it once at the end),
+		// so suppress all Chat printing for this call.
+		origSuppressContent := cfg.SuppressContentPrint
+		cfg.SuppressContentPrint = true
+		resp, err := RequestWithSystem(cfg, systemPrompt, stepPrompt, false, true)
+		cfg.SuppressContentPrint = origSuppressContent
 		if err != nil {
+			emitPlanProgress(PlanProgressEvent{
+				Kind:       PlanProgressStepFailed,
+				StepNumber: step.StepNumber,
+				StepAction: step.Action,
+				Err:        err.Error(),
+			})
+			if lib.IsUserCancel(err) {
+				return "", err
+			}
 			return "", fmt.Errorf("step %d failed: %w", step.StepNumber, err)
 		}
-		outputs = append(outputs, fmt.Sprintf("Step %d: %s\n%s", step.StepNumber, step.Action, strings.TrimSpace(resp)))
+
+		resp = strings.TrimSpace(resp)
+		stepOutputs[step.StepNumber] = resp
+
+		emitPlanProgress(PlanProgressEvent{
+			Kind:       PlanProgressStepCompleted,
+			StepNumber: step.StepNumber,
+			StepAction: step.Action,
+		})
+
+		emitPlanProgress(PlanProgressEvent{
+			Kind:       PlanProgressStepOutput,
+			StepNumber: step.StepNumber,
+			StepAction: step.Action,
+			Output:     resp,
+		})
 	}
 
-	return strings.Join(outputs, "\n\n"), nil
+	// Final message: replay all step results for scrollback, then provide a concise wrap-up.
+	var replay strings.Builder
+	replay.WriteString("## Step results\n\n")
+	for _, step := range plan.Steps {
+		action := strings.TrimSpace(step.Action)
+		replay.WriteString(fmt.Sprintf("### Step %d: %s\n\n", step.StepNumber, action))
+		out := strings.TrimSpace(stepOutputs[step.StepNumber])
+		if out == "" {
+			out = "(no output)"
+		}
+		replay.WriteString(out)
+		replay.WriteString("\n\n")
+	}
+
+	finalPrompt := fmt.Sprintf(
+		"Original request:\n%s\n\nStep results:\n%s\n\nNow think hard and provide a final answer.\nConstraints:\n- Do NOT restate the plan.\n- You may reference step results, but do not paste them verbatim.\n- If something failed or is ambiguous, say what and suggest the next best command/check.\n",
+		strings.TrimSpace(originalPrompt),
+		replay.String(),
+	)
+
+	origSuppressContent := cfg.SuppressContentPrint
+	cfg.SuppressContentPrint = true
+	finalResp, err := RequestWithSystem(cfg, systemPrompt, finalPrompt, false, true)
+	cfg.SuppressContentPrint = origSuppressContent
+	if err != nil {
+		logger.Log("warn", "Failed to generate final plan wrap-up: %v", err)
+		return replay.String(), nil
+	}
+	if strings.TrimSpace(finalResp) == "" {
+		return replay.String(), nil
+	}
+
+	var out strings.Builder
+	out.WriteString(replay.String())
+	out.WriteString("## Final\n\n")
+	out.WriteString(strings.TrimSpace(finalResp))
+	out.WriteString("\n")
+	return out.String(), nil
 }
 
 func buildExecutionSystemPrompt(originalPrompt string, plan PlanResult) string {
@@ -186,6 +287,10 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return selectPlanStepsNonTTY(cfg, plan, input)
 	}
+
+	// Hide cursor while the interactive plan UI is active (prevents a distracting cursor on the last line).
+	fmt.Fprint(os.Stdout, "\x1b[?25l")
+	defer fmt.Fprint(os.Stdout, "\x1b[?25h")
 
 	selected := make([]bool, len(plan.Steps))
 	for i := range selected {
@@ -261,40 +366,7 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 	}
 
 	redraw := func() {
-		lines := make([]string, 0, len(plan.Steps)*2+4)
-
-		selectedCount := 0
-		for _, v := range selected {
-			if v {
-				selectedCount++
-			}
-		}
-		lines = append(lines, config.Colors.Accent.Sprint("Plan Review")+config.Colors.Dim.Sprintf("  (%d/%d selected)", selectedCount, len(plan.Steps)))
-		lines = append(lines, config.Colors.Dim.Sprint("↑/↓ move  Space toggle  a all  e edit locally  r replan with AI  Enter approve  Esc cancel  1-9 toggle"))
-		lines = append(lines, "")
-
-		for i, step := range plan.Steps {
-			box := "[ ]"
-			if selected[i] {
-				box = "[x]"
-			}
-			pointer := "  "
-			if i == cursor {
-				pointer = config.Colors.Command.Sprint("› ")
-			}
-			action := strings.TrimSpace(step.Action)
-			line := fmt.Sprintf("%s%s %d. %s", pointer, box, step.StepNumber, action)
-			if len(step.RequiredTools) > 0 {
-				line += config.Colors.Dim.Sprintf(" (tools: %s)", strings.Join(step.RequiredTools, ", "))
-			}
-			lines = append(lines, line)
-			if strings.TrimSpace(step.Reasoning) != "" {
-				lines = append(lines, config.Colors.Dim.Sprintf("   %s", strings.TrimSpace(step.Reasoning)))
-			}
-		}
-
-		lines = append(lines, "")
-		lines = append(lines, config.Colors.Dim.Sprint("Tip: press e to edit this plan in your editor, or r to ask the AI to replan."))
+		lines := renderPlanPickerLines(cfg, plan, selected, cursor)
 		renderBlock(lines)
 	}
 
@@ -340,6 +412,8 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 			redraw()
 		case "e":
 			clearRenderedBlock()
+			// Show cursor while handing control to the editor.
+			fmt.Fprint(os.Stdout, "\x1b[?25h")
 			editedRaw, canceled, err := editPlanInEditor(cfg, plan)
 			if err != nil {
 				return nil, "cancel", "", err
@@ -351,6 +425,8 @@ func selectPlanSteps(cfg *config.Config, plan PlanResult, input io.Reader) ([]Pl
 		case "r":
 			// Clear current plan UI so the adjustments prompt and next plan render cleanly.
 			clearRenderedBlock()
+			// Show cursor for the prompt input.
+			fmt.Fprint(os.Stdout, "\x1b[?25h")
 			feedback, err := readLineWithHistory(cfg, "Describe plan adjustments (blank keeps current): ")
 			if err != nil {
 				return nil, "cancel", "", nil

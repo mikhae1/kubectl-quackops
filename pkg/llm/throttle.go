@@ -138,7 +138,7 @@ func applyThrottleDelayWithCustomMessageManager(cfg *config.Config, spinnerManag
 
 		// Apply cancellable delay with countdown and Ctrl-C handling
 		ctx, cancel := context.WithCancel(context.Background())
-		stopEsc := lib.StartEscWatcher(cancel, spinnerManager, cfg, nil)
+		stopEsc := lib.StartEscWatcher(cancel, spinnerManager, cfg, nil, nil)
 
 		// Manual countdown loop with cancellation support
 		start := time.Now()
@@ -192,7 +192,7 @@ func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *lib.Spinner, cus
 
 			// Apply cancellable delay with countdown display
 			ctx, cancel := context.WithCancel(context.Background())
-			stopEsc := lib.StartEscWatcher(cancel, nil, cfg, nil)
+			stopEsc := lib.StartEscWatcher(cancel, nil, cfg, nil, nil)
 			defer stopEsc()
 			defer cancel()
 			defer func() {
@@ -221,7 +221,7 @@ func applyThrottleDelayWithCustomMessage(cfg *config.Config, s *lib.Spinner, cus
 		} else {
 			// Fallback: Simple delay with cancellation (no countdown display)
 			ctx, cancel := context.WithCancel(context.Background())
-			stopEsc := lib.StartEscWatcher(cancel, nil, cfg, nil)
+			stopEsc := lib.StartEscWatcher(cancel, nil, cfg, nil, nil)
 			defer stopEsc()
 			defer cancel()
 

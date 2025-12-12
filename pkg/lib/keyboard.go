@@ -14,9 +14,10 @@ import (
 // It ignores ANSI escape sequences (e.g., arrow keys: ESC [ A) and Alt-modified keys (ESC + key).
 // Ctrl-C/Z/\ trigger appropriate signals and immediate exit via CleanupAndExit.
 // Ctrl-R triggers the onCtrlR callback if provided (for screen redraws).
+// Ctrl-T triggers the onCtrlT callback if provided (for toggling spinner details).
 // Returns a stop function that restores terminal state and stops the watcher.
 // The stop function blocks until the watcher goroutine has fully exited.
-func StartEscWatcher(cancel func(), spinnerManager *SpinnerManager, cfg *config.Config, onCtrlR func()) func() {
+func StartEscWatcher(cancel func(), spinnerManager *SpinnerManager, cfg *config.Config, onCtrlR func(), onCtrlT func()) func() {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return func() {}
@@ -73,30 +74,25 @@ func StartEscWatcher(cancel func(), spinnerManager *SpinnerManager, cfg *config.
 			switch b[0] {
 			case 18: // Ctrl+R
 				if onCtrlR != nil {
-					// We must temporarily restore terminal to allow normal printing (newlines etc)
-					// But CoolClearEffect likely handles raw mode switching internally or prints ANSI
-					// For now, let's keep raw mode but invoke the callback.
-					// If the callback assumes cooked mode, we'd need to restore/re-raw.
-					// Since lib.CoolClearEffect just prints ANSI, it should be fine in raw mode
-					// providing newlines are explicit (\r\n), which fmt.Println in raw might not do.
-					// However, standard fmt.Print works in raw with \r\n.
-					// Let's rely on the callback handling itself or being ANSI-safe.
-					// Actually, typical output needs cooked mode for \n->\r\n translation.
-					// For safety, let's execute callback and continue.
 					restore()
 					onCtrlR()
+					newState, err := term.MakeRaw(fd)
+					if err != nil {
+						return
+					}
+					oldState = newState
+					restored.Store(false)
+				}
+			case 20: // Ctrl+T
+				if onCtrlT != nil {
+					restore()
+					onCtrlT()
 					// Re-enable raw mode after callback returns
 					newState, err := term.MakeRaw(fd)
 					if err == nil {
-						// Update oldState? No, restore() needs the ORIGINAL state.
-						// We just need to go back to raw.
-						// Reset restored flag so deferred restore() works again?
+						oldState = newState
 						restored.Store(false)
-						// But term.MakeRaw returns the *previous* state.
-						// We just want to enter raw mode again.
-						_ = newState // ignore returned state, we have original oldState
 					} else {
-						// Failed to re-enter raw mode? abort
 						return
 					}
 				}

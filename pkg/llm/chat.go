@@ -26,6 +26,12 @@ func Chat(cfg *config.Config, client llms.Model, prompt string, stream bool, his
 // ChatWithSystemPrompt orchestrates a chat completion with separate system and user prompts.
 // The systemPrompt is added as a system message before the user prompt.
 func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
+	if cfg == nil {
+		cfg = config.LoadConfig()
+		if cfg == nil {
+			return "", fmt.Errorf("nil config")
+		}
+	}
 	// Add system message to history if provided (only once at the start of conversation)
 	if systemPrompt != "" && len(cfg.ChatMessages) == 0 {
 		systemMessage := llms.SystemChatMessage{Content: systemPrompt}
@@ -140,8 +146,13 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	}
 
 	spinnerManager := lib.GetSpinnerManager(cfg)
+	provider := cfg.Provider
+	model := cfg.Model
 	message := fmt.Sprintf("Waiting for %s/%s... %s %s"+config.Colors.Dim.Sprint(" (ESC to cancel)"),
-		config.Colors.Provider.Sprint(cfg.Provider), config.Colors.Model.Sprint(cfg.Model), config.Colors.Output.Sprint("[")+config.Colors.Label.Sprint("↑"+lib.FormatCompactNumber(outgoingTokens)), config.Colors.Output.Sprint("tokens]"))
+		config.Colors.Provider.Sprint(provider), config.Colors.Model.Sprint(model), config.Colors.Output.Sprint("[")+config.Colors.Label.Sprint("↑"+lib.FormatCompactNumber(outgoingTokens)), config.Colors.Output.Sprint("tokens]"))
+	if strings.TrimSpace(cfg.SpinnerMessageOverride) != "" {
+		message = strings.TrimSpace(cfg.SpinnerMessageOverride)
+	}
 	cancelSpinner := spinnerManager.ShowLLM(message)
 
 	var stopOnce sync.Once
@@ -217,7 +228,12 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 	// startEscBreaker starts a raw-input watcher to cancel the context on standalone ESC.
 	startEscBreaker := func(cancel func()) func() {
-		return lib.StartEscWatcher(cancel, spinnerManager, cfg, onCtrlR)
+		onCtrlT := func() {
+			if spinnerManager != nil {
+				spinnerManager.ToggleDetailsHidden()
+			}
+		}
+		return lib.StartEscWatcher(cancel, spinnerManager, cfg, onCtrlR, onCtrlT)
 	}
 
 	if useStreaming {
@@ -260,12 +276,12 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 			// Display content if available and not already displayed
 			if choice.Content != "" && !contentAlreadyDisplayed {
-				// Hide spinner before displaying content - can't use stopOnce because
-				// spinner is re-shown for each LLM call in the MCP tool loop
-				hideSpinnerWithLeadingNewline(spinnerManager)
-				if !cfg.SuppressContentPrint {
-					printContentFormatted(cfg, choice.Content, false)
-				}
+				// Pause spinner while printing, then restore so progress stays visible at bottom.
+				printWithSpinnerPaused(spinnerManager, func() {
+					if !cfg.SuppressContentPrint {
+						printContentFormatted(cfg, choice.Content, false)
+					}
+				})
 				contentAlreadyDisplayed = true
 				displayedContent = choice.Content
 			}
@@ -324,13 +340,33 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						return "", err
 					}
 
+					emitPlanProgress(PlanProgressEvent{
+						Kind:          PlanProgressToolStarted,
+						ToolName:      tc.FunctionCall.Name,
+						Iteration:     toolCallCount + 1,
+						MaxIterations: maxToolCalls,
+					})
+
 					logger.Log("info", "Executing MCP tool: %s with args: %v", tc.FunctionCall.Name, args)
 					toolResult, callErr := mcp.ExecuteTool(cfg, tc.FunctionCall.Name, args)
 					if callErr != nil {
 						logger.Log("warn", "MCP tool %s failed: %v", tc.FunctionCall.Name, callErr)
 						toolResult = fmt.Sprintf("Error executing tool '%s': %v", tc.FunctionCall.Name, callErr)
+						emitPlanProgress(PlanProgressEvent{
+							Kind:          PlanProgressToolFailed,
+							ToolName:      tc.FunctionCall.Name,
+							Iteration:     toolCallCount + 1,
+							MaxIterations: maxToolCalls,
+							Err:           callErr.Error(),
+						})
 					} else {
 						logger.Log("info", "MCP tool %s executed successfully, result length: %d", tc.FunctionCall.Name, len(toolResult))
+						emitPlanProgress(PlanProgressEvent{
+							Kind:          PlanProgressToolCompleted,
+							ToolName:      tc.FunctionCall.Name,
+							Iteration:     toolCallCount + 1,
+							MaxIterations: maxToolCalls,
+						})
 					}
 
 					// Record tool call for history
@@ -353,10 +389,11 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 					if useStreaming {
 						bufferedToolBlocks = append(bufferedToolBlocks, block)
 					} else {
-						// Hide spinner before printing tool block to avoid visual overlap
-						// Note: Can't use stopOnce here because spinner is re-shown for each LLM call
-						hideSpinnerWithLeadingNewline(spinnerManager)
-						fmt.Fprint(os.Stdout, block)
+						if shouldPrintToolBlocks(cfg, spinnerManager) {
+							printWithSpinnerPaused(spinnerManager, func() {
+								fmt.Fprint(os.Stdout, block)
+							})
+						}
 					}
 
 					toolMsg := llms.MessageContent{
@@ -407,7 +444,9 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 		spinnerManager.Hide()
 
 		if cfg.MCPClientEnabled {
-			printToolBlocks(bufferedToolBlocks)
+			if shouldPrintToolBlocks(cfg, spinnerManager) {
+				printToolBlocks(bufferedToolBlocks)
+			}
 			if responseContent != "" && responseContent != displayedContent {
 				fmt.Fprint(os.Stdout, "\n")
 				if !cfg.SuppressContentPrint {
@@ -419,12 +458,16 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 		} else {
 			if !contentAlreadyDisplayed {
 				fmt.Fprint(os.Stdout, "\n")
-				printToolBlocks(bufferedToolBlocks)
+				if shouldPrintToolBlocks(cfg, spinnerManager) {
+					printToolBlocks(bufferedToolBlocks)
+				}
 				if !cfg.SuppressContentPrint {
 					printContentFormatted(cfg, responseContent, true)
 				}
 			} else {
-				printToolBlocks(bufferedToolBlocks)
+				if shouldPrintToolBlocks(cfg, spinnerManager) {
+					printToolBlocks(bufferedToolBlocks)
+				}
 				fmt.Fprintln(os.Stdout)
 			}
 		}
@@ -477,6 +520,34 @@ func printToolBlocks(blocks []string) {
 	}
 }
 
+func shouldPrintToolBlocks(cfg *config.Config, spinnerManager *lib.SpinnerManager) bool {
+	if cfg.SuppressToolPrint {
+		return false
+	}
+	if cfg.HideToolBlocksWhenDetailsHidden && spinnerManager != nil && spinnerManager.DetailsHidden() {
+		return false
+	}
+	return true
+}
+
+func printWithSpinnerPaused(spinnerManager *lib.SpinnerManager, fn func()) {
+	if spinnerManager == nil || fn == nil {
+		if fn != nil {
+			fn()
+		}
+		return
+	}
+	ctx := spinnerManager.GetContext()
+	if ctx == nil {
+		fn()
+		return
+	}
+	spinnerManager.Hide()
+	fmt.Fprint(os.Stdout, "\n")
+	fn()
+	spinnerManager.Show(ctx.Type, ctx.Message)
+}
+
 // hideSpinnerWithLeadingNewline hides spinner and adds a leading newline.
 func hideSpinnerWithLeadingNewline(spinnerManager *lib.SpinnerManager) {
 	spinnerManager.Hide()
@@ -495,7 +566,7 @@ func applyRetryDelayWithCountdown(
 	startEscBreaker func(cancel func()) func(),
 ) error {
 	// Fast path for tests: when SkipWaits is enabled, skip delays entirely
-	if cfg != nil && cfg.SkipWaits {
+	if cfg.SkipWaits {
 		return nil
 	}
 

@@ -179,6 +179,3 @@ func LogOutboundMessages(messages []llms.MessageContent, cfg *config.Config) {
 	logger.Log("debug", "[Messages] Outbound: %d messages, %d total tokens [%s]",
 		len(messages), totalTokens, strings.Join(summaryParts, " "))
 }
-
-
-

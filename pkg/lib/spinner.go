@@ -12,6 +12,7 @@ import (
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/logger"
+	"golang.org/x/term"
 )
 
 // SpinnerType defines different spinner contexts and their visual styles
@@ -51,11 +52,14 @@ type Spinner struct {
 	Writer         io.Writer
 	GradientColors []*config.ANSIColor
 	colorize       func(string) string
+	dynamicSuffix  func() string
 	stopCh         chan struct{}
 	doneCh         chan struct{}
 	mutex          sync.Mutex
 	running        bool
 	frameIdx       int
+	lastLines      int
+	lastMultiline  bool
 }
 
 // NewSpinner creates a new Spinner instance.
@@ -142,11 +146,28 @@ func (s *Spinner) Start() {
 				}
 
 				s.frameIdx++
-				out := "\r" + colored
-				if s.Suffix != "" {
-					out += " " + s.Suffix
+				suffix := s.Suffix
+				if s.dynamicSuffix != nil {
+					suffix = s.dynamicSuffix()
 				}
-				_, _ = fmt.Fprint(s.Writer, out)
+
+				multiline := strings.Contains(suffix, "\n") && s.isWriterTerminal()
+				if multiline {
+					s.renderMultiline(colored, suffix)
+				} else {
+					// If we previously rendered a multiline block, clear it before returning to single-line mode.
+					if s.lastMultiline && s.lastLines > 0 {
+						s.clearRenderedLocked()
+					}
+					out := "\r" + colored
+					if suffix != "" {
+						out += " " + suffix
+					}
+					_, _ = fmt.Fprint(s.Writer, out)
+					// Single-line spinner always occupies one physical line.
+					s.lastLines = 1
+					s.lastMultiline = false
+				}
 				s.mutex.Unlock()
 			}
 		}
@@ -168,6 +189,103 @@ func (s *Spinner) Stop() {
 	_, _ = fmt.Fprint(s.Writer, "\x1b[?25h")
 }
 
+// ClearRendered clears the currently rendered spinner output (single or multi-line).
+// It is safe to call even if nothing was rendered.
+func (s *Spinner) ClearRendered() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	s.clearRenderedLocked()
+}
+
+func (s *Spinner) clearRenderedLocked() {
+	if s.lastLines <= 0 {
+		return
+	}
+	if s.lastMultiline {
+		// Cursor is after the block; move up to its start, clear, and return to the start.
+		fmt.Fprintf(s.Writer, "\033[%dA", s.lastLines)
+		for i := 0; i < s.lastLines; i++ {
+			fmt.Fprint(s.Writer, "\r\033[2K\n")
+		}
+		fmt.Fprintf(s.Writer, "\033[%dA", s.lastLines)
+	} else {
+		fmt.Fprint(s.Writer, "\r\033[2K")
+	}
+	s.lastLines = 0
+	s.lastMultiline = false
+}
+
+func (s *Spinner) isWriterTerminal() bool {
+	// Best-effort: we primarily render to stderr; only use multiline controls if stderr is a TTY.
+	if s.Writer == os.Stderr {
+		return term.IsTerminal(int(os.Stderr.Fd()))
+	}
+	if s.Writer == os.Stdout {
+		return term.IsTerminal(int(os.Stdout.Fd()))
+	}
+	return false
+}
+
+func (s *Spinner) termWidth() int {
+	fd := int(os.Stderr.Fd())
+	if s.Writer == os.Stdout {
+		fd = int(os.Stdout.Fd())
+	}
+	w, _, err := term.GetSize(fd)
+	if err != nil || w <= 20 {
+		return 80
+	}
+	return w
+}
+
+func (s *Spinner) visibleLen(line string) int {
+	// Rough visible length: strip ANSI codes.
+	clean := stripAnsiColors(line)
+	return len([]rune(clean))
+}
+
+func (s *Spinner) countPhysicalLines(lines []string) int {
+	width := s.termWidth()
+	total := 0
+	for _, ln := range lines {
+		vlen := s.visibleLen(ln)
+		if vlen <= 0 {
+			total++
+			continue
+		}
+		wrapped := (vlen - 1) / width
+		total += 1 + wrapped
+	}
+	return total
+}
+
+func (s *Spinner) renderMultiline(coloredFrame string, suffix string) {
+	// Clear previous block (if any) and repaint.
+	if s.lastLines > 0 {
+		s.clearRenderedLocked()
+	}
+
+	parts := strings.Split(suffix, "\n")
+	lines := make([]string, 0, 1+len(parts))
+	if len(parts) > 0 {
+		lines = append(lines, coloredFrame+" "+parts[0])
+		for i := 1; i < len(parts); i++ {
+			lines = append(lines, parts[i])
+		}
+	} else {
+		lines = append(lines, coloredFrame)
+	}
+
+	for _, ln := range lines {
+		fmt.Fprint(s.Writer, "\r\033[2K")
+		fmt.Fprint(s.Writer, ln)
+		fmt.Fprint(s.Writer, "\n")
+	}
+	s.lastLines = s.countPhysicalLines(lines)
+	s.lastMultiline = true
+}
+
 // SpinnerManager provides thread-safe, coordinated spinner management
 type SpinnerManager struct {
 	mutex         sync.RWMutex
@@ -175,6 +293,8 @@ type SpinnerManager struct {
 	context       *SpinnerContext
 	isActive      bool
 	cfg           *config.Config
+	detailLines   []string
+	detailsHidden bool
 }
 
 // Global spinner manager instance
@@ -208,9 +328,8 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 			// Cancel the old animation context so background goroutines exit
 			sm.context.cancel()
 		}
+		sm.activeSpinner.ClearRendered()
 		sm.activeSpinner.Stop()
-		// Clear the line for clean transition
-		fmt.Fprint(os.Stderr, "\r\033[2K")
 		sm.isActive = false
 		sm.activeSpinner = nil
 		sm.context = nil
@@ -241,8 +360,38 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 	}
 
 	sm.activeSpinner = NewSpinner(charset, spinnerSpeed)
-	sm.activeSpinner.Suffix = " " + message
+	sm.activeSpinner.Suffix = message
 	sm.activeSpinner.Writer = os.Stderr
+
+	// When details are active, use a dynamic multiline suffix and disable spotlight animation.
+	if len(sm.detailLines) > 0 || sm.detailsHidden {
+		sm.activeSpinner.dynamicSuffix = func() string {
+			sm.mutex.RLock()
+			msg := message
+			start := time.Now()
+			if sm.context != nil {
+				msg = sm.context.Message
+				start = sm.context.startTime
+			}
+			hidden := sm.detailsHidden
+			lines := append([]string(nil), sm.detailLines...)
+			cfg := sm.cfg
+			sm.mutex.RUnlock()
+
+			elapsedStr := formatElapsed(time.Since(start))
+			tok := 0
+			if cfg != nil {
+				tok = cfg.LastOutgoingTokens
+			}
+			header := fmt.Sprintf("%s%s", msg, config.Colors.Dim.Sprintf(" (esc to interrupt · ctrl+t toggle details · %s · ↑ %s tokens)", elapsedStr, FormatCompactNumber(tok)))
+			if hidden || len(lines) == 0 {
+				return header
+			}
+			return header + "\n" + strings.Join(lines, "\n")
+		}
+	} else {
+		sm.activeSpinner.dynamicSuffix = nil
+	}
 
 	// Apply colors based on spinner type
 	// Apply colors based on spinner type
@@ -265,7 +414,7 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 	// Spotlight animation for text
 	if sm.cfg != nil && !sm.cfg.DisableAnimation {
 		// Apply to all LLM and Diagnostic spinners for a consistent modern feel
-		if spinnerType == SpinnerLLM || spinnerType == SpinnerDiagnostic || spinnerType == SpinnerGeneration || spinnerType == SpinnerRAG {
+		if (spinnerType == SpinnerLLM || spinnerType == SpinnerDiagnostic || spinnerType == SpinnerGeneration || spinnerType == SpinnerRAG) && sm.activeSpinner.dynamicSuffix == nil {
 			ctx := sm.context.ctx
 			// Use a pointer to the message so we can pick up updates
 			// Note: In this simple implementation, we'll just read the current message from context if available,
@@ -302,7 +451,7 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 
 						sm.mutex.Lock()
 						if sm.isActive && sm.activeSpinner != nil {
-							sm.activeSpinner.Suffix = " " + formatted
+							sm.activeSpinner.Suffix = formatted
 						}
 						sm.mutex.Unlock()
 					}
@@ -326,7 +475,7 @@ func (sm *SpinnerManager) Update(message string) {
 	defer sm.mutex.RUnlock()
 
 	if sm.isActive && sm.activeSpinner != nil && sm.context != nil {
-		sm.activeSpinner.Suffix = " " + message
+		sm.activeSpinner.Suffix = message
 		sm.context.Message = message
 	}
 }
@@ -337,9 +486,8 @@ func (sm *SpinnerManager) Hide() {
 	defer sm.mutex.Unlock()
 
 	if sm.isActive && sm.activeSpinner != nil {
+		sm.activeSpinner.ClearRendered()
 		sm.activeSpinner.Stop()
-		// Clear spinner line for clean output
-		fmt.Fprint(os.Stderr, "\r\033[2K")
 		sm.isActive = false
 
 		if sm.context != nil {
@@ -355,6 +503,118 @@ func (sm *SpinnerManager) Hide() {
 		sm.activeSpinner = nil
 		sm.context = nil
 	}
+}
+
+// SetDetailsLines sets the lines rendered under the active spinner message.
+// Lines should not include trailing newlines.
+func (sm *SpinnerManager) SetDetailsLines(lines []string) {
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
+
+	sm.detailLines = append([]string(nil), lines...)
+
+	// If a spinner is already active, ensure we switch into dynamic/multiline mode.
+	if sm.isActive && sm.activeSpinner != nil {
+		if sm.activeSpinner.dynamicSuffix == nil {
+			sm.activeSpinner.dynamicSuffix = func() string {
+				sm.mutex.RLock()
+				msg := ""
+				start := time.Now()
+				if sm.context != nil {
+					msg = sm.context.Message
+					start = sm.context.startTime
+				}
+				hidden := sm.detailsHidden
+				lines := append([]string(nil), sm.detailLines...)
+				cfg := sm.cfg
+				sm.mutex.RUnlock()
+
+				elapsedStr := formatElapsed(time.Since(start))
+				tok := 0
+				if cfg != nil {
+					tok = cfg.LastOutgoingTokens
+				}
+				header := fmt.Sprintf("%s%s", msg, config.Colors.Dim.Sprintf(" (esc to interrupt · ctrl+t toggle details · %s · ↑ %s tokens)", elapsedStr, FormatCompactNumber(tok)))
+				if hidden || len(lines) == 0 {
+					return header
+				}
+				return header + "\n" + strings.Join(lines, "\n")
+			}
+		}
+	}
+}
+
+// ClearDetailsLines removes any spinner detail lines.
+func (sm *SpinnerManager) ClearDetailsLines() {
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
+
+	sm.detailLines = nil
+	if sm.isActive && sm.activeSpinner != nil && !sm.detailsHidden {
+		// Allow spotlight/single-line to take over again.
+		sm.activeSpinner.dynamicSuffix = nil
+	}
+}
+
+// ToggleDetailsHidden toggles whether spinner detail lines are visible.
+func (sm *SpinnerManager) ToggleDetailsHidden() {
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
+
+	sm.detailsHidden = !sm.detailsHidden
+
+	// If details are now visible (or hidden), make sure dynamic mode is enabled so the meta line appears.
+	if sm.isActive && sm.activeSpinner != nil {
+		if sm.activeSpinner.dynamicSuffix == nil && (len(sm.detailLines) > 0 || sm.detailsHidden) {
+			sm.activeSpinner.dynamicSuffix = func() string {
+				sm.mutex.RLock()
+				msg := ""
+				start := time.Now()
+				if sm.context != nil {
+					msg = sm.context.Message
+					start = sm.context.startTime
+				}
+				hidden := sm.detailsHidden
+				lines := append([]string(nil), sm.detailLines...)
+				cfg := sm.cfg
+				sm.mutex.RUnlock()
+
+				elapsedStr := formatElapsed(time.Since(start))
+				tok := 0
+				if cfg != nil {
+					tok = cfg.LastOutgoingTokens
+				}
+				header := fmt.Sprintf("%s%s", msg, config.Colors.Dim.Sprintf(" (esc to interrupt · ctrl+t toggle details · %s · ↑ %s tokens)", elapsedStr, FormatCompactNumber(tok)))
+				if hidden || len(lines) == 0 {
+					return header
+				}
+				return header + "\n" + strings.Join(lines, "\n")
+			}
+		}
+	}
+}
+
+// DetailsHidden reports whether spinner details are currently hidden (toggled via Ctrl-T).
+func (sm *SpinnerManager) DetailsHidden() bool {
+	if sm == nil {
+		return false
+	}
+	sm.mutex.RLock()
+	defer sm.mutex.RUnlock()
+	return sm.detailsHidden
+}
+
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	sec := int(d.Seconds())
+	m := sec / 60
+	s := sec % 60
+	if m > 0 {
+		return fmt.Sprintf("%dm %02ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
 }
 
 // IsActive returns whether a spinner is currently active

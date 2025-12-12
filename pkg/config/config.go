@@ -87,6 +87,19 @@ type Config struct {
 	// SuppressContentPrint prevents Chat from printing model message bodies
 	SuppressContentPrint bool
 
+	// SuppressToolPrint prevents Chat from printing tool call blocks (e.g. MCP tool output blocks).
+	// Intended for UX flows that provide their own progress UI (e.g. /plan execution).
+	SuppressToolPrint bool
+
+	// HideToolBlocksWhenDetailsHidden suppresses printing tool call blocks when the spinner
+	// details are hidden (Ctrl-T). This is meant for UX flows (e.g. /plan) where tool output
+	// should be visible by default but can be silenced by hiding details.
+	HideToolBlocksWhenDetailsHidden bool
+
+	// SpinnerMessageOverride, when non-empty, replaces the default spinner message for Chat requests.
+	// Callers should set and restore this around a single request.
+	SpinnerMessageOverride string
+
 	// Test-friendly switch to skip sleeps/backoffs/throttle waits
 	SkipWaits bool
 

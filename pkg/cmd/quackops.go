@@ -13,6 +13,7 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/completer"
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/mikhae1/kubectl-quackops/pkg/exec"
+	"github.com/mikhae1/kubectl-quackops/pkg/formatter"
 	"github.com/mikhae1/kubectl-quackops/pkg/lib"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm"
 	"github.com/mikhae1/kubectl-quackops/pkg/llm/metadata"
@@ -1023,10 +1024,23 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 		result, err := llm.RunPlanFlowFunc(context.Background(), cfg, planAug, os.Stdin)
 		if err != nil {
+			if lib.IsUserCancel(err) {
+				fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(canceled)"))
+				return nil
+			}
 			return err
 		}
 		if strings.TrimSpace(result) != "" {
-			fmt.Println(result)
+			content := strings.TrimSpace(result)
+			if cfg.DisableMarkdownFormat {
+				fmt.Fprintln(os.Stdout, content)
+			} else {
+				w := formatter.NewStreamingWriter(os.Stdout)
+				_, _ = w.Write([]byte(content))
+				_ = w.Flush()
+				_ = w.Close()
+			}
+			fmt.Fprintln(os.Stdout)
 		}
 		return nil
 	}
@@ -1065,10 +1079,23 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 
 		result, err := llm.RunPlanFlowFunc(context.Background(), cfg, planAug, os.Stdin)
 		if err != nil {
+			if lib.IsUserCancel(err) {
+				fmt.Fprintln(os.Stderr, config.Colors.Warn.Sprint("(canceled)"))
+				return nil
+			}
 			return err
 		}
 		if strings.TrimSpace(result) != "" {
-			fmt.Println(result)
+			content := strings.TrimSpace(result)
+			if cfg.DisableMarkdownFormat {
+				fmt.Fprintln(os.Stdout, content)
+			} else {
+				w := formatter.NewStreamingWriter(os.Stdout)
+				_, _ = w.Write([]byte(content))
+				_ = w.Flush()
+				_ = w.Close()
+			}
+			fmt.Fprintln(os.Stdout)
 		}
 		return nil
 	}

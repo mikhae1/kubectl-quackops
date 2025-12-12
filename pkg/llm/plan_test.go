@@ -54,11 +54,14 @@ func TestRunPlanFlowConfirmYesExecutesSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPlanFlow returned error: %v", err)
 	}
-	if !strings.Contains(result, "Step 1") {
-		t.Fatalf("expected step output, got: %s", result)
+	if !strings.Contains(result, "## Step results") || !strings.Contains(result, "### Step 1:") {
+		t.Fatalf("expected final output to include replayed step results, got: %q", result)
 	}
-	if callCount != 2 {
-		t.Fatalf("expected 2 calls to RequestWithSystem, got %d", callCount)
+	if !strings.Contains(result, "## Final") {
+		t.Fatalf("expected final output to include wrap-up section, got: %q", result)
+	}
+	if callCount != 3 {
+		t.Fatalf("expected 3 calls to RequestWithSystem (plan + step + final), got %d", callCount)
 	}
 }
 
@@ -92,8 +95,14 @@ func TestRunPlanFlowGuidedReplan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPlanFlow returned error: %v", err)
 	}
-	if !strings.Contains(res, "new") {
-		t.Fatalf("expected replan output to include new step, got: %s", res)
+	if !strings.Contains(res, "## Step results") || !strings.Contains(res, "### Step 1:") {
+		t.Fatalf("expected final output to include replayed step results, got: %q", res)
+	}
+	if !strings.Contains(res, "## Final") {
+		t.Fatalf("expected final output to include wrap-up section, got: %q", res)
+	}
+	if call != 4 {
+		t.Fatalf("expected 4 calls to RequestWithSystem (plan + replan + step + final), got %d", call)
 	}
 }
 
@@ -124,8 +133,11 @@ func TestRunPlanFlowManualEditReapprovesEditedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPlanFlow returned error: %v", err)
 	}
-	if !strings.Contains(res, "edited") {
-		t.Fatalf("expected edited plan to execute, got: %s", res)
+	if !strings.Contains(res, "## Step results") || !strings.Contains(res, "### Step 1:") {
+		t.Fatalf("expected final output to include replayed step results, got: %q", res)
+	}
+	if !strings.Contains(res, "## Final") {
+		t.Fatalf("expected final output to include wrap-up section, got: %q", res)
 	}
 	if genCalls != 1 {
 		t.Fatalf("expected 1 plan generation call, got %d", genCalls)
