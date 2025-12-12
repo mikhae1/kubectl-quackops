@@ -54,10 +54,10 @@ func TestRunPlanFlowConfirmYesExecutesSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPlanFlow returned error: %v", err)
 	}
-	if !strings.Contains(result, "## Step results") || !strings.Contains(result, "### Step 1:") {
+	if !strings.Contains(result, "## Results") || !strings.Contains(result, "1. inspect pods") {
 		t.Fatalf("expected final output to include replayed step results, got: %q", result)
 	}
-	if !strings.Contains(result, "## Final") {
+	if !strings.Contains(result, "## Summary") {
 		t.Fatalf("expected final output to include wrap-up section, got: %q", result)
 	}
 	if callCount != 3 {
@@ -95,10 +95,10 @@ func TestRunPlanFlowGuidedReplan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPlanFlow returned error: %v", err)
 	}
-	if !strings.Contains(res, "## Step results") || !strings.Contains(res, "### Step 1:") {
+	if !strings.Contains(res, "## Results") || !strings.Contains(res, "1. new") {
 		t.Fatalf("expected final output to include replayed step results, got: %q", res)
 	}
-	if !strings.Contains(res, "## Final") {
+	if !strings.Contains(res, "## Summary") {
 		t.Fatalf("expected final output to include wrap-up section, got: %q", res)
 	}
 	if call != 4 {
@@ -133,10 +133,10 @@ func TestRunPlanFlowManualEditReapprovesEditedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPlanFlow returned error: %v", err)
 	}
-	if !strings.Contains(res, "## Step results") || !strings.Contains(res, "### Step 1:") {
+	if !strings.Contains(res, "## Results") || !strings.Contains(res, "1. edited") {
 		t.Fatalf("expected final output to include replayed step results, got: %q", res)
 	}
-	if !strings.Contains(res, "## Final") {
+	if !strings.Contains(res, "## Summary") {
 		t.Fatalf("expected final output to include wrap-up section, got: %q", res)
 	}
 	if genCalls != 1 {

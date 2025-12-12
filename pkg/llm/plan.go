@@ -206,10 +206,10 @@ func ExecutePlan(ctx context.Context, cfg *config.Config, plan PlanResult, origi
 
 	// Final message: replay all step results for scrollback, then provide a concise wrap-up.
 	var replay strings.Builder
-	replay.WriteString("## Step results\n\n")
+	replay.WriteString("## Results\n\n")
 	for _, step := range plan.Steps {
 		action := strings.TrimSpace(step.Action)
-		replay.WriteString(fmt.Sprintf("### Step %d: %s\n\n", step.StepNumber, action))
+		replay.WriteString(fmt.Sprintf("%d. %s\n\n", step.StepNumber, action))
 		out := strings.TrimSpace(stepOutputs[step.StepNumber])
 		if out == "" {
 			out = "(no output)"
@@ -238,7 +238,7 @@ func ExecutePlan(ctx context.Context, cfg *config.Config, plan PlanResult, origi
 
 	var out strings.Builder
 	out.WriteString(replay.String())
-	out.WriteString("## Final\n\n")
+	out.WriteString("## Summary\n\n")
 	out.WriteString(strings.TrimSpace(finalResp))
 	out.WriteString("\n")
 	return out.String(), nil
