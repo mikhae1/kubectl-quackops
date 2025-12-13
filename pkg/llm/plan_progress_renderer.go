@@ -172,8 +172,8 @@ func (r *planProgressRenderer) renderLocked() {
 
 	lines := make([]string, 0, len(r.steps)+2)
 
-	firstPrefix := "  ⎿  "
-	otherPrefix := "     "
+	firstPrefix := "  └ "
+	otherPrefix := "    "
 
 	for i, st := range r.steps {
 		prefix := otherPrefix
@@ -208,11 +208,11 @@ func (r *planProgressRenderer) renderLocked() {
 			stepNo := st.StepNumber
 
 			if tools := r.stepTools[stepNo]; len(tools) > 0 {
-				lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("⎿ tool calls"))
+				lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("└ tool calls"))
 				maxTools := 8
 				for ti, tr := range tools {
 					if ti >= maxTools {
-						lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("⎿ …"))
+						lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("└ …"))
 						break
 					}
 					iter := ""
@@ -228,7 +228,7 @@ func (r *planProgressRenderer) renderLocked() {
 					default:
 						toolMark = "☐"
 					}
-					lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("⎿ ")+toolMark+config.Colors.Dim.Sprint(" "+tr.Name+iter))
+					lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("└ ")+toolMark+config.Colors.Dim.Sprint(" "+tr.Name+iter))
 					if strings.TrimSpace(tr.Err) != "" {
 						lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("   ")+config.Colors.Error.Sprint(tr.Err))
 					}
@@ -246,11 +246,11 @@ func (r *planProgressRenderer) renderLocked() {
 					if olTrim == "" {
 						continue
 					}
-					lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("⎿ ")+config.Colors.Dim.Sprint(truncateRunes(olTrim, maxCols)))
+					lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("└ ")+config.Colors.Dim.Sprint(truncateRunes(olTrim, maxCols)))
 					shown++
 					if shown >= maxLines {
 						if len(outLines) > shown {
-							lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("⎿ …"))
+							lines = append(lines, otherPrefix+config.Colors.Dim.Sprint("└ …"))
 						}
 						break
 					}
@@ -276,7 +276,7 @@ func (r *planProgressRenderer) renderLocked() {
 			if r.lastToolMax > 0 && r.lastToolIter > 0 {
 				iter = fmt.Sprintf(" (%d/%d)", r.lastToolIter, r.lastToolMax)
 			}
-			toolLine := fmt.Sprintf("%s%s %s%s", toolPrefix, config.Colors.Dim.Sprint("⎿"), toolMark, config.Colors.Dim.Sprint(" "+r.lastToolName+iter))
+			toolLine := fmt.Sprintf("%s%s %s%s", toolPrefix, config.Colors.Dim.Sprint("└"), toolMark, config.Colors.Dim.Sprint(" "+r.lastToolName+iter))
 			lines = append(lines, toolLine)
 			if r.lastToolErrString != "" {
 				lines = append(lines, toolPrefix+config.Colors.Dim.Sprint("   ")+config.Colors.Error.Sprint(r.lastToolErrString))

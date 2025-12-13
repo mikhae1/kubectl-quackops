@@ -105,7 +105,7 @@ func GeneratePlan(ctx context.Context, cfg *config.Config, prompt string, adjust
 	cfg.SpinnerMessageOverride = "Asking clarifying questions…"
 	spinnerManager := lib.GetSpinnerManager(cfg)
 	spinnerManager.SetDetailsLines([]string{
-		"  ⎿  ☐ Draft plan",
+		"  └ ☐ Drafting plan",
 	})
 	defer func() {
 		cfg.SpinnerMessageOverride = origSpinnerOverride
