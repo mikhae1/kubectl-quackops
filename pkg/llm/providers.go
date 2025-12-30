@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
@@ -117,7 +116,7 @@ func googleRequestWithChat(cfg *config.Config, prompt string, stream bool, histo
 // googleRequestWithChatSystem sends a request to Google AI with separate system/user prompts
 func googleRequestWithChatSystem(cfg *config.Config, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
 	ctx := context.Background()
-	apiKey := os.Getenv("GOOGLE_API_KEY")
+	apiKey := config.GetGoogleAPIKey()
 	if apiKey != "" {
 		if custom, err := New(ctx, apiKey, cfg.Model); err == nil {
 			return ChatWithSystemPrompt(cfg, custom, systemPrompt, userPrompt, stream, history)

@@ -520,7 +520,7 @@ func (br *BenchmarkRunner) createProviderConfig(target BenchmarkTarget) (*config
 	cfg.Model = target.Model
 	cfg.Retries = 1            // Minimize retries for consistent benchmarking
 	cfg.SkipWaits = true       // Skip throttling delays for benchmarking
-	cfg.EnableBaseline = false // Disable baseline filtering to show all mocked outputs
+	cfg.DisableBaseline = true // Disable baseline filtering to show all mocked outputs
 
 	// Set provider-specific configurations
 	if target.BaseURL != "" {

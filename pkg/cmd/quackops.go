@@ -66,7 +66,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVarP(&cfg.MCPLogFile, "mcp-log-file", "", cfg.MCPLogFile, "MCP stdio log file path (overwritten at start)")
 	cmd.Flags().StringVarP(&cfg.MCPLogFormat, "mcp-log-format", "", cfg.MCPLogFormat, "MCP log format: jsonl (default), text, or yaml (env QU_MCP_LOG_FORMAT)")
 	// Diagnostics flags
-	cmd.Flags().BoolVarP(&cfg.EnableBaseline, "enable-baseline", "", cfg.EnableBaseline, "Enable baseline diagnostic pack before LLM")
+	cmd.Flags().BoolVarP(&cfg.DisableBaseline, "disable-baseline", "", cfg.DisableBaseline, "Disable baseline diagnostic pack before LLM")
 	cmd.Flags().IntVarP(&cfg.EventsWindowMinutes, "events-window-minutes", "", cfg.EventsWindowMinutes, "Events time window in minutes for summarization")
 	cmd.Flags().BoolVarP(&cfg.EventsWarningsOnly, "events-warn-only", "", cfg.EventsWarningsOnly, "Include only Warning events in summaries")
 	cmd.Flags().IntVarP(&cfg.LogsTail, "logs-tail", "", cfg.LogsTail, "Tail lines for log aggregation when triggered by playbooks")
@@ -408,7 +408,7 @@ func startChatSession(cfg *config.Config, args []string) error {
 			userMsgCount++
 		}
 
-		logger.Log("info", "Processing prompt (editMode=%t, safeMode=%t, baseline=%t)", cfg.EditMode, cfg.SafeMode, cfg.EnableBaseline)
+		logger.Log("info", "Processing prompt (editMode=%t, safeMode=%t, baseline=%t)", cfg.EditMode, cfg.SafeMode, !cfg.DisableBaseline)
 		// Remember input characteristics and original text
 		wasEditMode := cfg.EditMode
 		originalUserPrompt := userPrompt

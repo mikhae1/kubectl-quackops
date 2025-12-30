@@ -43,7 +43,7 @@ func RetrieveRAG(cfg *config.Config, prompt string, lastTextPrompt string, userM
 	}
 
 	// Prepend baseline commands only for the first user query when enabled
-	if cfg.EnableBaseline && userMsgCount == 1 {
+	if !cfg.DisableBaseline && userMsgCount == 1 {
 		base := diag.BaselineCommands(cfg)
 		if len(base) > 0 {
 			logger.Log("info", "Baseline enabled: running %d command(s)", len(base))
@@ -105,7 +105,7 @@ func CreateAugPromptFromCmdResults(cfg *config.Config, prompt string, cmdResults
 func formatCommandResultsForRAG(cfg *config.Config, prompt string, cmdResults []config.CmdRes) string {
 	// Build a set of baseline commands to exclude their raw outputs from the LLM context
 	baselineSet := map[string]bool{}
-	if cfg.EnableBaseline {
+	if !cfg.DisableBaseline {
 		for _, b := range diag.BaselineCommands(cfg) {
 			key := strings.TrimSpace(b)
 			if key != "" {

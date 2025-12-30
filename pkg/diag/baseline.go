@@ -12,7 +12,7 @@ import (
 // Supports three levels: minimal (default), standard (+ workloads), comprehensive (+ metrics/policies)
 func BaselineCommands(cfg *config.Config) []string {
 	// honor a simple toggle; default is enabled in config layer
-	if cfg == nil || !cfg.EnableBaseline {
+	if cfg == nil || cfg.DisableBaseline {
 		return nil
 	}
 

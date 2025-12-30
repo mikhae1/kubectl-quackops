@@ -36,6 +36,18 @@ func getAzOpenAIAPIKey() string {
 	return ""
 }
 
+// getGoogleAPIKey returns the Gemini API key from environment variables.
+// Supports both GOOGLE_API_KEY and GEMINI_API_KEY.
+func getGoogleAPIKey() string {
+	if apiKey := os.Getenv("GOOGLE_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
+		return apiKey
+	}
+	return ""
+}
+
 // ModelMetadata holds information about a model's capabilities
 type ModelMetadata struct {
 	ID            string  `json:"id"`
@@ -629,7 +641,7 @@ func (ms *MetadataService) fetchGoogleMetadata(model, baseURL string) (*ModelMet
 	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1beta/" + apiModel
 
 	// Google Generative Language API expects API key via query parameter
-	if apiKey := os.Getenv("GOOGLE_API_KEY"); apiKey != "" {
+	if apiKey := getGoogleAPIKey(); apiKey != "" {
 		if strings.Contains(apiURL, "?") {
 			apiURL += "&key=" + apiKey
 		} else {
@@ -910,7 +922,7 @@ func (ms *MetadataService) fetchGoogleModelList(baseURL string) ([]*ModelMetadat
 
 	apiURL := strings.TrimSuffix(baseURL, "/") + "/v1beta/models"
 
-	if apiKey := os.Getenv("GOOGLE_API_KEY"); apiKey != "" {
+	if apiKey := getGoogleAPIKey(); apiKey != "" {
 		if strings.Contains(apiURL, "?") {
 			apiURL += "&key=" + apiKey
 		} else {

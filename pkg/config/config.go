@@ -140,7 +140,7 @@ type Config struct {
 	MCPPromptServer string
 
 	// Diagnostics toggles and knobs
-	EnableBaseline          bool
+	DisableBaseline         bool
 	BaselineLevel           string // "minimal", "standard", "comprehensive"
 	BaselineIncludeMetrics  bool   // Include pod/node metrics if available
 	BaselineNamespaceFilter string // Comma-separated namespaces (empty = all)
@@ -521,6 +521,12 @@ func GetAzOpenAIAPIKey() string {
 	return envFirst("QU_AZ_OPENAI_API_KEY", "OPENAI_API_KEY")
 }
 
+// GetGoogleAPIKey returns the Gemini API key from environment variables.
+// Supports both GOOGLE_API_KEY and GEMINI_API_KEY.
+func GetGoogleAPIKey() string {
+	return envFirst("GOOGLE_API_KEY", "GEMINI_API_KEY")
+}
+
 // LoadConfig initializes the application configuration
 func LoadConfig() *Config {
 	// Load configuration from config file first
@@ -575,7 +581,7 @@ func LoadConfig() *Config {
 		CommandPrefix:         getEnvArg("QU_COMMAND_PREFIX", "!").(string),
 		StoredUserCmdResults:  []CmdRes{},
 		// Diagnostics toggles
-		EnableBaseline:           getEnvArg("QU_ENABLE_BASELINE", true).(bool),
+		DisableBaseline:          getEnvArg("QU_DISABLE_BASELINE", false).(bool),
 		BaselineLevel:            getEnvArg("QU_BASELINE_LEVEL", "minimal").(string),
 		BaselineIncludeMetrics:   getEnvArg("QU_BASELINE_INCLUDE_METRICS", true).(bool),
 		BaselineNamespaceFilter:  getEnvArg("QU_BASELINE_NAMESPACE_FILTER", "").(string),

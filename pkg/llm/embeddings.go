@@ -111,14 +111,15 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 
 	case "google":
 		// Google has embedding models through their embedding API
-		if os.Getenv("GOOGLE_API_KEY") != "" {
+		googleAPIKey := config.GetGoogleAPIKey()
+		if googleAPIKey != "" {
 			// Initialize Google AI client
 			ctx := context.Background()
 
 			// Use the configured embedding model
 			embeddingModel := cfg.EmbeddingModel
 			googleClient, err := googleai.New(ctx,
-				googleai.WithAPIKey(os.Getenv("GOOGLE_API_KEY")),
+				googleai.WithAPIKey(googleAPIKey),
 				googleai.WithDefaultEmbeddingModel(embeddingModel),
 			)
 
@@ -133,7 +134,7 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 				}, nil
 			}
 		} else {
-			logger.Log("warn", "Google API key not found in environment")
+			logger.Log("warn", "Google API key not found in environment (GOOGLE_API_KEY or GEMINI_API_KEY)")
 		}
 
 	case "anthropic":
@@ -159,11 +160,12 @@ func GetEmbedder(cfg *config.Config) (embeddings.Embedder, error) {
 	}
 
 	// 2. Try Google AI as another fallback if available
-	if os.Getenv("GOOGLE_API_KEY") != "" {
+	googleAPIKey := config.GetGoogleAPIKey()
+	if googleAPIKey != "" {
 		ctx := context.Background()
 		embeddingModel := cfg.EmbeddingModel
 		googleClient, err := googleai.New(ctx,
-			googleai.WithAPIKey(os.Getenv("GOOGLE_API_KEY")),
+			googleai.WithAPIKey(googleAPIKey),
 			googleai.WithDefaultEmbeddingModel(embeddingModel),
 		)
 

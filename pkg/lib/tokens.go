@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -141,7 +140,7 @@ func CountTokensWithConfig(cfg *config.Config, text string, messages []llms.Chat
 
 	// Prefer Google's exact CountTokens when using Gemini and API key is available
 	p := strings.ToLower(cfg.Provider)
-	if (p == "google" || strings.Contains(strings.ToLower(cfg.Model), "gemini")) && os.Getenv("GOOGLE_API_KEY") != "" {
+	if (p == "google" || strings.Contains(strings.ToLower(cfg.Model), "gemini")) && config.GetGoogleAPIKey() != "" {
 		if total, err := googleCountTokens(cfg, text, messages, includeText); err == nil && total > 0 {
 			return total
 		}
@@ -228,7 +227,7 @@ func EffectiveMaxTokens(cfg *config.Config) int {
 	model := strings.ToLower(cfg.Model)
 
 	// Google Gemini: Prefer querying model info for accurate token limits when possible
-	if (provider == "google" || strings.Contains(model, "gemini")) && os.Getenv("GOOGLE_API_KEY") != "" {
+	if (provider == "google" || strings.Contains(model, "gemini")) && config.GetGoogleAPIKey() != "" {
 		if inLimit, _, err := googleGetModelTokenLimits(cfg); err == nil && inLimit > 0 {
 			if configured <= 0 || configured > inLimit {
 				return inLimit
@@ -265,9 +264,9 @@ func googleGetModelTokenLimits(cfg *config.Config) (int, int, error) {
 	if cfg == nil {
 		return 0, 0, fmt.Errorf("nil cfg")
 	}
-	apiKey := os.Getenv("GOOGLE_API_KEY")
+	apiKey := config.GetGoogleAPIKey()
 	if apiKey == "" {
-		return 0, 0, fmt.Errorf("missing GOOGLE_API_KEY")
+		return 0, 0, fmt.Errorf("missing GOOGLE_API_KEY or GEMINI_API_KEY")
 	}
 
 	modelName := cfg.Model
@@ -301,9 +300,9 @@ func googleGetModelTokenLimits(cfg *config.Config) (int, int, error) {
 // is false, the text argument is ignored. On any error, an error is returned so
 // callers can gracefully fall back to heuristics.
 func googleCountTokens(cfg *config.Config, text string, messages []llms.ChatMessage, includeText bool) (int, error) {
-	apiKey := os.Getenv("GOOGLE_API_KEY")
+	apiKey := config.GetGoogleAPIKey()
 	if apiKey == "" {
-		return 0, fmt.Errorf("missing GOOGLE_API_KEY")
+		return 0, fmt.Errorf("missing GOOGLE_API_KEY or GEMINI_API_KEY")
 	}
 
 	ctx := context.Background()
