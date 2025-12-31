@@ -426,8 +426,8 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 				spotRL := 0 // Right-to-left wave position (starts at 0, moves backward)
 				// Comet width: head(2) + lead(1) + trail(~7) = 10
 				width := 10
-				// Fast ticker for smooth neon comet sweep
-				ticker := time.NewTicker(70 * time.Millisecond)
+				// Faster ticker for a smoother neon comet sweep
+				ticker := time.NewTicker(50 * time.Millisecond)
 				defer ticker.Stop()
 
 				for {
@@ -858,9 +858,9 @@ func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, i
 	}
 
 	// Spring animation parameters
-	const totalSteps = 60 // steps per half-cycle (left-to-right or right-to-left)
-	minWidth := 3         // compressed at edges
-	maxWidth := 14        // stretched in the middle
+	const totalSteps = 90 // more steps per half-cycle for smoother motion
+	minWidth := 4         // compressed at edges
+	maxWidth := 18        // stretched in the middle
 	if maxWidth > n {
 		maxWidth = n
 	}

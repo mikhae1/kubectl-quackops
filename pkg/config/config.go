@@ -428,14 +428,17 @@ func initUIColorRoles() *UIColorRoles {
 		SpinnerHead: []*color.Color{
 			draculaFg(draculaPink, color.Bold),
 			draculaFg(draculaCyan, color.Bold),
+			draculaFg(draculaYellow, color.Bold),
+			draculaFg(draculaOrange, color.Bold),
 		},
-		SpinnerLead: draculaFg(draculaText, color.Bold),
+		SpinnerLead: draculaFg(draculaText, color.Bold, color.Underline),
 		SpinnerTrail: []*color.Color{
 			draculaFg(draculaPurple),
 			draculaFg(draculaPink),
+			draculaFg(draculaCyan),
 			draculaFg(draculaComment),
 		},
-		SpinnerBg: draculaFg(draculaSurface),
+		SpinnerBg: draculaFg(draculaBg),
 		Rainbow: []*color.Color{
 			draculaFg(draculaPink),
 			draculaFg(draculaPurple),
