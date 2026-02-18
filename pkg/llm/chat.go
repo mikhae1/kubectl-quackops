@@ -3,9 +3,11 @@ package llm
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,29 @@ import (
 )
 
 var executeMCPTool = mcp.ExecuteTool
+
+type mcpPreparedCall struct {
+	ToolCall   llms.ToolCall
+	Args       map[string]any
+	Signature  string
+	Iteration  int
+	MaxRounds  int
+	CacheAllow bool
+}
+
+type mcpExecutedCall struct {
+	Prepared    mcpPreparedCall
+	ToolResult  string
+	CallErr     error
+	CacheHit    bool
+	ArtifactRef string
+	ArtifactSHA string
+}
+
+type mcpArtifactRef struct {
+	Path string
+	SHA  string
+}
 
 // Chat orchestrates a chat completion with the provided llms.Model, handling
 // history, streaming, retries, token accounting, and MCP tool calls.
@@ -283,6 +308,7 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 		toolCallSignatureCounts := make(map[string]int)
 		uniqueToolSignatures := make(map[string]struct{})
 		toolResultCache := make(map[string]string)
+		toolArtifactCache := make(map[string]mcpArtifactRef)
 		seenEvidenceHashes := make(map[string]struct{})
 		cacheHitCount := 0
 		repeatedToolCalls := 0
@@ -386,8 +412,9 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 					messages = append(messages, assistantMsg)
 				}
 
+				preparedCalls := make([]mcpPreparedCall, 0, len(choice.ToolCalls))
 				for _, tc := range choice.ToolCalls {
-					if maxToolCallsTotal > 0 && totalToolCalls >= maxToolCallsTotal {
+					if maxToolCallsTotal > 0 && totalToolCalls+len(preparedCalls) >= maxToolCallsTotal {
 						stopReason = fmt.Sprintf("MCP total tool-call budget exhausted (%d)", maxToolCallsTotal)
 						logger.Log("warn", "%s", stopReason)
 						break
@@ -436,66 +463,85 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						MaxIterations: maxToolCalls,
 					})
 
-					toolResult := ""
-					var callErr error
-					cacheHit := false
-					if cfg.MCPCacheToolResults && signature != "" {
-						if cached, ok := toolResultCache[signature]; ok {
-							toolResult = cached
-							cacheHit = true
-							cacheHitCount++
-							logger.Log("debug", "MCP tool cache hit: %s", tc.FunctionCall.Name)
-						}
+					preparedCalls = append(preparedCalls, mcpPreparedCall{
+						ToolCall:   tc,
+						Args:       args,
+						Signature:  signature,
+						Iteration:  toolCallCount + 1,
+						MaxRounds:  maxToolCalls,
+						CacheAllow: cfg.MCPCacheToolResults,
+					})
+				}
+
+				executedCalls, batchErr := executePreparedMCPCalls(cfg, spinnerManager, preparedCalls, toolResultCache)
+				if batchErr != nil {
+					if lib.IsUserCancel(batchErr) {
+						return "", lib.NewUserCancelError("canceled by user")
 					}
+					return "", batchErr
+				}
 
-					if !cacheHit {
-						// Apply throttling delay before each MCP tool execution with iteration info
-						customMessage := fmt.Sprintf("🔧 %s %s %s...", config.Colors.Info.Sprint("Processing"), config.Colors.Dim.Sprint("MCP tool call:"), config.Colors.Accent.Sprint(fmt.Sprintf("%d of %d", toolCallCount+1, maxToolCalls)))
-						if err := applyThrottleDelayWithCustomMessageManager(cfg, spinnerManager, customMessage); err != nil {
-							if lib.IsUserCancel(err) {
-								return "", lib.NewUserCancelError("canceled by user")
-							}
-							return "", err
-						}
-
-						logger.Log("info", "Executing MCP tool: %s with args: %v", tc.FunctionCall.Name, args)
-						toolResult, callErr = executeMCPTool(cfg, tc.FunctionCall.Name, args)
-						if callErr != nil {
-							logger.Log("warn", "MCP tool %s failed: %v", tc.FunctionCall.Name, callErr)
-							toolResult = fmt.Sprintf("Error executing tool '%s': %v", tc.FunctionCall.Name, callErr)
-						}
-						if callErr == nil && cfg.MCPCacheToolResults && signature != "" {
-							toolResultCache[signature] = toolResult
-						}
+				for _, executed := range executedCalls {
+					tc := executed.Prepared.ToolCall
+					args := executed.Prepared.Args
+					toolResult := executed.ToolResult
+					callErr := executed.CallErr
+					signature := executed.Prepared.Signature
+					if executed.CacheHit {
+						cacheHitCount++
 					}
 
 					if callErr != nil {
 						emitPlanProgress(PlanProgressEvent{
 							Kind:          PlanProgressToolFailed,
 							ToolName:      tc.FunctionCall.Name,
-							Iteration:     toolCallCount + 1,
-							MaxIterations: maxToolCalls,
+							Iteration:     executed.Prepared.Iteration,
+							MaxIterations: executed.Prepared.MaxRounds,
 							Err:           callErr.Error(),
 						})
 					} else {
 						emitPlanProgress(PlanProgressEvent{
 							Kind:          PlanProgressToolCompleted,
 							ToolName:      tc.FunctionCall.Name,
-							Iteration:     toolCallCount + 1,
-							MaxIterations: maxToolCalls,
+							Iteration:     executed.Prepared.Iteration,
+							MaxIterations: executed.Prepared.MaxRounds,
 						})
 					}
 
+					artifactPath := executed.ArtifactRef
+					artifactSHA := executed.ArtifactSHA
+					if signature != "" {
+						if cachedArtifact, ok := toolArtifactCache[signature]; ok && cachedArtifact.Path != "" {
+							artifactPath = cachedArtifact.Path
+							artifactSHA = cachedArtifact.SHA
+						}
+					}
+					if artifactPath == "" {
+						if persistedPath, persistedSHA, persistErr := persistToolResultArtifact(cfg, tc.FunctionCall.Name, args, toolResult); persistErr != nil {
+							logger.Log("warn", "Failed to persist MCP tool output artifact for %s: %v", tc.FunctionCall.Name, persistErr)
+						} else {
+							artifactPath = persistedPath
+							artifactSHA = persistedSHA
+							if signature != "" && artifactPath != "" {
+								toolArtifactCache[signature] = mcpArtifactRef{Path: artifactPath, SHA: artifactSHA}
+							}
+						}
+					}
+					displayToolResult := appendArtifactReference(toolResult, artifactPath, artifactSHA)
+
 					// Record tool call for history
 					sessionToolCalls = append(sessionToolCalls, config.ToolCallData{
-						Name:   tc.FunctionCall.Name,
-						Args:   args,
-						Result: toolResult,
+						Name:           tc.FunctionCall.Name,
+						Args:           args,
+						Result:         displayToolResult,
+						ResultBytes:    len(toolResult),
+						ArtifactPath:   artifactPath,
+						ArtifactSHA256: artifactSHA,
 					})
 
 					totalToolCalls++
 					totalToolResultBytes += len(toolResult)
-					if maxToolResultBudgetBytes > 0 && totalToolResultBytes >= maxToolResultBudgetBytes {
+					if stopReason == "" && maxToolResultBudgetBytes > 0 && totalToolResultBytes >= maxToolResultBudgetBytes {
 						stopReason = fmt.Sprintf("MCP tool-result budget reached (%d/%d bytes)", totalToolResultBytes, maxToolResultBudgetBytes)
 						logger.Log("warn", "%s", stopReason)
 					}
@@ -506,16 +552,20 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						roundNewEvidence++
 					}
 
-					modelToolResult := compactToolResultForModel(cfg, tc.FunctionCall.Name, toolResult)
+					if stopReason != "" {
+						continue
+					}
+
+					modelToolResult := compactToolResultForModel(cfg, tc.FunctionCall.Name, toolResult, artifactPath, artifactSHA)
 
 					// Update response timestamp for throttling calculations after MCP tool execution
 					updateResponseTime()
 
 					var block string
 					if cfg.Verbose {
-						block = mcp.FormatToolCallVerbose(tc.FunctionCall.Name, args, toolResult)
+						block = mcp.FormatToolCallVerbose(tc.FunctionCall.Name, args, displayToolResult)
 					} else {
-						block = mcp.FormatToolCallBlock(tc.FunctionCall.Name, args, toolResult)
+						block = mcp.FormatToolCallBlock(tc.FunctionCall.Name, args, displayToolResult)
 					}
 
 					if useStreaming {
@@ -672,6 +722,176 @@ func finalizeAfterToolLoopStop(
 	return generateWithRetries(cfg, spinnerManager, client, finalMessages, generateOptions, spinnerMessage, outgoingTokens, maxRetries, startEscBreaker)
 }
 
+func executePreparedMCPCalls(
+	cfg *config.Config,
+	spinnerManager *lib.SpinnerManager,
+	prepared []mcpPreparedCall,
+	toolResultCache map[string]string,
+) ([]mcpExecutedCall, error) {
+	if len(prepared) == 0 {
+		return nil, nil
+	}
+	results := make([]mcpExecutedCall, len(prepared))
+	signatureLeader := make(map[string]int, len(prepared))
+	duplicateOf := make(map[int]int)
+	uniqueIndices := make([]int, 0, len(prepared))
+
+	for idx, item := range prepared {
+		if item.CacheAllow && item.Signature != "" {
+			if leader, ok := signatureLeader[item.Signature]; ok {
+				duplicateOf[idx] = leader
+				continue
+			}
+			signatureLeader[item.Signature] = idx
+		}
+		uniqueIndices = append(uniqueIndices, idx)
+	}
+
+	uniquePrepared := make([]mcpPreparedCall, 0, len(uniqueIndices))
+	for _, idx := range uniqueIndices {
+		uniquePrepared = append(uniquePrepared, prepared[idx])
+	}
+	uniqueResults, err := executePreparedMCPCallsUnique(cfg, spinnerManager, uniquePrepared, toolResultCache)
+	if err != nil {
+		return nil, err
+	}
+	for idx, originalIdx := range uniqueIndices {
+		results[originalIdx] = uniqueResults[idx]
+	}
+	for duplicateIdx, leaderIdx := range duplicateOf {
+		leaderResult := results[leaderIdx]
+		dedupedResult := leaderResult
+		dedupedResult.Prepared = prepared[duplicateIdx]
+		dedupedResult.CacheHit = true
+		results[duplicateIdx] = dedupedResult
+	}
+	if len(duplicateOf) > 0 {
+		logger.Log("debug", "MCP round deduplicated %d repeated tool call(s)", len(duplicateOf))
+	}
+	return results, nil
+}
+
+func executePreparedMCPCallsUnique(
+	cfg *config.Config,
+	spinnerManager *lib.SpinnerManager,
+	prepared []mcpPreparedCall,
+	toolResultCache map[string]string,
+) ([]mcpExecutedCall, error) {
+	if len(prepared) == 0 {
+		return nil, nil
+	}
+	parallel := cfg.MCPParallelToolCalls
+	if parallel <= 0 {
+		parallel = 1
+	}
+	if parallel > len(prepared) {
+		parallel = len(prepared)
+	}
+	results := make([]mcpExecutedCall, len(prepared))
+	var cacheMu sync.RWMutex
+
+	if parallel == 1 {
+		for idx, item := range prepared {
+			executed, err := executePreparedMCPCall(cfg, spinnerManager, item, toolResultCache, &cacheMu, true)
+			if err != nil {
+				return nil, err
+			}
+			results[idx] = executed
+		}
+		return results, nil
+	}
+
+	customMessage := fmt.Sprintf(
+		"🔧 %s %s %s...",
+		config.Colors.Info.Sprint("Processing"),
+		config.Colors.Dim.Sprint("MCP tool batch:"),
+		config.Colors.Accent.Sprint(fmt.Sprintf("%d calls", len(prepared))),
+	)
+	if err := applyThrottleDelayWithCustomMessageManager(cfg, spinnerManager, customMessage); err != nil {
+		return nil, err
+	}
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for worker := 0; worker < parallel; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				item := prepared[idx]
+				executed, err := executePreparedMCPCall(cfg, spinnerManager, item, toolResultCache, &cacheMu, false)
+				if err != nil {
+					executed = mcpExecutedCall{
+						Prepared:   item,
+						ToolResult: fmt.Sprintf("Error executing tool '%s': %v", item.ToolCall.FunctionCall.Name, err),
+						CallErr:    err,
+					}
+				}
+				results[idx] = executed
+			}
+		}()
+	}
+	for idx := range prepared {
+		jobs <- idx
+	}
+	close(jobs)
+	wg.Wait()
+	return results, nil
+}
+
+func executePreparedMCPCall(
+	cfg *config.Config,
+	spinnerManager *lib.SpinnerManager,
+	prepared mcpPreparedCall,
+	toolResultCache map[string]string,
+	cacheMu *sync.RWMutex,
+	withThrottle bool,
+) (mcpExecutedCall, error) {
+	if prepared.CacheAllow && prepared.Signature != "" {
+		cacheMu.RLock()
+		cached, ok := toolResultCache[prepared.Signature]
+		cacheMu.RUnlock()
+		if ok {
+			logger.Log("debug", "MCP tool cache hit: %s", prepared.ToolCall.FunctionCall.Name)
+			return mcpExecutedCall{
+				Prepared:   prepared,
+				ToolResult: cached,
+				CacheHit:   true,
+			}, nil
+		}
+	}
+
+	if withThrottle {
+		customMessage := fmt.Sprintf(
+			"🔧 %s %s %s...",
+			config.Colors.Info.Sprint("Processing"),
+			config.Colors.Dim.Sprint("MCP tool call:"),
+			config.Colors.Accent.Sprint(fmt.Sprintf("%d of %d", prepared.Iteration, prepared.MaxRounds)),
+		)
+		if err := applyThrottleDelayWithCustomMessageManager(cfg, spinnerManager, customMessage); err != nil {
+			return mcpExecutedCall{}, err
+		}
+	}
+
+	logger.Log("info", "Executing MCP tool: %s with args: %v", prepared.ToolCall.FunctionCall.Name, prepared.Args)
+	toolResult, callErr := executeMCPTool(cfg, prepared.ToolCall.FunctionCall.Name, prepared.Args)
+	if callErr != nil {
+		logger.Log("warn", "MCP tool %s failed: %v", prepared.ToolCall.FunctionCall.Name, callErr)
+		toolResult = fmt.Sprintf("Error executing tool '%s': %v", prepared.ToolCall.FunctionCall.Name, callErr)
+	}
+	if callErr == nil && prepared.CacheAllow && prepared.Signature != "" {
+		cacheMu.Lock()
+		toolResultCache[prepared.Signature] = toolResult
+		cacheMu.Unlock()
+	}
+
+	return mcpExecutedCall{
+		Prepared:   prepared,
+		ToolResult: toolResult,
+		CallErr:    callErr,
+	}, nil
+}
+
 func toolCallPlanFingerprint(toolCalls []llms.ToolCall) string {
 	if len(toolCalls) == 0 {
 		return ""
@@ -737,7 +957,86 @@ func hashToolEvidence(toolName string, args map[string]any, result string) strin
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func compactToolResultForModel(cfg *config.Config, toolName string, result string) string {
+func persistToolResultArtifact(cfg *config.Config, toolName string, args map[string]any, result string) (string, string, error) {
+	if cfg == nil {
+		return "", "", nil
+	}
+	maxChars := cfg.MCPToolResultMaxCharsForModel
+	trimmed := strings.TrimSpace(result)
+	if maxChars <= 0 || trimmed == "" || len(trimmed) <= maxChars {
+		return "", "", nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "", "", nil
+	}
+
+	dir := filepath.Join(home, ".quackops", "tool-output")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", err
+	}
+
+	now := time.Now().UTC()
+	signature := toolCallSignature(toolName, args)
+	sum := sha256.Sum256([]byte(signature + "\n" + trimmed))
+	digest := hex.EncodeToString(sum[:])
+	filename := fmt.Sprintf("%s-%s-%s.log", sanitizeForFilename(toolName), now.Format("20060102T150405.000000000Z"), digest[:12])
+	fullpath := filepath.Join(dir, filename)
+
+	var payload strings.Builder
+	payload.WriteString(fmt.Sprintf("# tool=%s\n", strings.TrimSpace(toolName)))
+	payload.WriteString(fmt.Sprintf("# timestamp=%s\n", now.Format(time.RFC3339Nano)))
+	payload.WriteString(fmt.Sprintf("# signature=%s\n", signature))
+	payload.WriteString(fmt.Sprintf("# sha256=%s\n\n", digest))
+	payload.WriteString(result)
+	if !strings.HasSuffix(result, "\n") {
+		payload.WriteString("\n")
+	}
+
+	if err := os.WriteFile(fullpath, []byte(payload.String()), 0o644); err != nil {
+		return "", "", err
+	}
+	return fullpath, digest, nil
+}
+
+func appendArtifactReference(result string, artifactPath string, artifactSHA string) string {
+	if strings.TrimSpace(artifactPath) == "" {
+		return result
+	}
+	note := fmt.Sprintf("[full tool output saved: %s]", artifactPath)
+	if strings.TrimSpace(artifactSHA) != "" {
+		note = fmt.Sprintf("[full tool output saved: %s sha256=%s]", artifactPath, artifactSHA)
+	}
+	if strings.Contains(result, note) {
+		return result
+	}
+	base := strings.TrimRight(result, "\n")
+	if strings.TrimSpace(base) == "" {
+		return note
+	}
+	return base + "\n\n" + note
+}
+
+func sanitizeForFilename(name string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(strings.ToLower(name)) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "tool"
+	}
+	return out
+}
+
+func compactToolResultForModel(cfg *config.Config, toolName string, result string, artifactPath string, artifactSHA string) string {
 	if cfg == nil {
 		return result
 	}
@@ -774,6 +1073,13 @@ func compactToolResultForModel(cfg *config.Config, toolName string, result strin
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("[tool output truncated for model: tool=%s bytes=%d lines=%d sha256=%x]\n", strings.TrimSpace(toolName), len(trimmed), len(lines), sum[:6]))
+	if strings.TrimSpace(artifactPath) != "" {
+		if strings.TrimSpace(artifactSHA) != "" {
+			b.WriteString(fmt.Sprintf("[full tool output saved: %s sha256=%s]\n", artifactPath, artifactSHA))
+		} else {
+			b.WriteString(fmt.Sprintf("[full tool output saved: %s]\n", artifactPath))
+		}
+	}
 	for i, line := range lines {
 		if i >= maxLines {
 			b.WriteString("...\n")
@@ -940,22 +1246,25 @@ func generateWithRetries(
 			var delay time.Duration
 			var messageType string
 
-			if lib.Is429Error(lastError) {
-				retryDelay, parseErr := lib.ParseRetryDelay(lastError)
-				if parseErr == nil {
-					delay = retryDelay
+			if retryDelay, parseErr := lib.ParseRetryDelay(lastError); parseErr == nil {
+				delay = retryDelay
+				if lib.Is429Error(lastError) {
 					messageType = "Rate limited"
-					logger.Log("info", "Retrying after parsed rate limit delay: %v (attempt %d/%d)", delay, attempt, maxRetries)
 				} else {
+					messageType = "Retrying"
+				}
+				logger.Log("info", "Retrying after parsed delay: %v (attempt %d/%d)", delay, attempt, maxRetries)
+			} else {
+				if lib.Is429Error(lastError) {
 					delay = lib.CalculateExponentialBackoff(attempt, initialBackoff, backoffFactor)
 					messageType = "Rate limited"
-					logger.Log("info", "Failed to parse 429 retry delay, using exponential backoff: %v", parseErr)
+					logger.Log("info", "Failed to parse retry delay for 429, using exponential backoff: %v", parseErr)
 					logger.Log("info", "Retrying 429 error with backoff in %v (attempt %d/%d)", delay, attempt, maxRetries)
+				} else {
+					delay = lib.CalculateExponentialBackoff(attempt, initialBackoff, backoffFactor)
+					messageType = "Retrying"
+					logger.Log("info", "Retrying in %v (attempt %d/%d)", delay, attempt, maxRetries)
 				}
-			} else {
-				delay = lib.CalculateExponentialBackoff(attempt, initialBackoff, backoffFactor)
-				messageType = "Retrying"
-				logger.Log("info", "Retrying in %v (attempt %d/%d)", delay, attempt, maxRetries)
 			}
 
 			if err := applyRetryDelayWithCountdown(spinnerManager, cfg, delay, attempt, maxRetries, outgoingTokens, messageType, startEscBreaker); err != nil {
@@ -991,6 +1300,15 @@ func generateWithRetries(
 			}
 			lastError = err
 			retriesLeft := maxRetries - attempt
+			retryable := lib.IsRetryableError(err)
+
+			if !retryable {
+				errorMsg := lib.GetErrorMessage(err)
+				if errorMsg != "" {
+					return nil, "", fmt.Errorf("%s: %w", errorMsg, err)
+				}
+				return nil, "", err
+			}
 
 			if lib.Is429Error(err) {
 				if retriesLeft == 0 {

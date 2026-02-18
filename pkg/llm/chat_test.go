@@ -5,7 +5,9 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
 	"github.com/tmc/langchaingo/llms"
@@ -643,6 +645,260 @@ func TestChat_MCPToolRepeatLimit(t *testing.T) {
 	}
 	if !strings.Contains(cfg.LastMCPStopReason, "repeat limit") {
 		t.Fatalf("expected stop reason to mention repeat limit, got %q", cfg.LastMCPStopReason)
+	}
+}
+
+func TestExecutePreparedMCPCalls_ParallelExecution(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.SkipWaits = true
+	cfg.MCPParallelToolCalls = 3
+
+	prepared := []mcpPreparedCall{
+		{
+			ToolCall: llms.ToolCall{ID: "p1", FunctionCall: &llms.FunctionCall{Name: "tool_one"}},
+			Args:     map[string]any{"id": 1},
+		},
+		{
+			ToolCall: llms.ToolCall{ID: "p2", FunctionCall: &llms.FunctionCall{Name: "tool_two"}},
+			Args:     map[string]any{"id": 2},
+		},
+		{
+			ToolCall: llms.ToolCall{ID: "p3", FunctionCall: &llms.FunctionCall{Name: "tool_three"}},
+			Args:     map[string]any{"id": 3},
+		},
+	}
+
+	origExecute := executeMCPTool
+	t.Cleanup(func() { executeMCPTool = origExecute })
+
+	var active int32
+	var maxActive int32
+	executeMCPTool = func(cfg *config.Config, toolName string, args map[string]any) (string, error) {
+		cur := atomic.AddInt32(&active, 1)
+		for {
+			prev := atomic.LoadInt32(&maxActive)
+			if cur <= prev || atomic.CompareAndSwapInt32(&maxActive, prev, cur) {
+				break
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+		atomic.AddInt32(&active, -1)
+		return toolName + "_ok", nil
+	}
+
+	results, err := executePreparedMCPCalls(cfg, nil, prepared, map[string]string{})
+	if err != nil {
+		t.Fatalf("executePreparedMCPCalls returned error: %v", err)
+	}
+	if len(results) != len(prepared) {
+		t.Fatalf("expected %d results, got %d", len(prepared), len(results))
+	}
+	if maxActive < 2 {
+		t.Fatalf("expected parallel execution (max concurrency >= 2), got %d", maxActive)
+	}
+	if results[0].ToolResult != "tool_one_ok" || results[1].ToolResult != "tool_two_ok" || results[2].ToolResult != "tool_three_ok" {
+		t.Fatalf("expected output order to match tool call order, got %#v", results)
+	}
+}
+
+func TestExecutePreparedMCPCalls_DeduplicatesSameRoundSignatures(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.SkipWaits = true
+	cfg.MCPParallelToolCalls = 3
+
+	prepared := []mcpPreparedCall{
+		{
+			ToolCall:   llms.ToolCall{ID: "d1", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods"}},
+			Args:       map[string]any{"namespace": "default"},
+			Signature:  "kubectl_get_pods|{\"namespace\":\"default\"}",
+			CacheAllow: true,
+		},
+		{
+			ToolCall:   llms.ToolCall{ID: "d2", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods"}},
+			Args:       map[string]any{"namespace": "default"},
+			Signature:  "kubectl_get_pods|{\"namespace\":\"default\"}",
+			CacheAllow: true,
+		},
+		{
+			ToolCall:   llms.ToolCall{ID: "d3", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods"}},
+			Args:       map[string]any{"namespace": "default"},
+			Signature:  "kubectl_get_pods|{\"namespace\":\"default\"}",
+			CacheAllow: true,
+		},
+	}
+
+	origExecute := executeMCPTool
+	t.Cleanup(func() { executeMCPTool = origExecute })
+
+	var callCount int32
+	executeMCPTool = func(cfg *config.Config, toolName string, args map[string]any) (string, error) {
+		atomic.AddInt32(&callCount, 1)
+		time.Sleep(25 * time.Millisecond)
+		return "dedup-result", nil
+	}
+
+	results, err := executePreparedMCPCalls(cfg, nil, prepared, map[string]string{})
+	if err != nil {
+		t.Fatalf("executePreparedMCPCalls returned error: %v", err)
+	}
+	if len(results) != len(prepared) {
+		t.Fatalf("expected %d results, got %d", len(prepared), len(results))
+	}
+	if callCount != 1 {
+		t.Fatalf("expected duplicate signatures to execute once, got %d executions", callCount)
+	}
+	for idx, executed := range results {
+		if executed.ToolResult != "dedup-result" {
+			t.Fatalf("unexpected tool result at index %d: %q", idx, executed.ToolResult)
+		}
+		if executed.Prepared.ToolCall.ID != prepared[idx].ToolCall.ID {
+			t.Fatalf("expected result %d to keep original tool call ID %q, got %q", idx, prepared[idx].ToolCall.ID, executed.Prepared.ToolCall.ID)
+		}
+	}
+	if !results[1].CacheHit || !results[2].CacheHit {
+		t.Fatalf("expected duplicate signatures to be reported as cache hits")
+	}
+}
+
+func TestChat_MCPDedupesDuplicateToolCallsInRound(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.MCPClientEnabled = true
+	cfg.MCPMaxToolCalls = 5
+	cfg.MCPMaxToolCallsTotal = 10
+	cfg.MCPToolResultBudgetBytes = 0
+	cfg.MCPStallThreshold = 0
+	cfg.MCPCacheToolResults = true
+	cfg.MCPParallelToolCalls = 3
+	cfg.SkipWaits = true
+
+	mockClient := NewMockLLMClient([]MockResponse{
+		{
+			ToolCalls: []llms.ToolCall{
+				{ID: "dup-1", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods", Arguments: `{"namespace":"default"}`}},
+				{ID: "dup-2", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods", Arguments: `{"namespace":"default"}`}},
+			},
+		},
+		{Content: "Final answer after same-round dedupe"},
+	})
+
+	origExecute := executeMCPTool
+	t.Cleanup(func() { executeMCPTool = origExecute })
+
+	var callCount int32
+	executeMCPTool = func(cfg *config.Config, toolName string, args map[string]any) (string, error) {
+		atomic.AddInt32(&callCount, 1)
+		return "dedup-tool-result", nil
+	}
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	result, err := Chat(cfg, mockClient, "diagnose same-round duplicates", false, false)
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	io.ReadAll(rOut)
+	io.ReadAll(rErr)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Final answer after same-round dedupe") {
+		t.Fatalf("expected dedupe flow to produce final answer, got %q", result)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected same-round duplicate tool calls to execute once, got %d", callCount)
+	}
+	if cfg.LastMCPCacheHits < 1 {
+		t.Fatalf("expected at least one MCP cache hit due to dedupe, got %d", cfg.LastMCPCacheHits)
+	}
+	if len(cfg.SessionHistory) == 0 {
+		t.Fatalf("expected session history to be populated")
+	}
+	last := cfg.SessionHistory[len(cfg.SessionHistory)-1]
+	if len(last.ToolCalls) != 2 {
+		t.Fatalf("expected both tool calls to be recorded, got %d", len(last.ToolCalls))
+	}
+}
+
+func TestChat_PersistsLargeToolResultArtifact(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.MCPClientEnabled = true
+	cfg.MCPMaxToolCalls = 5
+	cfg.MCPMaxToolCallsTotal = 10
+	cfg.MCPToolResultBudgetBytes = 0
+	cfg.MCPStallThreshold = 0
+	cfg.MCPToolResultMaxCharsForModel = 32
+	cfg.SkipWaits = true
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	mockClient := NewMockLLMClient([]MockResponse{
+		{
+			ToolCalls: []llms.ToolCall{
+				{ID: "artifact-1", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods", Arguments: `{"namespace":"default"}`}},
+			},
+		},
+		{Content: "Final answer after artifact persistence"},
+	})
+
+	origExecute := executeMCPTool
+	t.Cleanup(func() { executeMCPTool = origExecute })
+	executeMCPTool = func(cfg *config.Config, toolName string, args map[string]any) (string, error) {
+		return strings.Repeat("pod-data-line\n", 128), nil
+	}
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	result, err := Chat(cfg, mockClient, "inspect pods", false, false)
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	io.ReadAll(rOut)
+	io.ReadAll(rErr)
+
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if !strings.Contains(result, "Final answer after artifact persistence") {
+		t.Fatalf("unexpected final result: %q", result)
+	}
+	if len(cfg.SessionHistory) == 0 {
+		t.Fatalf("expected session history to include tool call")
+	}
+	last := cfg.SessionHistory[len(cfg.SessionHistory)-1]
+	if len(last.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call recorded, got %d", len(last.ToolCalls))
+	}
+	tc := last.ToolCalls[0]
+	if strings.TrimSpace(tc.ArtifactPath) == "" {
+		t.Fatalf("expected artifact path to be recorded, got empty")
+	}
+	if strings.TrimSpace(tc.ArtifactSHA256) == "" {
+		t.Fatalf("expected artifact sha to be recorded, got empty")
+	}
+	if tc.ResultBytes <= cfg.MCPToolResultMaxCharsForModel {
+		t.Fatalf("expected raw result bytes to exceed truncation threshold, got %d", tc.ResultBytes)
+	}
+	if !strings.Contains(tc.Result, "full tool output saved") {
+		t.Fatalf("expected tool call result to mention artifact path, got %q", tc.Result)
+	}
+	if _, statErr := os.Stat(tc.ArtifactPath); statErr != nil {
+		t.Fatalf("expected artifact file at %s, stat error: %v", tc.ArtifactPath, statErr)
 	}
 }
 

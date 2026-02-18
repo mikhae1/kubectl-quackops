@@ -50,9 +50,12 @@ type SessionEvent struct {
 
 // ToolCallData represents a recorded tool call
 type ToolCallData struct {
-	Name   string
-	Args   map[string]any
-	Result string
+	Name           string
+	Args           map[string]any
+	Result         string
+	ResultBytes    int
+	ArtifactPath   string
+	ArtifactSHA256 string
 }
 
 type Config struct {
@@ -174,6 +177,8 @@ type Config struct {
 	MCPCacheToolResults bool
 	// Maximum characters from each MCP tool result that may be sent back to the model (0 = unlimited)
 	MCPToolResultMaxCharsForModel int
+	// Maximum MCP tool calls executed concurrently per round (1 = sequential behavior)
+	MCPParallelToolCalls int
 
 	// Last-request MCP loop metrics (used by benchmark/reporting)
 	LastMCPToolCallsTotal    int
@@ -650,6 +655,7 @@ func LoadConfig() *Config {
 		MCPNoProgressThreshold:        getEnvArg("QU_MCP_NO_PROGRESS_THRESHOLD", 2).(int),
 		MCPCacheToolResults:           getEnvArg("QU_MCP_CACHE_TOOL_RESULTS", true).(bool),
 		MCPToolResultMaxCharsForModel: getEnvArg("QU_MCP_TOOL_RESULT_MAX_CHARS_FOR_MODEL", 8000).(int),
+		MCPParallelToolCalls:          getEnvArg("QU_MCP_PARALLEL_TOOL_CALLS", 3).(int),
 		MCPLogEnabled:                 getEnvArg("QU_MCP_LOG", false).(bool),
 		MCPLogFile: func() string {
 			if homeDir != "" {
