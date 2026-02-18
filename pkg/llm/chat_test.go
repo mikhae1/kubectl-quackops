@@ -450,6 +450,93 @@ func TestChat_HistoryManagement(t *testing.T) {
 	}
 }
 
+func TestChat_MCPTotalToolBudget(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.MCPClientEnabled = true
+	cfg.MCPMaxToolCalls = 10
+	cfg.MCPMaxToolCallsTotal = 1
+	cfg.MCPToolResultBudgetBytes = 0
+	cfg.MCPStallThreshold = 0
+
+	mockClient := NewMockLLMClient([]MockResponse{
+		{
+			ToolCalls: []llms.ToolCall{
+				{ID: "t1", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods", Arguments: `{"namespace":"default"}`}},
+				{ID: "t2", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_events", Arguments: `{"namespace":"default"}`}},
+			},
+		},
+		{Content: "Final answer after tool budget"},
+	})
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	result, err := Chat(cfg, mockClient, "check cluster", false, false)
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	io.ReadAll(rOut)
+	io.ReadAll(rErr)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Final answer after tool budget") {
+		t.Fatalf("expected budget flow to reach final answer, got %q", result)
+	}
+	if len(mockClient.GetCallHistory()) != 2 {
+		t.Fatalf("expected 2 LLM calls (tool + final), got %d", len(mockClient.GetCallHistory()))
+	}
+}
+
+func TestChat_MCPStallDetection(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.MCPClientEnabled = true
+	cfg.MCPMaxToolCalls = 10
+	cfg.MCPMaxToolCallsTotal = 20
+	cfg.MCPToolResultBudgetBytes = 0
+	cfg.MCPStallThreshold = 1 // Stop on first repeated identical tool plan
+
+	stalledToolCall := llms.ToolCall{ID: "stall-1", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods", Arguments: `{"namespace":"default"}`}}
+	mockClient := NewMockLLMClient([]MockResponse{
+		{ToolCalls: []llms.ToolCall{stalledToolCall}},
+		{ToolCalls: []llms.ToolCall{stalledToolCall}},
+		{Content: "Final answer after stall detection"},
+	})
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	result, err := Chat(cfg, mockClient, "diagnose repeated calls", false, false)
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	io.ReadAll(rOut)
+	io.ReadAll(rErr)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Final answer after stall detection") {
+		t.Fatalf("expected stall flow to produce final answer, got %q", result)
+	}
+	if len(mockClient.GetCallHistory()) != 3 {
+		t.Fatalf("expected 3 LLM calls (tool, repeated tool, forced final), got %d", len(mockClient.GetCallHistory()))
+	}
+}
+
 // Helper functions for test configuration
 
 func CreateTestConfigWithHistory() *config.Config {

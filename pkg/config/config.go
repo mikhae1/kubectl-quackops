@@ -158,6 +158,12 @@ type Config struct {
 	MCPStrict        bool
 	// Maximum number of iterative MCP tool calls per LLM response
 	MCPMaxToolCalls int
+	// Total number of MCP tool calls allowed per user request (0 = unlimited)
+	MCPMaxToolCallsTotal int
+	// Maximum cumulative MCP tool result bytes per user request (0 = unlimited)
+	MCPToolResultBudgetBytes int
+	// Consecutive identical MCP tool-call iterations before considering the loop stalled (0 = disabled)
+	MCPStallThreshold int
 
 	// MCP logging for debugging (raw server stdio)
 	MCPLogEnabled bool
@@ -181,6 +187,12 @@ type Config struct {
 	InputTokenReservePercent int // Percentage of max tokens to reserve for input (default 20%)
 	MinInputTokenReserve     int // Minimum tokens to reserve for input (default 1024)
 	MinOutputTokens          int // Minimum output tokens to ensure (default 512)
+
+	// Auto-compaction settings for long chat sessions
+	AutoCompactEnabled        bool // Enable summarization-based context compaction
+	AutoCompactTriggerPercent int  // Trigger compaction at this % of context window (default 95)
+	AutoCompactTargetPercent  int  // Target post-compaction % of context window (default 60)
+	AutoCompactKeepMessages   int  // Keep this many most recent non-system messages verbatim (default 8)
 
 	// Auto-detection settings
 	AutoDetectMaxTokens   bool          // Enable auto-detection of max tokens from model metadata
@@ -610,10 +622,13 @@ func LoadConfig() *Config {
 			}
 			return strings.Join(defaultPaths, ",")
 		}(),
-		MCPToolTimeout:  getEnvArg("QU_MCP_TOOL_TIMEOUT", 30).(int),
-		MCPStrict:       getEnvArg("QU_MCP_STRICT", false).(bool),
-		MCPMaxToolCalls: getEnvArg("QU_MCP_MAX_TOOL_CALLS", 10).(int),
-		MCPLogEnabled:   getEnvArg("QU_MCP_LOG", false).(bool),
+		MCPToolTimeout:           getEnvArg("QU_MCP_TOOL_TIMEOUT", 30).(int),
+		MCPStrict:                getEnvArg("QU_MCP_STRICT", false).(bool),
+		MCPMaxToolCalls:          getEnvArg("QU_MCP_MAX_TOOL_CALLS", 10).(int),
+		MCPMaxToolCallsTotal:     getEnvArg("QU_MCP_MAX_TOOL_CALLS_TOTAL", 30).(int),
+		MCPToolResultBudgetBytes: getEnvArg("QU_MCP_TOOL_RESULT_BUDGET_BYTES", 200000).(int),
+		MCPStallThreshold:        getEnvArg("QU_MCP_STALL_THRESHOLD", 2).(int),
+		MCPLogEnabled:            getEnvArg("QU_MCP_LOG", false).(bool),
 		MCPLogFile: func() string {
 			if homeDir != "" {
 				return fmt.Sprintf("%s/.quackops/mcp.log", homeDir)
@@ -635,9 +650,13 @@ func LoadConfig() *Config {
 		ThrottleDelayOverride:     time.Duration(getEnvArg("QU_THROTTLE_DELAY_OVERRIDE_MS", 0).(int)) * time.Millisecond,
 
 		// Token Management
-		InputTokenReservePercent: getEnvArg("QU_INPUT_TOKEN_RESERVE_PERCENT", 20).(int),
-		MinInputTokenReserve:     getEnvArg("QU_MIN_INPUT_TOKEN_RESERVE", 1024).(int),
-		MinOutputTokens:          getEnvArg("QU_MIN_OUTPUT_TOKENS", 512).(int),
+		InputTokenReservePercent:  getEnvArg("QU_INPUT_TOKEN_RESERVE_PERCENT", 20).(int),
+		MinInputTokenReserve:      getEnvArg("QU_MIN_INPUT_TOKEN_RESERVE", 1024).(int),
+		MinOutputTokens:           getEnvArg("QU_MIN_OUTPUT_TOKENS", 512).(int),
+		AutoCompactEnabled:        getEnvArg("QU_AUTO_COMPACT", true).(bool),
+		AutoCompactTriggerPercent: getEnvArg("QU_AUTO_COMPACT_TRIGGER_PERCENT", 95).(int),
+		AutoCompactTargetPercent:  getEnvArg("QU_AUTO_COMPACT_TARGET_PERCENT", 60).(int),
+		AutoCompactKeepMessages:   getEnvArg("QU_AUTO_COMPACT_KEEP_MESSAGES", 8).(int),
 
 		// Auto-detection settings
 		AutoDetectMaxTokens:   getEnvArg("QU_AUTO_DETECT_MAX_TOKENS_ENABLE", true).(bool),

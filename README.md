@@ -458,6 +458,9 @@ QU_MCP_CLIENT=true
 | `QU_MCP_TOOL_TIMEOUT` | int | `30` | Timeout for MCP tool calls (seconds) |
 | `QU_MCP_STRICT` | bool | `false` | Strict MCP mode: do not fall back to local execution when MCP fails |
 | `QU_MCP_MAX_TOOL_CALLS` | int | `10` | Maximum iterative MCP tool calls per model response |
+| `QU_MCP_MAX_TOOL_CALLS_TOTAL` | int | `30` | Total MCP tool-call budget per user request (`0` = unlimited) |
+| `QU_MCP_TOOL_RESULT_BUDGET_BYTES` | int | `200000` | Maximum cumulative MCP tool result bytes per user request (`0` = unlimited) |
+| `QU_MCP_STALL_THRESHOLD` | int | `2` | Consecutive identical MCP tool-call rounds before loop is considered stalled (`0` = disabled) |
 | `QU_MCP_LOG` | bool | `false` | Enable logging of MCP server stdio to a file |
 | `QU_MCP_LOG_FORMAT` | string | `jsonl` | MCP log format: jsonl (default), text, or yaml |
 | `QU_EMBEDDING_MODEL` | string | provider-dependent | Embedding model. Defaults: `models/text-embedding-004` (google), `text-embedding-3-small` (openai), `nomic-embed-text` (anthropic) |
@@ -466,6 +469,10 @@ QU_MCP_CLIENT=true
 | `QU_DENIED_TOOLS` | []string |  | Comma-separated denylist of tool names when invoking via MCP |
 | `QU_THROTTLE_REQUESTS_PER_MINUTE` | int | `60` | Maximum number of LLM requests per minute |
 | `QU_THROTTLE_DELAY_OVERRIDE_MS` | int | `0` | Override throttle delay in milliseconds |
+| `QU_AUTO_COMPACT` | bool | `true` | Enable auto-compaction of long chat history using a summary |
+| `QU_AUTO_COMPACT_TRIGGER_PERCENT` | int | `95` | Trigger auto-compaction at this percentage of model context window |
+| `QU_AUTO_COMPACT_TARGET_PERCENT` | int | `60` | Target context usage percentage after auto-compaction |
+| `QU_AUTO_COMPACT_KEEP_MESSAGES` | int | `8` | Keep this many most recent non-system messages verbatim during compaction |
 | `QU_KUBECTL_SYSTEM_PROMPT` | string | see `defaultKubectlStartPrompt` | Start prompt for kubectl command generation |
 | `QU_KUBECTL_SHORT_PROMPT` | string | code default | Short prompt for kubectl command generation |
 | `QU_KUBECTL_FORMAT_PROMPT` | string | see `defaultKubectlFormatPrompt` | Format prompt for kubectl command generation |
@@ -495,6 +502,14 @@ QU_MCP_CLIENT=true
 | `--mcp-config` | Comma-separated MCP client config paths | `~/.config/quackops/mcp.yaml, ~/.quackops/mcp.json` |
 | `--mcp-tool-timeout` | Timeout for MCP tools (seconds) | `30` |
 | `--mcp-strict` | Strict MCP mode (no fallback) | `false` |
+| `--mcp-max-tool-calls` | Maximum MCP tool-call rounds per model response | `10` |
+| `--mcp-max-tool-calls-total` | Total MCP tool-call budget per user request (`0` = unlimited) | `30` |
+| `--mcp-tool-result-budget-bytes` | Maximum cumulative MCP tool result bytes per request (`0` = unlimited) | `200000` |
+| `--mcp-stall-threshold` | Consecutive identical MCP tool-call rounds before stalling (`0` = disabled) | `2` |
+| `--auto-compact` | Enable auto-compaction of long chat history | `true` |
+| `--auto-compact-trigger-percent` | Trigger auto-compaction at this context percentage | `95` |
+| `--auto-compact-target-percent` | Target context percentage after compaction | `60` |
+| `--auto-compact-keep-messages` | Keep recent non-system messages uncompressed | `8` |
 
 ### MCP Configuration (JSON)
 

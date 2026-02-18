@@ -62,6 +62,10 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVarP(&cfg.MCPConfigPath, "mcp-config", "", cfg.MCPConfigPath, "Comma-separated MCP client config paths; tries each in order and falls back to ~/.config/quackops/mcp.yaml then ~/.quackops/mcp.json")
 	cmd.Flags().IntVarP(&cfg.MCPToolTimeout, "mcp-tool-timeout", "", cfg.MCPToolTimeout, "Timeout in seconds for MCP tool calls")
 	cmd.Flags().BoolVarP(&cfg.MCPStrict, "mcp-strict", "", cfg.MCPStrict, "Strict MCP mode: do not fall back to local execution when MCP fails")
+	cmd.Flags().IntVarP(&cfg.MCPMaxToolCalls, "mcp-max-tool-calls", "", cfg.MCPMaxToolCalls, "Maximum iterative MCP tool-call rounds per model response")
+	cmd.Flags().IntVarP(&cfg.MCPMaxToolCallsTotal, "mcp-max-tool-calls-total", "", cfg.MCPMaxToolCallsTotal, "Maximum total MCP tool calls per user request (0 = unlimited)")
+	cmd.Flags().IntVarP(&cfg.MCPToolResultBudgetBytes, "mcp-tool-result-budget-bytes", "", cfg.MCPToolResultBudgetBytes, "Maximum cumulative MCP tool result bytes per user request (0 = unlimited)")
+	cmd.Flags().IntVarP(&cfg.MCPStallThreshold, "mcp-stall-threshold", "", cfg.MCPStallThreshold, "Consecutive identical MCP tool-call rounds before considering the loop stalled (0 = disabled)")
 	cmd.Flags().BoolVarP(&cfg.MCPLogEnabled, "mcp-log", "", cfg.MCPLogEnabled, "Enable logging of MCP server stdio to a file (env QU_MCP_LOG)")
 	cmd.Flags().StringVarP(&cfg.MCPLogFile, "mcp-log-file", "", cfg.MCPLogFile, "MCP stdio log file path (overwritten at start)")
 	cmd.Flags().StringVarP(&cfg.MCPLogFormat, "mcp-log-format", "", cfg.MCPLogFormat, "MCP log format: jsonl (default), text, or yaml (env QU_MCP_LOG_FORMAT)")
@@ -72,6 +76,10 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().IntVarP(&cfg.LogsTail, "logs-tail", "", cfg.LogsTail, "Tail lines for log aggregation when triggered by playbooks")
 	cmd.Flags().BoolVarP(&cfg.LogsAllContainers, "logs-all-containers", "", cfg.LogsAllContainers, "Aggregate logs from all containers when collecting logs")
 	cmd.Flags().IntVarP(&cfg.ThrottleRequestsPerMinute, "throttle-rpm", "", cfg.ThrottleRequestsPerMinute, "Maximum number of LLM requests per minute")
+	cmd.Flags().BoolVarP(&cfg.AutoCompactEnabled, "auto-compact", "", cfg.AutoCompactEnabled, "Automatically compact long chat history with a summary")
+	cmd.Flags().IntVarP(&cfg.AutoCompactTriggerPercent, "auto-compact-trigger-percent", "", cfg.AutoCompactTriggerPercent, "Trigger auto-compact at this percentage of context window")
+	cmd.Flags().IntVarP(&cfg.AutoCompactTargetPercent, "auto-compact-target-percent", "", cfg.AutoCompactTargetPercent, "Target post-compact percentage of context window")
+	cmd.Flags().IntVarP(&cfg.AutoCompactKeepMessages, "auto-compact-keep-messages", "", cfg.AutoCompactKeepMessages, "Number of most recent non-system messages to keep uncompressed")
 	cmd.Flags().BoolVarP(&showEnv, "show-env", "", false, "Show information about environment variables used by the application")
 
 	// Add env subcommand

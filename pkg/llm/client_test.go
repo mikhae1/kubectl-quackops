@@ -7,6 +7,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/mikhae1/kubectl-quackops/pkg/config"
+	"github.com/mikhae1/kubectl-quackops/pkg/lib"
+	"github.com/tmc/langchaingo/llms"
 )
 
 // TestWriteNormalizedChunk tests the writeNormalizedChunk function for proper line break handling
@@ -577,6 +581,132 @@ func TestANSISequenceDetection(t *testing.T) {
 				t.Errorf("Expected hasANSI=%t, got %t for input: %q", tc.hasANSI, hasANSI, tc.input)
 			}
 		})
+	}
+}
+
+func TestManageChatThreadContext_AutoCompactPreservesRecentMessages(t *testing.T) {
+	orig := RequestWithSystem
+	t.Cleanup(func() { RequestWithSystem = orig })
+
+	RequestWithSystem = func(cfg *config.Config, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
+		if !strings.Contains(systemPrompt, "conversation memory compressor") {
+			t.Fatalf("unexpected compaction system prompt: %q", systemPrompt)
+		}
+		return "- Compact objective\n- Compact findings", nil
+	}
+
+	cfg := CreateTestConfig()
+	cfg.AutoCompactEnabled = true
+	cfg.AutoCompactTriggerPercent = 20
+	cfg.AutoCompactTargetPercent = 80
+	cfg.AutoCompactKeepMessages = 2
+
+	long := strings.Repeat("token ", 80)
+	cfg.ChatMessages = []llms.ChatMessage{
+		llms.SystemChatMessage{Content: "base system"},
+		llms.HumanChatMessage{Content: "user-1 " + long},
+		llms.AIChatMessage{Content: "assistant-1 " + long},
+		llms.HumanChatMessage{Content: "user-2 " + long},
+		llms.AIChatMessage{Content: "assistant-2 " + long},
+		llms.HumanChatMessage{Content: "user-3 recent " + long},
+		llms.AIChatMessage{Content: "assistant-3 recent " + long},
+	}
+
+	before := append([]llms.ChatMessage(nil), cfg.ChatMessages...)
+	ManageChatThreadContext(cfg, cfg.ChatMessages, 2000)
+
+	if len(cfg.ChatMessages) >= len(before) {
+		t.Fatalf("expected compacted history to be shorter, before=%d after=%d", len(before), len(cfg.ChatMessages))
+	}
+
+	foundCompactMemory := false
+	for _, msg := range cfg.ChatMessages {
+		if msg.GetType() == llms.ChatMessageTypeSystem && strings.HasPrefix(strings.TrimSpace(msg.GetContent()), autoCompactSummaryHeader) {
+			foundCompactMemory = true
+			break
+		}
+	}
+	if !foundCompactMemory {
+		t.Fatalf("expected compact memory system message to be present")
+	}
+
+	if len(cfg.ChatMessages) < 2 {
+		t.Fatalf("expected at least two messages after compaction")
+	}
+	last := cfg.ChatMessages[len(cfg.ChatMessages)-1].GetContent()
+	secondLast := cfg.ChatMessages[len(cfg.ChatMessages)-2].GetContent()
+	if !strings.Contains(last, "assistant-3 recent") || !strings.Contains(secondLast, "user-3 recent") {
+		t.Fatalf("expected most recent messages to remain verbatim, got secondLast=%q last=%q", secondLast, last)
+	}
+}
+
+func TestManageChatThreadContext_AutoCompactFailureFallsBackToTrim(t *testing.T) {
+	orig := RequestWithSystem
+	t.Cleanup(func() { RequestWithSystem = orig })
+
+	RequestWithSystem = func(cfg *config.Config, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
+		return "", io.EOF
+	}
+
+	cfg := CreateTestConfig()
+	cfg.AutoCompactEnabled = true
+	cfg.AutoCompactTriggerPercent = 10
+	cfg.AutoCompactTargetPercent = 5
+	cfg.AutoCompactKeepMessages = 2
+
+	long := strings.Repeat("fallback ", 120)
+	cfg.ChatMessages = []llms.ChatMessage{
+		llms.HumanChatMessage{Content: "h1 " + long},
+		llms.AIChatMessage{Content: "a1 " + long},
+		llms.HumanChatMessage{Content: "h2 " + long},
+		llms.AIChatMessage{Content: "a2 " + long},
+		llms.HumanChatMessage{Content: "h3 " + long},
+		llms.AIChatMessage{Content: "a3 " + long},
+	}
+
+	ManageChatThreadContext(cfg, cfg.ChatMessages, 220)
+	remainingTokens := lib.CountTokensWithConfig(cfg, "", cfg.ChatMessages)
+	if remainingTokens > 220 {
+		t.Fatalf("expected fallback trimming to enforce token limit, got %d tokens", remainingTokens)
+	}
+}
+
+func TestManageChatThreadContext_AutoCompactWithThreeMessagesAvoidsTrim(t *testing.T) {
+	orig := RequestWithSystem
+	t.Cleanup(func() { RequestWithSystem = orig })
+
+	summaryCalls := 0
+	RequestWithSystem = func(cfg *config.Config, systemPrompt string, userPrompt string, stream bool, history bool) (string, error) {
+		summaryCalls++
+		return "- DNS objective\n- Cluster findings", nil
+	}
+
+	cfg := CreateTestConfig()
+	cfg.AutoCompactEnabled = true
+	cfg.AutoCompactTriggerPercent = 20
+	cfg.AutoCompactTargetPercent = 80
+	cfg.AutoCompactKeepMessages = 8 // Intentionally larger than available messages
+
+	long := strings.Repeat("dns-resolution-check ", 220)
+	cfg.ChatMessages = []llms.ChatMessage{
+		llms.SystemChatMessage{Content: "base system"},
+		llms.HumanChatMessage{Content: "Investigate DNS failures " + long},
+		llms.AIChatMessage{Content: "I will run DNS diagnostics " + long},
+	}
+
+	ManageChatThreadContext(cfg, cfg.ChatMessages, 5000)
+
+	if summaryCalls == 0 {
+		t.Fatalf("expected auto-compact summarization to run")
+	}
+	if len(cfg.ChatMessages) != 2 {
+		t.Fatalf("expected compacted thread to keep 2 messages (compact memory + latest), got %d", len(cfg.ChatMessages))
+	}
+	if !strings.HasPrefix(strings.TrimSpace(cfg.ChatMessages[0].GetContent()), autoCompactSummaryHeader) {
+		t.Fatalf("expected first message to be compact memory, got %q", cfg.ChatMessages[0].GetContent())
+	}
+	if !strings.Contains(cfg.ChatMessages[1].GetContent(), "I will run DNS diagnostics") {
+		t.Fatalf("expected latest assistant message to remain verbatim")
 	}
 }
 

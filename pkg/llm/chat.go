@@ -268,6 +268,13 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	if cfg.MCPClientEnabled {
 		toolCallCount := 0
 		maxToolCalls := cfg.MCPMaxToolCalls
+		maxToolCallsTotal := cfg.MCPMaxToolCallsTotal
+		maxToolResultBudgetBytes := cfg.MCPToolResultBudgetBytes
+		stallThreshold := cfg.MCPStallThreshold
+		totalToolCalls := 0
+		totalToolResultBytes := 0
+		lastToolPlanFingerprint := ""
+		repeatedToolPlanCount := 0
 		for {
 			if resp == nil || len(resp.Choices) == 0 {
 				break
@@ -287,8 +294,47 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 			}
 
 			if len(choice.ToolCalls) > 0 {
-				if toolCallCount >= maxToolCalls {
-					logger.Log("warn", "Maximum MCP tool call limit (%d) reached, stopping tool execution", maxToolCalls)
+				stopReason := ""
+
+				if maxToolCalls > 0 && toolCallCount >= maxToolCalls {
+					stopReason = fmt.Sprintf("maximum MCP tool-call iteration limit reached (%d)", maxToolCalls)
+				}
+
+				if stopReason == "" {
+					planFingerprint := toolCallPlanFingerprint(choice.ToolCalls)
+					if planFingerprint != "" && stallThreshold > 0 {
+						if planFingerprint == lastToolPlanFingerprint {
+							repeatedToolPlanCount++
+						} else {
+							lastToolPlanFingerprint = planFingerprint
+							repeatedToolPlanCount = 0
+						}
+						if repeatedToolPlanCount >= stallThreshold {
+							stopReason = fmt.Sprintf("MCP tool loop stalled: identical tool plan repeated %d times", repeatedToolPlanCount+1)
+						}
+					}
+				}
+
+				if stopReason == "" && maxToolCallsTotal > 0 {
+					remainingCalls := maxToolCallsTotal - totalToolCalls
+					if remainingCalls <= 0 {
+						stopReason = fmt.Sprintf("MCP total tool-call budget exhausted (%d)", maxToolCallsTotal)
+					} else if len(choice.ToolCalls) > remainingCalls {
+						logger.Log("warn", "MCP total tool-call budget allows only %d more call(s); truncating current tool-call batch", remainingCalls)
+						choice.ToolCalls = choice.ToolCalls[:remainingCalls]
+					}
+				}
+
+				if stopReason != "" {
+					logger.Log("warn", "%s", stopReason)
+					var ferr error
+					resp, responseContent, ferr = finalizeAfterToolLoopStop(cfg, spinnerManager, client, messages, generateOptions, message, outgoingTokens, maxRetries, startEscBreaker, stopReason)
+					if ferr != nil {
+						return "", ferr
+					}
+					if strings.TrimSpace(responseContent) == "" {
+						responseContent = fmt.Sprintf("Stopped MCP tool execution: %s", stopReason)
+					}
 					break
 				}
 
@@ -315,6 +361,17 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 				}
 
 				for _, tc := range choice.ToolCalls {
+					if maxToolCallsTotal > 0 && totalToolCalls >= maxToolCallsTotal {
+						stopReason = fmt.Sprintf("MCP total tool-call budget exhausted (%d)", maxToolCallsTotal)
+						logger.Log("warn", "%s", stopReason)
+						break
+					}
+					if maxToolResultBudgetBytes > 0 && totalToolResultBytes >= maxToolResultBudgetBytes {
+						stopReason = fmt.Sprintf("MCP tool-result budget exhausted (%d bytes)", maxToolResultBudgetBytes)
+						logger.Log("warn", "%s", stopReason)
+						break
+					}
+
 					logger.Log("debug", "Processing tool call: ID=%q, FunctionCall=%v", tc.ID, tc.FunctionCall != nil)
 					if tc.FunctionCall == nil {
 						logger.Log("warn", "Tool call %s has no function call data", tc.ID)
@@ -375,6 +432,12 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						Args:   args,
 						Result: toolResult,
 					})
+					totalToolCalls++
+					totalToolResultBytes += len(toolResult)
+					if maxToolResultBudgetBytes > 0 && totalToolResultBytes >= maxToolResultBudgetBytes {
+						stopReason = fmt.Sprintf("MCP tool-result budget reached (%d/%d bytes)", totalToolResultBytes, maxToolResultBudgetBytes)
+						logger.Log("warn", "%s", stopReason)
+					}
 
 					// Update response timestamp for throttling calculations after MCP tool execution
 					updateResponseTime()
@@ -408,6 +471,18 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 				}
 
 				toolCallCount++
+
+				if stopReason != "" {
+					var ferr error
+					resp, responseContent, ferr = finalizeAfterToolLoopStop(cfg, spinnerManager, client, messages, generateOptions, message, outgoingTokens, maxRetries, startEscBreaker, stopReason)
+					if ferr != nil {
+						return "", ferr
+					}
+					if strings.TrimSpace(responseContent) == "" {
+						responseContent = fmt.Sprintf("Stopped MCP tool execution: %s", stopReason)
+					}
+					break
+				}
 
 				// Apply throttling delay for MCP tool call follow-up requests
 				if err := applyThrottleDelayWithSpinnerManager(cfg, spinnerManager); err != nil {
@@ -490,6 +565,43 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	})
 
 	return responseContent, nil
+}
+
+func finalizeAfterToolLoopStop(
+	cfg *config.Config,
+	spinnerManager *lib.SpinnerManager,
+	client llms.Model,
+	messages []llms.MessageContent,
+	generateOptions []llms.CallOption,
+	spinnerMessage string,
+	outgoingTokens int,
+	maxRetries int,
+	startEscBreaker func(cancel func()) func(),
+	stopReason string,
+) (*llms.ContentResponse, string, error) {
+	note := "Tool execution has been stopped due to policy/budget limits. " +
+		"Use available evidence to provide the best final answer. Do not request additional tool calls. " +
+		"Stop reason: " + strings.TrimSpace(stopReason)
+	finalMessages := append(messages, llms.TextParts(llms.ChatMessageTypeSystem, note))
+	return generateWithRetries(cfg, spinnerManager, client, finalMessages, generateOptions, spinnerMessage, outgoingTokens, maxRetries, startEscBreaker)
+}
+
+func toolCallPlanFingerprint(toolCalls []llms.ToolCall) string {
+	if len(toolCalls) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, tc := range toolCalls {
+		if tc.FunctionCall == nil {
+			continue
+		}
+		b.WriteString(strings.TrimSpace(tc.FunctionCall.Name))
+		b.WriteString("|")
+		args := strings.Join(strings.Fields(tc.FunctionCall.Arguments), "")
+		b.WriteString(args)
+		b.WriteString(";")
+	}
+	return b.String()
 }
 
 // printContentFormatted prints content using markdown streaming writer unless disabled.

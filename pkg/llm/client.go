@@ -16,6 +16,8 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
+const autoCompactSummaryHeader = "## Compact Memory"
+
 // Define RequestFunc type for easier mocking in tests
 type RequestFunc func(cfg *config.Config, prompt string, stream bool, history bool) (string, error)
 
@@ -151,8 +153,62 @@ func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage
 		return
 	}
 
-	// If the token length exceeds the context window, remove the oldest message in loop
+	// Prefer summarization-based compaction as the thread approaches the context limit.
 	threadLen := lib.CountTokensWithConfig(cfg, "", chatMessages)
+	if cfg.AutoCompactEnabled {
+		triggerPercent := cfg.AutoCompactTriggerPercent
+		if triggerPercent <= 0 || triggerPercent > 100 {
+			triggerPercent = 95
+		}
+		triggerTokens := int(float64(maxTokens) * float64(triggerPercent) / 100.0)
+		if triggerTokens < 1 {
+			triggerTokens = maxTokens
+		}
+
+		if threadLen >= triggerTokens {
+			logger.Log("info", "Auto-compact triggered: %d tokens >= %d token threshold", threadLen, triggerTokens)
+
+			targetPercent := cfg.AutoCompactTargetPercent
+			if targetPercent <= 0 || targetPercent >= triggerPercent {
+				targetPercent = 60
+			}
+			targetTokens := int(float64(maxTokens) * float64(targetPercent) / 100.0)
+			if targetTokens < 1 {
+				targetTokens = maxTokens / 2
+			}
+			keepMessages := cfg.AutoCompactKeepMessages
+			if keepMessages < 0 {
+				keepMessages = 8
+			}
+
+			spinnerManager := lib.GetSpinnerManager(cfg)
+			cancelCompactSpinner := spinnerManager.ShowThrottle("🧠 "+config.Colors.Info.Sprint("Compacting")+" "+config.Colors.Dim.Sprint("conversation history..."), time.Second*2)
+			compacted, compactedOK := compactChatHistory(cfg, chatMessages, targetTokens, keepMessages)
+			cancelCompactSpinner()
+			if compactedOK {
+				chatMessages = compacted
+				threadLen = lib.CountTokensWithConfig(cfg, "", chatMessages)
+				logger.Log("info", "Auto-compact complete: %d messages, %d tokens", len(chatMessages), threadLen)
+
+				if threadLen > maxTokens {
+					logger.Log("warn", "Auto-compact still above context limit (%d > %d); retrying with aggressive compaction", threadLen, maxTokens)
+					cancelAggressiveSpinner := spinnerManager.ShowThrottle("🧠 "+config.Colors.Info.Sprint("Compacting")+" "+config.Colors.Dim.Sprint("more aggressively..."), time.Second*2)
+					aggressive, aggressiveOK := compactChatHistory(cfg, chatMessages, maxTokens, 0)
+					cancelAggressiveSpinner()
+					if aggressiveOK {
+						chatMessages = aggressive
+						threadLen = lib.CountTokensWithConfig(cfg, "", chatMessages)
+						logger.Log("info", "Aggressive auto-compact complete: %d messages, %d tokens", len(chatMessages), threadLen)
+					}
+				}
+			} else {
+				logger.Log("warn", "Auto-compact attempt failed; falling back to trimming if still over context limit")
+			}
+		}
+	}
+
+	// Fallback trim if context still exceeds max tokens.
+	threadLen = lib.CountTokensWithConfig(cfg, "", chatMessages)
 	if threadLen > maxTokens {
 		logger.Log("warn", "Thread should be truncated: %d messages, %d tokens", len(chatMessages), threadLen)
 
@@ -188,6 +244,219 @@ func ManageChatThreadContext(cfg *config.Config, chatMessages []llms.ChatMessage
 	cfg.ChatMessages = chatMessages
 
 	logger.Log("info", "\nThread: %d messages, %d tokens", len(cfg.ChatMessages), lib.CountTokensWithConfig(cfg, "", cfg.ChatMessages))
+}
+
+func compactChatHistory(cfg *config.Config, chatMessages []llms.ChatMessage, targetTokens int, keepMessages int) ([]llms.ChatMessage, bool) {
+	if cfg == nil || len(chatMessages) == 0 {
+		return nil, false
+	}
+	if keepMessages < 0 {
+		keepMessages = 0
+	}
+
+	leadSystems := make([]llms.ChatMessage, 0, len(chatMessages))
+	nonSystemStart := 0
+	for i, msg := range chatMessages {
+		if msg.GetType() != llms.ChatMessageTypeSystem {
+			nonSystemStart = i
+			break
+		}
+		leadSystems = append(leadSystems, msg)
+		nonSystemStart = i + 1
+	}
+
+	nonSystem := chatMessages[nonSystemStart:]
+	if len(nonSystem) == 0 {
+		return nil, false
+	}
+
+	keep := keepMessages
+	if keep >= len(nonSystem) {
+		if len(nonSystem) > 1 {
+			keep = len(nonSystem) - 1
+		} else {
+			keep = 0
+		}
+		logger.Log("debug", "Auto-compact adjusted keep-messages from %d to %d for %d non-system messages", keepMessages, keep, len(nonSystem))
+	}
+	summaryCandidates := nonSystem[:len(nonSystem)-keep]
+	if len(summaryCandidates) == 0 {
+		return nil, false
+	}
+
+	var previousCompactSummary string
+	for _, s := range leadSystems {
+		content := strings.TrimSpace(s.GetContent())
+		if strings.HasPrefix(content, autoCompactSummaryHeader) {
+			previousCompactSummary = strings.TrimSpace(strings.TrimPrefix(content, autoCompactSummaryHeader))
+		}
+	}
+
+	transcript := buildCompactTranscript(previousCompactSummary, summaryCandidates)
+	if strings.TrimSpace(transcript) == "" {
+		return nil, false
+	}
+
+	summary, err := summarizeCompactTranscript(cfg, transcript)
+	if err != nil {
+		logger.Log("warn", "Auto-compact summarization failed: %v", err)
+		return nil, false
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		logger.Log("warn", "Auto-compact summarization returned empty content")
+		return nil, false
+	}
+
+	newMessages := make([]llms.ChatMessage, 0, 1+keep)
+	newMessages = append(newMessages, llms.SystemChatMessage{Content: autoCompactSummaryHeader + "\n" + summary})
+	newMessages = append(newMessages, nonSystem[len(nonSystem)-keep:]...)
+
+	oldTokens := lib.CountTokensWithConfig(cfg, "", chatMessages)
+	newTokens := lib.CountTokensWithConfig(cfg, "", newMessages)
+	if targetTokens > 0 && newTokens > targetTokens && keep > 0 {
+		logger.Log("warn", "Auto-compact over target after first pass (%d > %d); dropping kept tail messages", newTokens, targetTokens)
+		for newTokens > targetTokens && keep > 0 {
+			keep--
+			newMessages = make([]llms.ChatMessage, 0, 1+keep)
+			newMessages = append(newMessages, llms.SystemChatMessage{Content: autoCompactSummaryHeader + "\n" + summary})
+			if keep > 0 {
+				newMessages = append(newMessages, nonSystem[len(nonSystem)-keep:]...)
+			}
+			newTokens = lib.CountTokensWithConfig(cfg, "", newMessages)
+		}
+	}
+
+	if targetTokens > 0 && newTokens > targetTokens {
+		budgetForSummary := targetTokens
+		if keep > 0 {
+			keptTailTokens := lib.CountTokensWithConfig(cfg, "", nonSystem[len(nonSystem)-keep:])
+			budgetForSummary = targetTokens - keptTailTokens
+		}
+		if budgetForSummary < 24 {
+			budgetForSummary = 24
+		}
+		shrunk := truncateToTokenBudget(cfg, summary, budgetForSummary)
+		if shrunk != summary {
+			summary = shrunk
+			newMessages = make([]llms.ChatMessage, 0, 1+keep)
+			newMessages = append(newMessages, llms.SystemChatMessage{Content: autoCompactSummaryHeader + "\n" + summary})
+			if keep > 0 {
+				newMessages = append(newMessages, nonSystem[len(nonSystem)-keep:]...)
+			}
+			newTokens = lib.CountTokensWithConfig(cfg, "", newMessages)
+			logger.Log("info", "Auto-compact summary shrunk to fit budget: %d tokens", newTokens)
+		}
+	}
+	if newTokens >= oldTokens {
+		logger.Log("warn", "Auto-compact was not effective (%d -> %d tokens)", oldTokens, newTokens)
+		return nil, false
+	}
+	if targetTokens > 0 && newTokens > targetTokens {
+		logger.Log("warn", "Auto-compact reduced tokens but not enough (%d target, got %d)", targetTokens, newTokens)
+	}
+
+	return newMessages, true
+}
+
+func buildCompactTranscript(previousSummary string, messages []llms.ChatMessage) string {
+	var b strings.Builder
+	if strings.TrimSpace(previousSummary) != "" {
+		b.WriteString("Previous compact memory:\n")
+		b.WriteString(strings.TrimSpace(previousSummary))
+		b.WriteString("\n\n")
+	}
+
+	for _, msg := range messages {
+		content := strings.TrimSpace(msg.GetContent())
+		if content == "" {
+			continue
+		}
+		role := "assistant"
+		switch msg.GetType() {
+		case llms.ChatMessageTypeSystem:
+			role = "system"
+		case llms.ChatMessageTypeHuman:
+			role = "user"
+		case llms.ChatMessageTypeAI:
+			role = "assistant"
+		case llms.ChatMessageTypeTool:
+			role = "tool"
+		}
+		b.WriteString(role)
+		b.WriteString(": ")
+		b.WriteString(content)
+		b.WriteString("\n\n")
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+func summarizeCompactTranscript(cfg *config.Config, transcript string) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("nil config")
+	}
+
+	systemPrompt := "You are a conversation memory compressor for Kubernetes troubleshooting sessions. Keep only durable facts needed for future turns."
+	userPrompt := "Summarize the conversation transcript into concise memory with these sections:\n- Current objective\n- Confirmed findings\n- Commands and tool outcomes\n- Open questions/next checks\n\nRules:\n- Keep it factual and compact\n- Include concrete names (namespaces, pods, deployments) when present\n- Exclude chit-chat and repetition\n- Limit to about 12 short bullets\n\nTranscript:\n" + transcript
+
+	origSpinnerMsg := cfg.SpinnerMessageOverride
+	origSuppressContent := cfg.SuppressContentPrint
+	origSuppressTools := cfg.SuppressToolPrint
+
+	cfg.SpinnerMessageOverride = "Compacting conversation context…"
+	cfg.SuppressContentPrint = true
+	cfg.SuppressToolPrint = true
+
+	summary, err := RequestWithSystem(cfg, systemPrompt, userPrompt, false, false)
+
+	cfg.SpinnerMessageOverride = origSpinnerMsg
+	cfg.SuppressContentPrint = origSuppressContent
+	cfg.SuppressToolPrint = origSuppressTools
+
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(summary), nil
+}
+
+func truncateToTokenBudget(cfg *config.Config, text string, budgetTokens int) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || budgetTokens <= 0 {
+		return trimmed
+	}
+	if lib.EstimateTokens(cfg, trimmed) <= budgetTokens {
+		return trimmed
+	}
+
+	parts := strings.Fields(trimmed)
+	if len(parts) == 0 {
+		return trimmed
+	}
+
+	left := 0
+	right := len(parts)
+	best := ""
+	for left <= right {
+		mid := (left + right) / 2
+		candidate := strings.Join(parts[:mid], " ")
+		tokenCount := lib.EstimateTokens(cfg, candidate)
+		if tokenCount <= budgetTokens {
+			best = candidate
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+
+	best = strings.TrimSpace(best)
+	if best == "" {
+		if len(parts) > 0 {
+			return parts[0]
+		}
+		return ""
+	}
+	return best
 }
 
 // WriteNormalizedChunk writes chunk to the provided writer while normalizing line breaks.
