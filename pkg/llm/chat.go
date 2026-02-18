@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"github.com/mikhae1/kubectl-quackops/pkg/mcp"
 	"github.com/tmc/langchaingo/llms"
 )
+
+var executeMCPTool = mcp.ExecuteTool
 
 // Chat orchestrates a chat completion with the provided llms.Model, handling
 // history, streaming, retries, token accounting, and MCP tool calls.
@@ -264,6 +267,7 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	if err != nil {
 		return "", err
 	}
+	resetMCPLoopMetrics(cfg)
 
 	if cfg.MCPClientEnabled {
 		toolCallCount := 0
@@ -275,6 +279,15 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 		totalToolResultBytes := 0
 		lastToolPlanFingerprint := ""
 		repeatedToolPlanCount := 0
+		planFingerprintHistory := make([]string, 0, 16)
+		toolCallSignatureCounts := make(map[string]int)
+		uniqueToolSignatures := make(map[string]struct{})
+		toolResultCache := make(map[string]string)
+		seenEvidenceHashes := make(map[string]struct{})
+		cacheHitCount := 0
+		repeatedToolCalls := 0
+		noProgressRounds := 0
+		finalStopReason := ""
 		for {
 			if resp == nil || len(resp.Choices) == 0 {
 				break
@@ -295,6 +308,7 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 			if len(choice.ToolCalls) > 0 {
 				stopReason := ""
+				roundNewEvidence := 0
 
 				if maxToolCalls > 0 && toolCallCount >= maxToolCalls {
 					stopReason = fmt.Sprintf("maximum MCP tool-call iteration limit reached (%d)", maxToolCalls)
@@ -302,15 +316,26 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 				if stopReason == "" {
 					planFingerprint := toolCallPlanFingerprint(choice.ToolCalls)
-					if planFingerprint != "" && stallThreshold > 0 {
-						if planFingerprint == lastToolPlanFingerprint {
-							repeatedToolPlanCount++
-						} else {
-							lastToolPlanFingerprint = planFingerprint
-							repeatedToolPlanCount = 0
+					if planFingerprint != "" {
+						if stallThreshold > 0 {
+							if planFingerprint == lastToolPlanFingerprint {
+								repeatedToolPlanCount++
+							} else {
+								lastToolPlanFingerprint = planFingerprint
+								repeatedToolPlanCount = 0
+							}
+							if repeatedToolPlanCount >= stallThreshold {
+								stopReason = fmt.Sprintf("MCP tool loop stalled: identical tool plan repeated %d times", repeatedToolPlanCount+1)
+							}
 						}
-						if repeatedToolPlanCount >= stallThreshold {
-							stopReason = fmt.Sprintf("MCP tool loop stalled: identical tool plan repeated %d times", repeatedToolPlanCount+1)
+						if stopReason == "" && cfg.MCPLoopCycleThreshold > 0 {
+							if cycleDistance, ok := detectToolPlanCycle(planFingerprintHistory, planFingerprint, cfg.MCPLoopCycleThreshold); ok {
+								stopReason = fmt.Sprintf("MCP tool loop cycling: plan repeated after %d round(s)", cycleDistance)
+							}
+						}
+						planFingerprintHistory = append(planFingerprintHistory, planFingerprint)
+						if len(planFingerprintHistory) > 16 {
+							planFingerprintHistory = planFingerprintHistory[len(planFingerprintHistory)-16:]
 						}
 					}
 				}
@@ -327,6 +352,7 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 				if stopReason != "" {
 					logger.Log("warn", "%s", stopReason)
+					finalStopReason = stopReason
 					var ferr error
 					resp, responseContent, ferr = finalizeAfterToolLoopStop(cfg, spinnerManager, client, messages, generateOptions, message, outgoingTokens, maxRetries, startEscBreaker, stopReason)
 					if ferr != nil {
@@ -388,13 +414,19 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						args = map[string]any{}
 					}
 
-					// Apply throttling delay before each MCP tool execution with iteration info
-					customMessage := fmt.Sprintf("🔧 %s %s %s...", config.Colors.Info.Sprint("Processing"), config.Colors.Dim.Sprint("MCP tool call:"), config.Colors.Accent.Sprint(fmt.Sprintf("%d of %d", toolCallCount+1, maxToolCalls)))
-					if err := applyThrottleDelayWithCustomMessageManager(cfg, spinnerManager, customMessage); err != nil {
-						if lib.IsUserCancel(err) {
-							return "", lib.NewUserCancelError("canceled by user")
+					signature := toolCallSignature(tc.FunctionCall.Name, args)
+					if signature != "" {
+						if _, seen := uniqueToolSignatures[signature]; seen {
+							repeatedToolCalls++
+						} else {
+							uniqueToolSignatures[signature] = struct{}{}
 						}
-						return "", err
+						if cfg.MCPToolRepeatLimit > 0 && toolCallSignatureCounts[signature] >= cfg.MCPToolRepeatLimit {
+							stopReason = fmt.Sprintf("MCP tool repeat limit reached for %s (%d)", tc.FunctionCall.Name, cfg.MCPToolRepeatLimit)
+							logger.Log("warn", "%s", stopReason)
+							break
+						}
+						toolCallSignatureCounts[signature]++
 					}
 
 					emitPlanProgress(PlanProgressEvent{
@@ -404,11 +436,40 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						MaxIterations: maxToolCalls,
 					})
 
-					logger.Log("info", "Executing MCP tool: %s with args: %v", tc.FunctionCall.Name, args)
-					toolResult, callErr := mcp.ExecuteTool(cfg, tc.FunctionCall.Name, args)
+					toolResult := ""
+					var callErr error
+					cacheHit := false
+					if cfg.MCPCacheToolResults && signature != "" {
+						if cached, ok := toolResultCache[signature]; ok {
+							toolResult = cached
+							cacheHit = true
+							cacheHitCount++
+							logger.Log("debug", "MCP tool cache hit: %s", tc.FunctionCall.Name)
+						}
+					}
+
+					if !cacheHit {
+						// Apply throttling delay before each MCP tool execution with iteration info
+						customMessage := fmt.Sprintf("🔧 %s %s %s...", config.Colors.Info.Sprint("Processing"), config.Colors.Dim.Sprint("MCP tool call:"), config.Colors.Accent.Sprint(fmt.Sprintf("%d of %d", toolCallCount+1, maxToolCalls)))
+						if err := applyThrottleDelayWithCustomMessageManager(cfg, spinnerManager, customMessage); err != nil {
+							if lib.IsUserCancel(err) {
+								return "", lib.NewUserCancelError("canceled by user")
+							}
+							return "", err
+						}
+
+						logger.Log("info", "Executing MCP tool: %s with args: %v", tc.FunctionCall.Name, args)
+						toolResult, callErr = executeMCPTool(cfg, tc.FunctionCall.Name, args)
+						if callErr != nil {
+							logger.Log("warn", "MCP tool %s failed: %v", tc.FunctionCall.Name, callErr)
+							toolResult = fmt.Sprintf("Error executing tool '%s': %v", tc.FunctionCall.Name, callErr)
+						}
+						if callErr == nil && cfg.MCPCacheToolResults && signature != "" {
+							toolResultCache[signature] = toolResult
+						}
+					}
+
 					if callErr != nil {
-						logger.Log("warn", "MCP tool %s failed: %v", tc.FunctionCall.Name, callErr)
-						toolResult = fmt.Sprintf("Error executing tool '%s': %v", tc.FunctionCall.Name, callErr)
 						emitPlanProgress(PlanProgressEvent{
 							Kind:          PlanProgressToolFailed,
 							ToolName:      tc.FunctionCall.Name,
@@ -417,7 +478,6 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 							Err:           callErr.Error(),
 						})
 					} else {
-						logger.Log("info", "MCP tool %s executed successfully, result length: %d", tc.FunctionCall.Name, len(toolResult))
 						emitPlanProgress(PlanProgressEvent{
 							Kind:          PlanProgressToolCompleted,
 							ToolName:      tc.FunctionCall.Name,
@@ -432,12 +492,21 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						Args:   args,
 						Result: toolResult,
 					})
+
 					totalToolCalls++
 					totalToolResultBytes += len(toolResult)
 					if maxToolResultBudgetBytes > 0 && totalToolResultBytes >= maxToolResultBudgetBytes {
 						stopReason = fmt.Sprintf("MCP tool-result budget reached (%d/%d bytes)", totalToolResultBytes, maxToolResultBudgetBytes)
 						logger.Log("warn", "%s", stopReason)
 					}
+
+					evidenceHash := hashToolEvidence(tc.FunctionCall.Name, args, toolResult)
+					if _, seen := seenEvidenceHashes[evidenceHash]; !seen {
+						seenEvidenceHashes[evidenceHash] = struct{}{}
+						roundNewEvidence++
+					}
+
+					modelToolResult := compactToolResultForModel(cfg, tc.FunctionCall.Name, toolResult)
 
 					// Update response timestamp for throttling calculations after MCP tool execution
 					updateResponseTime()
@@ -464,7 +533,7 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 						Parts: []llms.ContentPart{llms.ToolCallResponse{
 							ToolCallID: tc.ID,
 							Name:       tc.FunctionCall.Name,
-							Content:    toolResult,
+							Content:    modelToolResult,
 						}},
 					}
 					messages = append(messages, toolMsg)
@@ -472,7 +541,19 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 
 				toolCallCount++
 
+				if stopReason == "" && cfg.MCPNoProgressThreshold > 0 {
+					if roundNewEvidence == 0 {
+						noProgressRounds++
+						if noProgressRounds >= cfg.MCPNoProgressThreshold {
+							stopReason = fmt.Sprintf("MCP tool loop made no progress for %d round(s)", noProgressRounds)
+						}
+					} else {
+						noProgressRounds = 0
+					}
+				}
+
 				if stopReason != "" {
+					finalStopReason = stopReason
 					var ferr error
 					resp, responseContent, ferr = finalizeAfterToolLoopStop(cfg, spinnerManager, client, messages, generateOptions, message, outgoingTokens, maxRetries, startEscBreaker, stopReason)
 					if ferr != nil {
@@ -502,6 +583,11 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 			}
 			break
 		}
+		cfg.LastMCPToolCallsTotal = totalToolCalls
+		cfg.LastMCPUniqueToolCalls = len(uniqueToolSignatures)
+		cfg.LastMCPRepeatedToolCalls = repeatedToolCalls
+		cfg.LastMCPCacheHits = cacheHitCount
+		cfg.LastMCPStopReason = finalStopReason
 	}
 
 	if history && responseContent != "" {
@@ -602,6 +688,116 @@ func toolCallPlanFingerprint(toolCalls []llms.ToolCall) string {
 		b.WriteString(";")
 	}
 	return b.String()
+}
+
+func resetMCPLoopMetrics(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.LastMCPToolCallsTotal = 0
+	cfg.LastMCPUniqueToolCalls = 0
+	cfg.LastMCPRepeatedToolCalls = 0
+	cfg.LastMCPCacheHits = 0
+	cfg.LastMCPStopReason = ""
+}
+
+func detectToolPlanCycle(history []string, current string, maxDistance int) (int, bool) {
+	if current == "" || maxDistance <= 1 || len(history) == 0 {
+		return 0, false
+	}
+	if maxDistance > len(history) {
+		maxDistance = len(history)
+	}
+	for distance := 2; distance <= maxDistance; distance++ {
+		if history[len(history)-distance] == current {
+			return distance, true
+		}
+	}
+	return 0, false
+}
+
+func toolCallSignature(toolName string, args map[string]any) string {
+	trimmedName := strings.TrimSpace(toolName)
+	if trimmedName == "" {
+		return ""
+	}
+	if args == nil {
+		return trimmedName + "|{}"
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return trimmedName + "|" + fmt.Sprintf("%v", args)
+	}
+	return trimmedName + "|" + string(b)
+}
+
+func hashToolEvidence(toolName string, args map[string]any, result string) string {
+	material := toolCallSignature(toolName, args) + "\n" + strings.TrimSpace(result)
+	sum := sha256.Sum256([]byte(material))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func compactToolResultForModel(cfg *config.Config, toolName string, result string) string {
+	if cfg == nil {
+		return result
+	}
+	maxChars := cfg.MCPToolResultMaxCharsForModel
+	if maxChars <= 0 {
+		return result
+	}
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" || len(trimmed) <= maxChars {
+		return result
+	}
+
+	maxLines := 12
+	if cfg.ToolOutputMaxLines > 0 && cfg.ToolOutputMaxLines < maxLines {
+		maxLines = cfg.ToolOutputMaxLines
+	}
+	if maxLines < 4 {
+		maxLines = 4
+	}
+
+	maxCols := 160
+	if cfg.ToolOutputMaxLineLen > 0 {
+		maxCols = cfg.ToolOutputMaxLineLen
+	}
+	if maxCols < 60 {
+		maxCols = 60
+	}
+	if maxCols > 200 {
+		maxCols = 200
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	sum := sha256.Sum256([]byte(trimmed))
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("[tool output truncated for model: tool=%s bytes=%d lines=%d sha256=%x]\n", strings.TrimSpace(toolName), len(trimmed), len(lines), sum[:6]))
+	for i, line := range lines {
+		if i >= maxLines {
+			b.WriteString("...\n")
+			break
+		}
+		line = strings.TrimRight(line, "\r")
+		if len(line) > maxCols {
+			line = line[:maxCols] + "..."
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+		if b.Len() >= maxChars {
+			break
+		}
+	}
+
+	out := strings.TrimSpace(b.String())
+	if len(out) <= maxChars {
+		return out
+	}
+	if maxChars <= 3 {
+		return out[:maxChars]
+	}
+	return out[:maxChars-3] + "..."
 }
 
 // printContentFormatted prints content using markdown streaming writer unless disabled.

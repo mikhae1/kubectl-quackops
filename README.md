@@ -461,6 +461,11 @@ QU_MCP_CLIENT=true
 | `QU_MCP_MAX_TOOL_CALLS_TOTAL` | int | `30` | Total MCP tool-call budget per user request (`0` = unlimited) |
 | `QU_MCP_TOOL_RESULT_BUDGET_BYTES` | int | `200000` | Maximum cumulative MCP tool result bytes per user request (`0` = unlimited) |
 | `QU_MCP_STALL_THRESHOLD` | int | `2` | Consecutive identical MCP tool-call rounds before loop is considered stalled (`0` = disabled) |
+| `QU_MCP_TOOL_REPEAT_LIMIT` | int | `3` | Maximum repeats of the same MCP tool call signature (name+args) per request (`0` = disabled) |
+| `QU_MCP_LOOP_CYCLE_THRESHOLD` | int | `2` | Detect short MCP tool-plan cycles by matching with previous rounds up to this distance (`0` = disabled) |
+| `QU_MCP_NO_PROGRESS_THRESHOLD` | int | `2` | Consecutive MCP rounds with no new tool evidence before stopping (`0` = disabled) |
+| `QU_MCP_CACHE_TOOL_RESULTS` | bool | `true` | Reuse MCP tool results for repeated identical tool calls within a request |
+| `QU_MCP_TOOL_RESULT_MAX_CHARS_FOR_MODEL` | int | `8000` | Maximum characters from each MCP tool result sent back to model context (`0` = unlimited) |
 | `QU_MCP_LOG` | bool | `false` | Enable logging of MCP server stdio to a file |
 | `QU_MCP_LOG_FORMAT` | string | `jsonl` | MCP log format: jsonl (default), text, or yaml |
 | `QU_EMBEDDING_MODEL` | string | provider-dependent | Embedding model. Defaults: `models/text-embedding-004` (google), `text-embedding-3-small` (openai), `nomic-embed-text` (anthropic) |
@@ -503,13 +508,12 @@ QU_MCP_CLIENT=true
 | `--mcp-tool-timeout` | Timeout for MCP tools (seconds) | `30` |
 | `--mcp-strict` | Strict MCP mode (no fallback) | `false` |
 | `--mcp-max-tool-calls` | Maximum MCP tool-call rounds per model response | `10` |
-| `--mcp-max-tool-calls-total` | Total MCP tool-call budget per user request (`0` = unlimited) | `30` |
-| `--mcp-tool-result-budget-bytes` | Maximum cumulative MCP tool result bytes per request (`0` = unlimited) | `200000` |
-| `--mcp-stall-threshold` | Consecutive identical MCP tool-call rounds before stalling (`0` = disabled) | `2` |
 | `--auto-compact` | Enable auto-compaction of long chat history | `true` |
 | `--auto-compact-trigger-percent` | Trigger auto-compaction at this context percentage | `95` |
 | `--auto-compact-target-percent` | Target context percentage after compaction | `60` |
 | `--auto-compact-keep-messages` | Keep recent non-system messages uncompressed | `8` |
+
+Advanced MCP loop and logging controls are intentionally env-only (`QU_MCP_*`) to keep CLI usage focused.
 
 ### MCP Configuration (JSON)
 

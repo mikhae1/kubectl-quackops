@@ -164,6 +164,23 @@ type Config struct {
 	MCPToolResultBudgetBytes int
 	// Consecutive identical MCP tool-call iterations before considering the loop stalled (0 = disabled)
 	MCPStallThreshold int
+	// Maximum times the same MCP tool call signature (name+args) may be executed in one request (0 = disabled)
+	MCPToolRepeatLimit int
+	// Detect short MCP planning cycles by matching current tool plan with a previous round up to this distance (0 = disabled)
+	MCPLoopCycleThreshold int
+	// Consecutive MCP rounds with no new evidence before stopping tool loop (0 = disabled)
+	MCPNoProgressThreshold int
+	// Enable request-scoped cache for MCP tool results by tool signature (name+args)
+	MCPCacheToolResults bool
+	// Maximum characters from each MCP tool result that may be sent back to the model (0 = unlimited)
+	MCPToolResultMaxCharsForModel int
+
+	// Last-request MCP loop metrics (used by benchmark/reporting)
+	LastMCPToolCallsTotal    int
+	LastMCPUniqueToolCalls   int
+	LastMCPRepeatedToolCalls int
+	LastMCPCacheHits         int
+	LastMCPStopReason        string
 
 	// MCP logging for debugging (raw server stdio)
 	MCPLogEnabled bool
@@ -622,13 +639,18 @@ func LoadConfig() *Config {
 			}
 			return strings.Join(defaultPaths, ",")
 		}(),
-		MCPToolTimeout:           getEnvArg("QU_MCP_TOOL_TIMEOUT", 30).(int),
-		MCPStrict:                getEnvArg("QU_MCP_STRICT", false).(bool),
-		MCPMaxToolCalls:          getEnvArg("QU_MCP_MAX_TOOL_CALLS", 10).(int),
-		MCPMaxToolCallsTotal:     getEnvArg("QU_MCP_MAX_TOOL_CALLS_TOTAL", 30).(int),
-		MCPToolResultBudgetBytes: getEnvArg("QU_MCP_TOOL_RESULT_BUDGET_BYTES", 200000).(int),
-		MCPStallThreshold:        getEnvArg("QU_MCP_STALL_THRESHOLD", 2).(int),
-		MCPLogEnabled:            getEnvArg("QU_MCP_LOG", false).(bool),
+		MCPToolTimeout:                getEnvArg("QU_MCP_TOOL_TIMEOUT", 30).(int),
+		MCPStrict:                     getEnvArg("QU_MCP_STRICT", false).(bool),
+		MCPMaxToolCalls:               getEnvArg("QU_MCP_MAX_TOOL_CALLS", 10).(int),
+		MCPMaxToolCallsTotal:          getEnvArg("QU_MCP_MAX_TOOL_CALLS_TOTAL", 30).(int),
+		MCPToolResultBudgetBytes:      getEnvArg("QU_MCP_TOOL_RESULT_BUDGET_BYTES", 200000).(int),
+		MCPStallThreshold:             getEnvArg("QU_MCP_STALL_THRESHOLD", 2).(int),
+		MCPToolRepeatLimit:            getEnvArg("QU_MCP_TOOL_REPEAT_LIMIT", 3).(int),
+		MCPLoopCycleThreshold:         getEnvArg("QU_MCP_LOOP_CYCLE_THRESHOLD", 2).(int),
+		MCPNoProgressThreshold:        getEnvArg("QU_MCP_NO_PROGRESS_THRESHOLD", 2).(int),
+		MCPCacheToolResults:           getEnvArg("QU_MCP_CACHE_TOOL_RESULTS", true).(bool),
+		MCPToolResultMaxCharsForModel: getEnvArg("QU_MCP_TOOL_RESULT_MAX_CHARS_FOR_MODEL", 8000).(int),
+		MCPLogEnabled:                 getEnvArg("QU_MCP_LOG", false).(bool),
 		MCPLogFile: func() string {
 			if homeDir != "" {
 				return fmt.Sprintf("%s/.quackops/mcp.log", homeDir)

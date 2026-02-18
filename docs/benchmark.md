@@ -87,6 +87,7 @@ export QU_BENCHMARK_OUTPUT_FORMAT=json
 - **Response Time**: Total request duration
 - **Tokens Per Second**: Processing speed
 - **Success Rate**: Completion percentage
+- **Agentic Loop Health**: MCP tool-call totals, unique vs repeated signatures, cache hits, and loop stop reason
 
 ### Quality Metrics
 - **Command Accuracy**: Validates generated kubectl commands

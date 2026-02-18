@@ -537,6 +537,115 @@ func TestChat_MCPStallDetection(t *testing.T) {
 	}
 }
 
+func TestChat_MCPCacheToolResults(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.MCPClientEnabled = true
+	cfg.MCPMaxToolCalls = 10
+	cfg.MCPMaxToolCallsTotal = 20
+	cfg.MCPToolResultBudgetBytes = 0
+	cfg.MCPStallThreshold = 0
+	cfg.MCPCacheToolResults = true
+
+	repeatedToolCall := llms.ToolCall{ID: "cache-1", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods", Arguments: `{"namespace":"default"}`}}
+	mockClient := NewMockLLMClient([]MockResponse{
+		{ToolCalls: []llms.ToolCall{repeatedToolCall}},
+		{ToolCalls: []llms.ToolCall{repeatedToolCall}},
+		{Content: "Final answer after cache"},
+	})
+
+	callCount := 0
+	origExecute := executeMCPTool
+	executeMCPTool = func(cfg *config.Config, toolName string, args map[string]any) (string, error) {
+		callCount++
+		return "cached-tool-result", nil
+	}
+	defer func() { executeMCPTool = origExecute }()
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	result, err := Chat(cfg, mockClient, "diagnose with cache", false, false)
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	io.ReadAll(rOut)
+	io.ReadAll(rErr)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Final answer after cache") {
+		t.Fatalf("expected cached flow to produce final answer, got %q", result)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected MCP tool to execute once with cache enabled, got %d", callCount)
+	}
+	if cfg.LastMCPCacheHits < 1 {
+		t.Fatalf("expected at least one MCP cache hit, got %d", cfg.LastMCPCacheHits)
+	}
+}
+
+func TestChat_MCPToolRepeatLimit(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.MCPClientEnabled = true
+	cfg.MCPMaxToolCalls = 10
+	cfg.MCPMaxToolCallsTotal = 20
+	cfg.MCPToolResultBudgetBytes = 0
+	cfg.MCPStallThreshold = 0
+	cfg.MCPToolRepeatLimit = 1
+	cfg.MCPCacheToolResults = false
+
+	repeatedToolCall := llms.ToolCall{ID: "repeat-1", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods", Arguments: `{"namespace":"default"}`}}
+	mockClient := NewMockLLMClient([]MockResponse{
+		{ToolCalls: []llms.ToolCall{repeatedToolCall}},
+		{ToolCalls: []llms.ToolCall{repeatedToolCall}},
+		{Content: "Final answer after repeat limit"},
+	})
+
+	callCount := 0
+	origExecute := executeMCPTool
+	executeMCPTool = func(cfg *config.Config, toolName string, args map[string]any) (string, error) {
+		callCount++
+		return "tool-result", nil
+	}
+	defer func() { executeMCPTool = origExecute }()
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	result, err := Chat(cfg, mockClient, "diagnose with repeat limit", false, false)
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	io.ReadAll(rOut)
+	io.ReadAll(rErr)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Final answer after repeat limit") {
+		t.Fatalf("expected repeat-limit flow to produce final answer, got %q", result)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected MCP tool to execute once before repeat limit, got %d", callCount)
+	}
+	if !strings.Contains(cfg.LastMCPStopReason, "repeat limit") {
+		t.Fatalf("expected stop reason to mention repeat limit, got %q", cfg.LastMCPStopReason)
+	}
+}
+
 // Helper functions for test configuration
 
 func CreateTestConfigWithHistory() *config.Config {

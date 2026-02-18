@@ -63,12 +63,6 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().IntVarP(&cfg.MCPToolTimeout, "mcp-tool-timeout", "", cfg.MCPToolTimeout, "Timeout in seconds for MCP tool calls")
 	cmd.Flags().BoolVarP(&cfg.MCPStrict, "mcp-strict", "", cfg.MCPStrict, "Strict MCP mode: do not fall back to local execution when MCP fails")
 	cmd.Flags().IntVarP(&cfg.MCPMaxToolCalls, "mcp-max-tool-calls", "", cfg.MCPMaxToolCalls, "Maximum iterative MCP tool-call rounds per model response")
-	cmd.Flags().IntVarP(&cfg.MCPMaxToolCallsTotal, "mcp-max-tool-calls-total", "", cfg.MCPMaxToolCallsTotal, "Maximum total MCP tool calls per user request (0 = unlimited)")
-	cmd.Flags().IntVarP(&cfg.MCPToolResultBudgetBytes, "mcp-tool-result-budget-bytes", "", cfg.MCPToolResultBudgetBytes, "Maximum cumulative MCP tool result bytes per user request (0 = unlimited)")
-	cmd.Flags().IntVarP(&cfg.MCPStallThreshold, "mcp-stall-threshold", "", cfg.MCPStallThreshold, "Consecutive identical MCP tool-call rounds before considering the loop stalled (0 = disabled)")
-	cmd.Flags().BoolVarP(&cfg.MCPLogEnabled, "mcp-log", "", cfg.MCPLogEnabled, "Enable logging of MCP server stdio to a file (env QU_MCP_LOG)")
-	cmd.Flags().StringVarP(&cfg.MCPLogFile, "mcp-log-file", "", cfg.MCPLogFile, "MCP stdio log file path (overwritten at start)")
-	cmd.Flags().StringVarP(&cfg.MCPLogFormat, "mcp-log-format", "", cfg.MCPLogFormat, "MCP log format: jsonl (default), text, or yaml (env QU_MCP_LOG_FORMAT)")
 	// Diagnostics flags
 	cmd.Flags().BoolVarP(&cfg.DisableBaseline, "disable-baseline", "", cfg.DisableBaseline, "Disable baseline diagnostic pack before LLM")
 	cmd.Flags().IntVarP(&cfg.EventsWindowMinutes, "events-window-minutes", "", cfg.EventsWindowMinutes, "Events time window in minutes for summarization")

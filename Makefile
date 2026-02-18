@@ -35,6 +35,9 @@ test-short:
 test-timeout:
 	go test -v -timeout=30s ./...
 
+test-agentic-loop: build
+	./scripts/test-agentic-loop.sh
+
 clean-test:
 	rm -f coverage.out coverage.html
 	rm -f *.test
@@ -127,4 +130,4 @@ check-network: build
 check-cluster: build
 	{ echo 'check cluster issues'; cat; } | kubectl quackops $(CHECK_ARGS)
 
-.PHONY: build build-benchmark run test test-unit test-chat test-interactive test-integration test-e2e test-mock test-streaming test-verbose test-coverage test-benchmark test-benchmark-unit test-benchmark-scenarios test-benchmark-metrics test-benchmark-reports test-benchmark-integration test-race test-short test-timeout clean-test build-release build-publish build-push install benchmark-install benchmark-simple benchmark-openai-models benchmark-comparison benchmark-comprehensive benchmark-dry-run benchmark-scenarios benchmark-help benchmark-version benchmark-export-config check-logs check-perf check-pods check-deployments check-ingress check-storage check-network check-cluster
+.PHONY: build build-benchmark run test test-unit test-chat test-interactive test-integration test-e2e test-mock test-streaming test-verbose test-coverage test-benchmark test-benchmark-unit test-benchmark-scenarios test-benchmark-metrics test-benchmark-reports test-benchmark-integration test-race test-short test-timeout test-agentic-loop clean-test build-release build-publish build-push install benchmark-install benchmark-simple benchmark-openai-models benchmark-comparison benchmark-comprehensive benchmark-dry-run benchmark-scenarios benchmark-help benchmark-version benchmark-export-config check-logs check-perf check-pods check-deployments check-ingress check-storage check-network check-cluster
