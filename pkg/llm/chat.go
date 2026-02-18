@@ -295,349 +295,35 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	resetMCPLoopMetrics(cfg)
 
 	if cfg.MCPClientEnabled {
-		toolCallCount := 0
-		maxToolCalls := cfg.MCPMaxToolCalls
-		maxToolCallsTotal := cfg.MCPMaxToolCallsTotal
-		maxToolResultBudgetBytes := cfg.MCPToolResultBudgetBytes
-		stallThreshold := cfg.MCPStallThreshold
-		totalToolCalls := 0
-		totalToolResultBytes := 0
-		lastToolPlanFingerprint := ""
-		repeatedToolPlanCount := 0
-		planFingerprintHistory := make([]string, 0, 16)
-		toolCallSignatureCounts := make(map[string]int)
-		uniqueToolSignatures := make(map[string]struct{})
-		toolResultCache := make(map[string]string)
-		toolArtifactCache := make(map[string]mcpArtifactRef)
-		seenEvidenceHashes := make(map[string]struct{})
-		cacheHitCount := 0
-		repeatedToolCalls := 0
-		noProgressRounds := 0
-		finalStopReason := ""
-		for {
-			if resp == nil || len(resp.Choices) == 0 {
-				break
-			}
-			choice := resp.Choices[0]
-
-			// Display content if available and not already displayed
-			if choice.Content != "" && !contentAlreadyDisplayed {
-				// Pause spinner while printing, then restore so progress stays visible at bottom.
-				printWithSpinnerPaused(spinnerManager, func() {
-					if !cfg.SuppressContentPrint {
-						printContentFormatted(cfg, choice.Content, false)
-					}
-				})
-				contentAlreadyDisplayed = true
-				displayedContent = choice.Content
-			}
-
-			if len(choice.ToolCalls) > 0 {
-				stopReason := ""
-				roundNewEvidence := 0
-
-				if maxToolCalls > 0 && toolCallCount >= maxToolCalls {
-					stopReason = fmt.Sprintf("maximum MCP tool-call iteration limit reached (%d)", maxToolCalls)
-				}
-
-				if stopReason == "" {
-					planFingerprint := toolCallPlanFingerprint(choice.ToolCalls)
-					if planFingerprint != "" {
-						if stallThreshold > 0 {
-							if planFingerprint == lastToolPlanFingerprint {
-								repeatedToolPlanCount++
-							} else {
-								lastToolPlanFingerprint = planFingerprint
-								repeatedToolPlanCount = 0
-							}
-							if repeatedToolPlanCount >= stallThreshold {
-								stopReason = fmt.Sprintf("MCP tool loop stalled: identical tool plan repeated %d times", repeatedToolPlanCount+1)
-							}
-						}
-						if stopReason == "" && cfg.MCPLoopCycleThreshold > 0 {
-							if cycleDistance, ok := detectToolPlanCycle(planFingerprintHistory, planFingerprint, cfg.MCPLoopCycleThreshold); ok {
-								stopReason = fmt.Sprintf("MCP tool loop cycling: plan repeated after %d round(s)", cycleDistance)
-							}
-						}
-						planFingerprintHistory = append(planFingerprintHistory, planFingerprint)
-						if len(planFingerprintHistory) > 16 {
-							planFingerprintHistory = planFingerprintHistory[len(planFingerprintHistory)-16:]
-						}
-					}
-				}
-
-				if stopReason == "" && maxToolCallsTotal > 0 {
-					remainingCalls := maxToolCallsTotal - totalToolCalls
-					if remainingCalls <= 0 {
-						stopReason = fmt.Sprintf("MCP total tool-call budget exhausted (%d)", maxToolCallsTotal)
-					} else if len(choice.ToolCalls) > remainingCalls {
-						logger.Log("warn", "MCP total tool-call budget allows only %d more call(s); truncating current tool-call batch", remainingCalls)
-						choice.ToolCalls = choice.ToolCalls[:remainingCalls]
-					}
-				}
-
-				if stopReason != "" {
-					logger.Log("warn", "%s", stopReason)
-					finalStopReason = stopReason
-					var ferr error
-					resp, responseContent, ferr = finalizeAfterToolLoopStop(cfg, spinnerManager, client, messages, generateOptions, message, outgoingTokens, maxRetries, startEscBreaker, stopReason)
-					if ferr != nil {
-						return "", ferr
-					}
-					if strings.TrimSpace(responseContent) == "" {
-						responseContent = fmt.Sprintf("Stopped MCP tool execution: %s", stopReason)
-					}
-					break
-				}
-
-				logger.Log("info", "Processing MCP tool call: iteration %d of %d...", toolCallCount+1, maxToolCalls)
-
-				// Append the assistant message containing tool_calls so providers can match tool_call_id
-				assistantParts := make([]llms.ContentPart, 0, len(choice.ToolCalls))
-				for i := range choice.ToolCalls {
-					tc := choice.ToolCalls[i]
-					if tc.FunctionCall == nil {
-						logger.Log("warn", "Tool call %s has no function call data", tc.ID)
-						continue
-					}
-					if tc.ID == "" {
-						tc.ID = fmt.Sprintf("tool_%s_%d", tc.FunctionCall.Name, time.Now().UnixNano())
-						logger.Log("debug", "Generated missing tool call ID: %s", tc.ID)
-					}
-					assistantParts = append(assistantParts, tc)
-					choice.ToolCalls[i] = tc
-				}
-				if len(assistantParts) > 0 {
-					assistantMsg := llms.MessageContent{Role: llms.ChatMessageTypeAI, Parts: assistantParts}
-					messages = append(messages, assistantMsg)
-				}
-
-				preparedCalls := make([]mcpPreparedCall, 0, len(choice.ToolCalls))
-				for _, tc := range choice.ToolCalls {
-					if maxToolCallsTotal > 0 && totalToolCalls+len(preparedCalls) >= maxToolCallsTotal {
-						stopReason = fmt.Sprintf("MCP total tool-call budget exhausted (%d)", maxToolCallsTotal)
-						logger.Log("warn", "%s", stopReason)
-						break
-					}
-					if maxToolResultBudgetBytes > 0 && totalToolResultBytes >= maxToolResultBudgetBytes {
-						stopReason = fmt.Sprintf("MCP tool-result budget exhausted (%d bytes)", maxToolResultBudgetBytes)
-						logger.Log("warn", "%s", stopReason)
-						break
-					}
-
-					logger.Log("debug", "Processing tool call: ID=%q, FunctionCall=%v", tc.ID, tc.FunctionCall != nil)
-					if tc.FunctionCall == nil {
-						logger.Log("warn", "Tool call %s has no function call data", tc.ID)
-						continue
-					}
-
-					var args map[string]any
-					if strings.TrimSpace(tc.FunctionCall.Arguments) != "" {
-						if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err != nil {
-							logger.Log("warn", "Failed to parse tool arguments for %s: %v", tc.FunctionCall.Name, err)
-							args = map[string]any{"raw": tc.FunctionCall.Arguments}
-						}
-					} else {
-						args = map[string]any{}
-					}
-
-					signature := toolCallSignature(tc.FunctionCall.Name, args)
-					if signature != "" {
-						if _, seen := uniqueToolSignatures[signature]; seen {
-							repeatedToolCalls++
-						} else {
-							uniqueToolSignatures[signature] = struct{}{}
-						}
-						if cfg.MCPToolRepeatLimit > 0 && toolCallSignatureCounts[signature] >= cfg.MCPToolRepeatLimit {
-							stopReason = fmt.Sprintf("MCP tool repeat limit reached for %s (%d)", tc.FunctionCall.Name, cfg.MCPToolRepeatLimit)
-							logger.Log("warn", "%s", stopReason)
-							break
-						}
-						toolCallSignatureCounts[signature]++
-					}
-
-					emitPlanProgress(PlanProgressEvent{
-						Kind:          PlanProgressToolStarted,
-						ToolName:      tc.FunctionCall.Name,
-						Iteration:     toolCallCount + 1,
-						MaxIterations: maxToolCalls,
-					})
-
-					preparedCalls = append(preparedCalls, mcpPreparedCall{
-						ToolCall:   tc,
-						Args:       args,
-						Signature:  signature,
-						Iteration:  toolCallCount + 1,
-						MaxRounds:  maxToolCalls,
-						CacheAllow: cfg.MCPCacheToolResults,
-					})
-				}
-
-				executedCalls, batchErr := executePreparedMCPCalls(cfg, spinnerManager, preparedCalls, toolResultCache)
-				if batchErr != nil {
-					if lib.IsUserCancel(batchErr) {
-						return "", lib.NewUserCancelError("canceled by user")
-					}
-					return "", batchErr
-				}
-
-				for _, executed := range executedCalls {
-					tc := executed.Prepared.ToolCall
-					args := executed.Prepared.Args
-					toolResult := executed.ToolResult
-					callErr := executed.CallErr
-					signature := executed.Prepared.Signature
-					if executed.CacheHit {
-						cacheHitCount++
-					}
-
-					if callErr != nil {
-						emitPlanProgress(PlanProgressEvent{
-							Kind:          PlanProgressToolFailed,
-							ToolName:      tc.FunctionCall.Name,
-							Iteration:     executed.Prepared.Iteration,
-							MaxIterations: executed.Prepared.MaxRounds,
-							Err:           callErr.Error(),
-						})
-					} else {
-						emitPlanProgress(PlanProgressEvent{
-							Kind:          PlanProgressToolCompleted,
-							ToolName:      tc.FunctionCall.Name,
-							Iteration:     executed.Prepared.Iteration,
-							MaxIterations: executed.Prepared.MaxRounds,
-						})
-					}
-
-					artifactPath := executed.ArtifactRef
-					artifactSHA := executed.ArtifactSHA
-					if signature != "" {
-						if cachedArtifact, ok := toolArtifactCache[signature]; ok && cachedArtifact.Path != "" {
-							artifactPath = cachedArtifact.Path
-							artifactSHA = cachedArtifact.SHA
-						}
-					}
-					if artifactPath == "" {
-						if persistedPath, persistedSHA, persistErr := persistToolResultArtifact(cfg, tc.FunctionCall.Name, args, toolResult); persistErr != nil {
-							logger.Log("warn", "Failed to persist MCP tool output artifact for %s: %v", tc.FunctionCall.Name, persistErr)
-						} else {
-							artifactPath = persistedPath
-							artifactSHA = persistedSHA
-							if signature != "" && artifactPath != "" {
-								toolArtifactCache[signature] = mcpArtifactRef{Path: artifactPath, SHA: artifactSHA}
-							}
-						}
-					}
-					displayToolResult := appendArtifactReference(toolResult, artifactPath, artifactSHA)
-
-					// Record tool call for history
-					sessionToolCalls = append(sessionToolCalls, config.ToolCallData{
-						Name:           tc.FunctionCall.Name,
-						Args:           args,
-						Result:         displayToolResult,
-						ResultBytes:    len(toolResult),
-						ArtifactPath:   artifactPath,
-						ArtifactSHA256: artifactSHA,
-					})
-
-					totalToolCalls++
-					totalToolResultBytes += len(toolResult)
-					if stopReason == "" && maxToolResultBudgetBytes > 0 && totalToolResultBytes >= maxToolResultBudgetBytes {
-						stopReason = fmt.Sprintf("MCP tool-result budget reached (%d/%d bytes)", totalToolResultBytes, maxToolResultBudgetBytes)
-						logger.Log("warn", "%s", stopReason)
-					}
-
-					evidenceHash := hashToolEvidence(tc.FunctionCall.Name, args, toolResult)
-					if _, seen := seenEvidenceHashes[evidenceHash]; !seen {
-						seenEvidenceHashes[evidenceHash] = struct{}{}
-						roundNewEvidence++
-					}
-
-					if stopReason != "" {
-						continue
-					}
-
-					modelToolResult := compactToolResultForModel(cfg, tc.FunctionCall.Name, toolResult, artifactPath, artifactSHA)
-
-					// Update response timestamp for throttling calculations after MCP tool execution
-					updateResponseTime()
-
-					var block string
-					if cfg.Verbose {
-						block = mcp.FormatToolCallVerbose(tc.FunctionCall.Name, args, displayToolResult)
-					} else {
-						block = mcp.FormatToolCallBlock(tc.FunctionCall.Name, args, displayToolResult)
-					}
-
-					if useStreaming {
-						bufferedToolBlocks = append(bufferedToolBlocks, block)
-					} else {
-						if shouldPrintToolBlocks(cfg, spinnerManager) {
-							printWithSpinnerPaused(spinnerManager, func() {
-								fmt.Fprint(os.Stdout, block)
-							})
-						}
-					}
-
-					toolMsg := llms.MessageContent{
-						Role: llms.ChatMessageTypeTool,
-						Parts: []llms.ContentPart{llms.ToolCallResponse{
-							ToolCallID: tc.ID,
-							Name:       tc.FunctionCall.Name,
-							Content:    modelToolResult,
-						}},
-					}
-					messages = append(messages, toolMsg)
-				}
-
-				toolCallCount++
-
-				if stopReason == "" && cfg.MCPNoProgressThreshold > 0 {
-					if roundNewEvidence == 0 {
-						noProgressRounds++
-						if noProgressRounds >= cfg.MCPNoProgressThreshold {
-							stopReason = fmt.Sprintf("MCP tool loop made no progress for %d round(s)", noProgressRounds)
-						}
-					} else {
-						noProgressRounds = 0
-					}
-				}
-
-				if stopReason != "" {
-					finalStopReason = stopReason
-					var ferr error
-					resp, responseContent, ferr = finalizeAfterToolLoopStop(cfg, spinnerManager, client, messages, generateOptions, message, outgoingTokens, maxRetries, startEscBreaker, stopReason)
-					if ferr != nil {
-						return "", ferr
-					}
-					if strings.TrimSpace(responseContent) == "" {
-						responseContent = fmt.Sprintf("Stopped MCP tool execution: %s", stopReason)
-					}
-					break
-				}
-
-				// Apply throttling delay for MCP tool call follow-up requests
-				if err := applyThrottleDelayWithSpinnerManager(cfg, spinnerManager); err != nil {
-					if lib.IsUserCancel(err) {
-						return "", lib.NewUserCancelError("canceled by user")
-					}
-					return "", err
-				}
-
-				var err error
-				resp, responseContent, err = generateWithRetries(cfg, spinnerManager, client, messages, generateOptions, message, outgoingTokens, maxRetries, startEscBreaker)
-				if err != nil {
-					return "", err
-				}
-				// Continue loop to check if model requests more tools
-				continue
-			}
-			break
+		processor := NewTurnProcessor(TurnProcessorParams{
+			Cfg:                   cfg,
+			SpinnerManager:        spinnerManager,
+			Client:                client,
+			Messages:              messages,
+			GenerateOptions:       generateOptions,
+			SpinnerMessage:        message,
+			OutgoingTokens:        outgoingTokens,
+			MaxRetries:            maxRetries,
+			StartEscBreaker:       startEscBreaker,
+			Response:              resp,
+			ResponseContent:       responseContent,
+			UseStreaming:          useStreaming,
+			ContentAlreadyShown:   contentAlreadyDisplayed,
+			DisplayedContent:      displayedContent,
+			BufferedToolBlocks:    bufferedToolBlocks,
+			SessionToolCalls:      sessionToolCalls,
+			StateTransitionHookFn: nil,
+		})
+		processorResult, procErr := processor.Process()
+		if procErr != nil {
+			return "", procErr
 		}
-		cfg.LastMCPToolCallsTotal = totalToolCalls
-		cfg.LastMCPUniqueToolCalls = len(uniqueToolSignatures)
-		cfg.LastMCPRepeatedToolCalls = repeatedToolCalls
-		cfg.LastMCPCacheHits = cacheHitCount
-		cfg.LastMCPStopReason = finalStopReason
+		resp = processorResult.Response
+		responseContent = processorResult.ResponseContent
+		bufferedToolBlocks = processorResult.BufferedToolBlocks
+		sessionToolCalls = processorResult.SessionToolCalls
+		contentAlreadyDisplayed = processorResult.ContentAlreadyShown
+		displayedContent = processorResult.DisplayedContent
 	}
 
 	if history && responseContent != "" {
@@ -718,8 +404,32 @@ func finalizeAfterToolLoopStop(
 	note := "Tool execution has been stopped due to policy/budget limits. " +
 		"Use available evidence to provide the best final answer. Do not request additional tool calls. " +
 		"Stop reason: " + strings.TrimSpace(stopReason)
-	finalMessages := append(messages, llms.TextParts(llms.ChatMessageTypeSystem, note))
+	finalMessages := prependOrMergeSystemNote(messages, note)
 	return generateWithRetries(cfg, spinnerManager, client, finalMessages, generateOptions, spinnerMessage, outgoingTokens, maxRetries, startEscBreaker)
+}
+
+func prependOrMergeSystemNote(messages []llms.MessageContent, note string) []llms.MessageContent {
+	trimmedNote := strings.TrimSpace(note)
+	if trimmedNote == "" {
+		return messages
+	}
+
+	if len(messages) > 0 && messages[0].Role == llms.ChatMessageTypeSystem {
+		updated := messages[0]
+		if len(updated.Parts) == 0 {
+			updated.Parts = []llms.ContentPart{llms.TextContent{Text: trimmedNote}}
+		} else {
+			updated.Parts = append(updated.Parts, llms.TextContent{Text: "\n\n" + trimmedNote})
+		}
+		out := append([]llms.MessageContent(nil), messages...)
+		out[0] = updated
+		return out
+	}
+
+	out := make([]llms.MessageContent, 0, len(messages)+1)
+	out = append(out, llms.TextParts(llms.ChatMessageTypeSystem, trimmedNote))
+	out = append(out, messages...)
+	return out
 }
 
 func executePreparedMCPCalls(
