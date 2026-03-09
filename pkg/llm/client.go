@@ -493,6 +493,38 @@ func CreateStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerMana
 	var meterDone chan struct{}
 	var mdWriter *formatter.StreamingWriter
 	var animWriter *animator.TypewriterWriter
+	var bufferedChunks [][]byte
+
+	deferSpinnerRelease := spinnerManager != nil && shouldLiveTokenSpinner(cfg)
+	spinnerTimeoutMs := 300
+	if cfg != nil && cfg.SpinnerTimeout > 0 {
+		spinnerTimeoutMs = cfg.SpinnerTimeout
+	}
+	spinnerHoldDuration := time.Duration(spinnerTimeoutMs*3) * time.Millisecond
+	if spinnerHoldDuration < 450*time.Millisecond {
+		spinnerHoldDuration = 450 * time.Millisecond
+	}
+	if spinnerHoldDuration > 1200*time.Millisecond {
+		spinnerHoldDuration = 1200 * time.Millisecond
+	}
+	var firstChunkAt time.Time
+
+	releaseBufferedOutput := func(outputWriter io.Writer) error {
+		if !deferSpinnerRelease {
+			return nil
+		}
+		deferSpinnerRelease = false
+		if onFirstChunk != nil {
+			onFirstChunk()
+		}
+		for _, chunk := range bufferedChunks {
+			if err := WriteNormalizedChunk(outputWriter, chunk); err != nil {
+				return err
+			}
+		}
+		bufferedChunks = nil
+		return nil
+	}
 
 	// Create writers based on configuration
 	var outputWriter io.Writer = os.Stdout
@@ -512,6 +544,11 @@ func CreateStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerMana
 
 	// Create cleanup function for the writers
 	cleanup := func() {
+		if deferSpinnerRelease && len(bufferedChunks) > 0 {
+			if err := releaseBufferedOutput(outputWriter); err != nil {
+				logger.Log("err", "Error releasing buffered streaming output: %v", err)
+			}
+		}
 		if meterTicker != nil {
 			close(meterDone)
 			meterTicker.Stop()
@@ -542,18 +579,37 @@ func CreateStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerMana
 
 	// Callback function for processing chunks
 	callback := func(ctx context.Context, chunk []byte) error {
-		// For streaming mode we do not use a spinner at all
-		if onFirstChunk != nil {
-			onFirstChunk()
-		}
-		// Token meter disabled during streaming to prevent ANSI interference
-
 		// Accumulate incoming tokens silently; if chunk is code block or markdown fence, still count
 		if meter != nil && len(chunk) > 0 {
 			delta := lib.EstimateTokens(cfg, string(chunk))
 			meter.AddIncomingSilent(delta)
 			// Keep prompt's last incoming tokens updated live
 			cfg.LastIncomingTokens += delta
+		} else if len(chunk) > 0 {
+			cfg.LastIncomingTokens += lib.EstimateTokens(cfg, string(chunk))
+		}
+
+		if spinnerManager != nil && shouldLiveTokenSpinner(cfg) && spinnerManager.IsActive() {
+			spinnerManager.Update(buildLLMSpinnerMessage(cfg, cfg.LastOutgoingTokens, cfg.LastIncomingTokens))
+		}
+
+		if deferSpinnerRelease {
+			if len(chunk) > 0 {
+				if firstChunkAt.IsZero() {
+					firstChunkAt = time.Now()
+				}
+				bufferedChunks = append(bufferedChunks, append([]byte(nil), chunk...))
+			}
+
+			if !firstChunkAt.IsZero() && time.Since(firstChunkAt) >= spinnerHoldDuration {
+				if err := releaseBufferedOutput(outputWriter); err != nil {
+					return err
+				}
+			}
+
+			if deferSpinnerRelease {
+				return nil
+			}
 		}
 
 		// Unified write path using the final outputWriter pipeline

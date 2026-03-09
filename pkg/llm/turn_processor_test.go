@@ -251,6 +251,76 @@ func TestTurnProcessor_StateTransitions_Finalize(t *testing.T) {
 	}
 }
 
+func TestTurnProcessor_IncomingTokensStayCumulativeAcrossToolRounds(t *testing.T) {
+	cfg := CreateTestConfig()
+	cfg.MCPClientEnabled = true
+	cfg.SkipWaits = true
+	cfg.MCPMaxToolCalls = 5
+	cfg.MCPMaxToolCallsTotal = 10
+	cfg.MCPToolResultBudgetBytes = 0
+	cfg.MCPStallThreshold = 0
+	cfg.MCPNoProgressThreshold = 0
+	cfg.LastIncomingTokens = 512
+
+	initialResp := &llms.ContentResponse{
+		Choices: []*llms.ContentChoice{
+			{
+				ToolCalls: []llms.ToolCall{
+					{ID: "tp-sum-1", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_pods", Arguments: `{"namespace":"default"}`}},
+				},
+			},
+		},
+	}
+
+	mockClient := NewMockLLMClient([]MockResponse{
+		{
+			Content: "",
+			ToolCalls: []llms.ToolCall{
+				{ID: "tp-sum-2", FunctionCall: &llms.FunctionCall{Name: "kubectl_get_events", Arguments: `{"namespace":"default"}`}},
+			},
+		},
+		{Content: "final response after second tool call"},
+	})
+
+	origExecute := executeMCPTool
+	t.Cleanup(func() { executeMCPTool = origExecute })
+	executeMCPTool = func(cfg *config.Config, toolName string, args map[string]any) (string, error) {
+		return "tool-output", nil
+	}
+
+	processor := NewTurnProcessor(TurnProcessorParams{
+		Cfg:             cfg,
+		Client:          mockClient,
+		Messages:        []llms.MessageContent{llms.TextParts(llms.ChatMessageTypeHuman, "diagnose")},
+		StartEscBreaker: func(cancel func()) func() { return func() {} },
+		Response:        initialResp,
+		UseStreaming:    false,
+	})
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	_, err := processor.Process()
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	io.ReadAll(rOut)
+	io.ReadAll(rErr)
+
+	if err != nil {
+		t.Fatalf("Process returned error: %v", err)
+	}
+	if cfg.LastIncomingTokens < 512 {
+		t.Fatalf("expected incoming tokens to stay cumulative, got %d", cfg.LastIncomingTokens)
+	}
+}
+
 func contentPartsToText(parts []llms.ContentPart) string {
 	var b strings.Builder
 	for _, part := range parts {

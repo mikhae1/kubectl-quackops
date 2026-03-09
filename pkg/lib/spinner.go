@@ -378,12 +378,7 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 			cfg := sm.cfg
 			sm.mutex.RUnlock()
 
-			elapsedStr := formatElapsed(time.Since(start))
-			tok := 0
-			if cfg != nil {
-				tok = cfg.LastOutgoingTokens
-			}
-			header := fmt.Sprintf("%s%s", msg, config.Colors.Dim.Sprintf(" (esc to interrupt · ctrl+t toggle details · %s · ↑ %s tokens)", elapsedStr, FormatCompactNumber(tok)))
+			header := formatSpinnerDetailHeader(msg, start, cfg)
 			if hidden || len(lines) == 0 {
 				return header
 			}
@@ -471,12 +466,29 @@ func (sm *SpinnerManager) Show(spinnerType SpinnerType, message string) context.
 
 // Update changes the message of the currently active spinner
 func (sm *SpinnerManager) Update(message string) {
-	sm.mutex.RLock()
-	defer sm.mutex.RUnlock()
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
 
 	if sm.isActive && sm.activeSpinner != nil && sm.context != nil {
-		sm.activeSpinner.Suffix = message
 		sm.context.Message = message
+		if !sm.isWaveAnimationActiveLocked() {
+			sm.activeSpinner.Suffix = message
+		}
+	}
+}
+
+func (sm *SpinnerManager) isWaveAnimationActiveLocked() bool {
+	if sm == nil || sm.cfg == nil || sm.cfg.DisableAnimation || sm.activeSpinner == nil || sm.context == nil {
+		return false
+	}
+	if sm.activeSpinner.dynamicSuffix != nil {
+		return false
+	}
+	switch sm.context.Type {
+	case SpinnerLLM, SpinnerDiagnostic, SpinnerGeneration, SpinnerRAG:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -529,12 +541,7 @@ func (sm *SpinnerManager) SetDetailsLines(lines []string) {
 				cfg := sm.cfg
 				sm.mutex.RUnlock()
 
-				elapsedStr := formatElapsed(time.Since(start))
-				tok := 0
-				if cfg != nil {
-					tok = cfg.LastOutgoingTokens
-				}
-				header := fmt.Sprintf("%s%s", msg, config.Colors.Dim.Sprintf(" (esc to interrupt · ctrl+t toggle details · %s · ↑ %s tokens)", elapsedStr, FormatCompactNumber(tok)))
+				header := formatSpinnerDetailHeader(msg, start, cfg)
 				if hidden || len(lines) == 0 {
 					return header
 				}
@@ -579,12 +586,7 @@ func (sm *SpinnerManager) ToggleDetailsHidden() {
 				cfg := sm.cfg
 				sm.mutex.RUnlock()
 
-				elapsedStr := formatElapsed(time.Since(start))
-				tok := 0
-				if cfg != nil {
-					tok = cfg.LastOutgoingTokens
-				}
-				header := fmt.Sprintf("%s%s", msg, config.Colors.Dim.Sprintf(" (esc to interrupt · ctrl+t toggle details · %s · ↑ %s tokens)", elapsedStr, FormatCompactNumber(tok)))
+				header := formatSpinnerDetailHeader(msg, start, cfg)
 				if hidden || len(lines) == 0 {
 					return header
 				}
@@ -617,6 +619,24 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%ds", s)
 }
 
+func formatSpinnerDetailHeader(msg string, start time.Time, cfg *config.Config) string {
+	elapsedStr := formatElapsed(time.Since(start))
+	outgoing := 0
+	incoming := 0
+	if cfg != nil {
+		outgoing = cfg.LastOutgoingTokens
+		incoming = cfg.LastIncomingTokens
+	}
+	return fmt.Sprintf("%s%s",
+		msg,
+		config.Colors.Dim.Sprintf(" (esc to interrupt · ctrl+t toggle details · %s · ↑ %s ↓ %s tokens)",
+			elapsedStr,
+			FormatCompactNumber(outgoing),
+			FormatCompactNumber(incoming),
+		),
+	)
+}
+
 // IsActive returns whether a spinner is currently active
 func (sm *SpinnerManager) IsActive() bool {
 	sm.mutex.RLock()
@@ -639,6 +659,10 @@ func (sm *SpinnerManager) GetContext() *SpinnerContext {
 // ShowWithCountdown displays a spinner with a countdown timer
 func (sm *SpinnerManager) ShowWithCountdown(spinnerType SpinnerType, baseMessage string, duration time.Duration) context.CancelFunc {
 	cancel := sm.Show(spinnerType, baseMessage)
+	ctx := sm.GetContext()
+	if ctx == nil || ctx.ctx == nil {
+		return cancel
+	}
 
 	// Start countdown in a separate goroutine
 	go func() {
@@ -648,7 +672,7 @@ func (sm *SpinnerManager) ShowWithCountdown(spinnerType SpinnerType, baseMessage
 
 		for {
 			select {
-			case <-sm.context.ctx.Done():
+			case <-ctx.ctx.Done():
 				return
 			case <-ticker.C:
 				elapsed := time.Since(start)
@@ -822,14 +846,15 @@ func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, i
 	}
 
 	const stopSeq = "(ESC to cancel)"
+	cleanInput := stripAnsiColors(message)
 
 	// Stop animation before token counts or explicit stop sequence
-	stopIdx := strings.Index(message, stopSeq)
+	stopIdx := strings.Index(cleanInput, stopSeq)
 
 	// Detect token count bracket e.g., " [↑5.2k tokens"
 	tokenIdx := -1
-	if tokensWord := strings.Index(message, " tokens"); tokensWord >= 0 {
-		if open := strings.LastIndex(message[:tokensWord], "["); open >= 0 {
+	if tokensWord := strings.Index(cleanInput, " tokens"); tokensWord >= 0 {
+		if open := strings.LastIndex(cleanInput[:tokensWord], "["); open >= 0 {
 			tokenIdx = open
 		}
 	}
@@ -843,12 +868,12 @@ func dualWaveFormat(message string, posLR int, posRL int, _ int) (string, int, i
 	)
 
 	if stopIdx >= 0 {
-		head := message[:stopIdx]
-		tail := message[stopIdx:]
-		cleanMessage = stripAnsiColors(head)
-		tailDimmed = config.Colors.Info.Sprint(stripAnsiColors(tail))
+		head := cleanInput[:stopIdx]
+		tail := cleanInput[stopIdx:]
+		cleanMessage = head
+		tailDimmed = config.Colors.Info.Sprint(tail)
 	} else {
-		cleanMessage = stripAnsiColors(message)
+		cleanMessage = cleanInput
 	}
 
 	runes := []rune(cleanMessage)

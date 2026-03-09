@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mikhae1/kubectl-quackops/pkg/config"
@@ -105,12 +106,27 @@ type TurnProcessor struct {
 	repeatedToolCalls       int
 	noProgressRounds        int
 	finalStopReason         string
+	tokenFlowMu             sync.Mutex
+	incomingTokens          int
+	displayedOutgoingTokens int
+	displayedIncomingTokens int
+	tokenAnimSeq            uint64
 }
 
 func NewTurnProcessor(params TurnProcessorParams) *TurnProcessor {
 	spinnerManager := params.SpinnerManager
 	if spinnerManager == nil && params.Cfg != nil {
 		spinnerManager = lib.GetSpinnerManager(params.Cfg)
+	}
+	incomingTokens := 0
+	displayedOutgoingTokens := params.OutgoingTokens
+	displayedIncomingTokens := 0
+	if params.Cfg != nil {
+		incomingTokens = params.Cfg.LastIncomingTokens
+		if params.Cfg.LastOutgoingTokens > 0 {
+			displayedOutgoingTokens = params.Cfg.LastOutgoingTokens
+		}
+		displayedIncomingTokens = params.Cfg.LastIncomingTokens
 	}
 
 	return &TurnProcessor{
@@ -142,6 +158,9 @@ func NewTurnProcessor(params TurnProcessorParams) *TurnProcessor {
 		toolResultCache:         make(map[string]string),
 		toolArtifactCache:       make(map[string]mcpArtifactRef),
 		seenEvidenceHashes:      make(map[string]struct{}),
+		incomingTokens:          incomingTokens,
+		displayedOutgoingTokens: displayedOutgoingTokens,
+		displayedIncomingTokens: displayedIncomingTokens,
 	}
 }
 
@@ -345,7 +364,7 @@ func (tp *TurnProcessor) handlePlanState() (TurnProcessorState, error) {
 }
 
 func (tp *TurnProcessor) handleExecuteState() (TurnProcessorState, error) {
-	executedCalls, batchErr := executePreparedMCPCalls(tp.cfg, tp.spinnerManager, tp.preparedCalls, tp.toolResultCache)
+	executedCalls, batchErr := executePreparedMCPCalls(tp.cfg, tp.spinnerManager, tp.preparedCalls, tp.toolResultCache, tp.trackToolTokenProgress)
 	if batchErr != nil {
 		if lib.IsUserCancel(batchErr) {
 			return TurnProcessorStateDone, lib.NewUserCancelError("canceled by user")
@@ -354,6 +373,35 @@ func (tp *TurnProcessor) handleExecuteState() (TurnProcessorState, error) {
 	}
 	tp.executedCalls = executedCalls
 	return TurnProcessorStateIntegrate, nil
+}
+
+func (tp *TurnProcessor) trackToolTokenProgress(executed mcpExecutedCall) {
+	if tp == nil || tp.cfg == nil {
+		return
+	}
+	toolName := ""
+	if executed.Prepared.ToolCall.FunctionCall != nil {
+		toolName = strings.TrimSpace(executed.Prepared.ToolCall.FunctionCall.Name)
+	}
+	modelToolResult := compactToolResultForModel(tp.cfg, toolName, executed.ToolResult, executed.ArtifactRef, executed.ArtifactSHA)
+	estimateMaterial := strings.TrimSpace(toolName + "\n" + modelToolResult)
+	if estimateMaterial == "" {
+		return
+	}
+	delta := lib.EstimateTokens(tp.cfg, estimateMaterial)
+	if delta <= 0 {
+		return
+	}
+
+	tp.tokenFlowMu.Lock()
+	tp.outgoingTokens += delta
+	message, shouldUpdate := tp.scheduleTokenCounterAnimationLocked()
+	spinnerManager := tp.spinnerManager
+	tp.tokenFlowMu.Unlock()
+
+	if shouldUpdate && message != "" && spinnerManager != nil && spinnerManager.IsActive() {
+		spinnerManager.Update(message)
+	}
 }
 
 func (tp *TurnProcessor) handleIntegrateState() (TurnProcessorState, error) {
@@ -491,6 +539,7 @@ func (tp *TurnProcessor) handleIntegrateState() (TurnProcessorState, error) {
 	}
 	tp.resp = resp
 	tp.response = responseContent
+	tp.trackModelIncomingTokens(responseContent)
 	return TurnProcessorStatePlan, nil
 }
 
@@ -515,10 +564,165 @@ func (tp *TurnProcessor) handleFinalizeState() (TurnProcessorState, error) {
 	}
 	tp.resp = resp
 	tp.response = responseContent
+	tp.trackModelIncomingTokens(responseContent)
 	if strings.TrimSpace(tp.response) == "" {
 		tp.response = fmt.Sprintf("Stopped MCP tool execution: %s", tp.finalStopReason)
 	}
 	return TurnProcessorStateDone, nil
+}
+
+func (tp *TurnProcessor) trackModelIncomingTokens(responseContent string) {
+	if tp == nil || tp.cfg == nil {
+		return
+	}
+	delta := lib.EstimateTokens(tp.cfg, responseContent)
+	if delta < 0 {
+		delta = 0
+	}
+
+	tp.tokenFlowMu.Lock()
+	tp.incomingTokens += delta
+	message, shouldUpdate := tp.scheduleTokenCounterAnimationLocked()
+	spinnerManager := tp.spinnerManager
+	tp.tokenFlowMu.Unlock()
+
+	if shouldUpdate && message != "" && spinnerManager != nil && spinnerManager.IsActive() {
+		spinnerManager.Update(message)
+	}
+}
+
+func (tp *TurnProcessor) scheduleTokenCounterAnimationLocked() (string, bool) {
+	if tp == nil || tp.cfg == nil {
+		return "", false
+	}
+
+	targetOut := tp.outgoingTokens
+	targetIn := tp.incomingTokens
+	if targetOut < 0 {
+		targetOut = 0
+	}
+	if targetIn < 0 {
+		targetIn = 0
+	}
+
+	spinnerActive := tp.spinnerManager != nil && tp.spinnerManager.IsActive()
+	liveSpinner := shouldLiveTokenSpinner(tp.cfg)
+
+	snapToTarget := func() (string, bool) {
+		tp.tokenAnimSeq++
+		tp.displayedOutgoingTokens = targetOut
+		tp.displayedIncomingTokens = targetIn
+		tp.cfg.LastOutgoingTokens = targetOut
+		tp.cfg.LastIncomingTokens = targetIn
+		if !liveSpinner {
+			return "", false
+		}
+		msg := buildLLMSpinnerMessage(tp.cfg, targetOut, targetIn)
+		tp.spinnerMessage = msg
+		return msg, spinnerActive
+	}
+
+	if !spinnerActive || !liveSpinner {
+		return snapToTarget()
+	}
+
+	startOut := tp.displayedOutgoingTokens
+	startIn := tp.displayedIncomingTokens
+
+	if (targetOut <= startOut && targetIn <= startIn) || (targetOut == startOut && targetIn == startIn) {
+		return snapToTarget()
+	}
+
+	tokenDelta := maxInt(absInt(targetOut-startOut), absInt(targetIn-startIn))
+	steps := 10 + tokenDelta/1200
+	if steps < 10 {
+		steps = 10
+	}
+	if steps > 24 {
+		steps = 24
+	}
+
+	baseMs := tp.cfg.SpinnerTimeout
+	if baseMs <= 0 {
+		baseMs = 300
+	}
+	duration := time.Duration(baseMs*2) * time.Millisecond
+	if duration < 250*time.Millisecond {
+		duration = 250 * time.Millisecond
+	}
+	if duration > 1100*time.Millisecond {
+		duration = 1100 * time.Millisecond
+	}
+
+	// Re-assert currently displayed values immediately so transient provider-side
+	// per-call token resets do not flash in the spinner before animation ticks.
+	tp.cfg.LastOutgoingTokens = startOut
+	tp.cfg.LastIncomingTokens = startIn
+	msg := buildLLMSpinnerMessage(tp.cfg, startOut, startIn)
+	tp.spinnerMessage = msg
+
+	tp.tokenAnimSeq++
+	seq := tp.tokenAnimSeq
+	go tp.runTokenCounterAnimation(seq, startOut, startIn, targetOut, targetIn, steps, duration)
+
+	return msg, true
+}
+
+func (tp *TurnProcessor) runTokenCounterAnimation(seq uint64, startOut int, startIn int, targetOut int, targetIn int, steps int, duration time.Duration) {
+	if tp == nil || steps <= 0 {
+		return
+	}
+	tick := duration / time.Duration(steps)
+	if tick < 35*time.Millisecond {
+		tick = 35 * time.Millisecond
+	}
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+
+	for i := 1; i <= steps; i++ {
+		<-ticker.C
+
+		tp.tokenFlowMu.Lock()
+		if seq != tp.tokenAnimSeq {
+			tp.tokenFlowMu.Unlock()
+			return
+		}
+
+		curOut := startOut + ((targetOut-startOut)*i)/steps
+		curIn := startIn + ((targetIn-startIn)*i)/steps
+		tp.displayedOutgoingTokens = curOut
+		tp.displayedIncomingTokens = curIn
+		if tp.cfg != nil {
+			tp.cfg.LastOutgoingTokens = curOut
+			tp.cfg.LastIncomingTokens = curIn
+		}
+
+		msg := ""
+		active := tp.spinnerManager != nil && tp.spinnerManager.IsActive()
+		if tp.cfg != nil && shouldLiveTokenSpinner(tp.cfg) {
+			msg = buildLLMSpinnerMessage(tp.cfg, curOut, curIn)
+			tp.spinnerMessage = msg
+		}
+		tp.tokenFlowMu.Unlock()
+
+		if msg != "" && active {
+			tp.spinnerManager.Update(msg)
+		}
+	}
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (tp *TurnProcessor) updateMetrics() {

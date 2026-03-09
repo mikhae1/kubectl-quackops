@@ -22,6 +22,38 @@ import (
 
 var executeMCPTool = mcp.ExecuteTool
 
+func shouldLiveTokenSpinner(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return strings.TrimSpace(cfg.SpinnerMessageOverride) == ""
+}
+
+func buildLLMSpinnerMessage(cfg *config.Config, outgoingTokens int, incomingTokens int) string {
+	provider := ""
+	model := ""
+	if cfg != nil {
+		provider = cfg.Provider
+		model = cfg.Model
+	}
+
+	tokenFlow := fmt.Sprintf("%s%s %s%s tokens",
+		config.Colors.TokenUp.Sprint("↑"),
+		config.Colors.TokenOut.Sprint(lib.FormatCompactNumber(outgoingTokens)),
+		config.Colors.TokenDown.Sprint("↓"),
+		config.Colors.TokenIn.Sprint(lib.FormatCompactNumber(incomingTokens)),
+	)
+
+	return fmt.Sprintf("Waiting for %s/%s... %s%s%s%s",
+		config.Colors.Provider.Sprint(provider),
+		config.Colors.Model.Sprint(model),
+		config.Colors.Output.Sprint("["),
+		tokenFlow,
+		config.Colors.Output.Sprint("]"),
+		config.Colors.Dim.Sprint(" (ESC to cancel)"),
+	)
+}
+
 type mcpPreparedCall struct {
 	ToolCall   llms.ToolCall
 	Args       map[string]any
@@ -174,11 +206,8 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	}
 
 	spinnerManager := lib.GetSpinnerManager(cfg)
-	provider := cfg.Provider
-	model := cfg.Model
-	message := fmt.Sprintf("Waiting for %s/%s... %s %s"+config.Colors.Dim.Sprint(" (ESC to cancel)"),
-		config.Colors.Provider.Sprint(provider), config.Colors.Model.Sprint(model), config.Colors.Output.Sprint("[")+config.Colors.Label.Sprint("↑"+lib.FormatCompactNumber(outgoingTokens)), config.Colors.Output.Sprint("tokens]"))
-	if strings.TrimSpace(cfg.SpinnerMessageOverride) != "" {
+	message := buildLLMSpinnerMessage(cfg, outgoingTokens, 0)
+	if !shouldLiveTokenSpinner(cfg) {
 		message = strings.TrimSpace(cfg.SpinnerMessageOverride)
 	}
 	cancelSpinner := spinnerManager.ShowLLM(message)
@@ -437,9 +466,14 @@ func executePreparedMCPCalls(
 	spinnerManager *lib.SpinnerManager,
 	prepared []mcpPreparedCall,
 	toolResultCache map[string]string,
+	onExecuted ...func(mcpExecutedCall),
 ) ([]mcpExecutedCall, error) {
 	if len(prepared) == 0 {
 		return nil, nil
+	}
+	var executedHook func(mcpExecutedCall)
+	if len(onExecuted) > 0 {
+		executedHook = onExecuted[0]
 	}
 	results := make([]mcpExecutedCall, len(prepared))
 	signatureLeader := make(map[string]int, len(prepared))
@@ -461,7 +495,7 @@ func executePreparedMCPCalls(
 	for _, idx := range uniqueIndices {
 		uniquePrepared = append(uniquePrepared, prepared[idx])
 	}
-	uniqueResults, err := executePreparedMCPCallsUnique(cfg, spinnerManager, uniquePrepared, toolResultCache)
+	uniqueResults, err := executePreparedMCPCallsUnique(cfg, spinnerManager, uniquePrepared, toolResultCache, executedHook)
 	if err != nil {
 		return nil, err
 	}
@@ -474,6 +508,9 @@ func executePreparedMCPCalls(
 		dedupedResult.Prepared = prepared[duplicateIdx]
 		dedupedResult.CacheHit = true
 		results[duplicateIdx] = dedupedResult
+		if executedHook != nil {
+			executedHook(dedupedResult)
+		}
 	}
 	if len(duplicateOf) > 0 {
 		logger.Log("debug", "MCP round deduplicated %d repeated tool call(s)", len(duplicateOf))
@@ -486,6 +523,7 @@ func executePreparedMCPCallsUnique(
 	spinnerManager *lib.SpinnerManager,
 	prepared []mcpPreparedCall,
 	toolResultCache map[string]string,
+	executedHook func(mcpExecutedCall),
 ) ([]mcpExecutedCall, error) {
 	if len(prepared) == 0 {
 		return nil, nil
@@ -507,6 +545,9 @@ func executePreparedMCPCallsUnique(
 				return nil, err
 			}
 			results[idx] = executed
+			if executedHook != nil {
+				executedHook(executed)
+			}
 		}
 		return results, nil
 	}
@@ -538,6 +579,9 @@ func executePreparedMCPCallsUnique(
 					}
 				}
 				results[idx] = executed
+				if executedHook != nil {
+					executedHook(executed)
+				}
 			}
 		}()
 	}
