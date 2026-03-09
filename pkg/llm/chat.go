@@ -198,6 +198,7 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	outgoingTokens := lib.CountTokensWithConfig(cfg, userPrompt, cfg.ChatMessages)
 	cfg.LastOutgoingTokens = outgoingTokens
 	cfg.LastIncomingTokens = 0
+	cfg.SessionOutgoingTokens += outgoingTokens
 
 	var tokenMeter *lib.TokenMeter
 	// Strict MCP prints final output non-streaming; skip live meter to avoid extra counter line.
@@ -408,12 +409,23 @@ func ChatWithSystemPrompt(cfg *config.Config, client llms.Model, systemPrompt st
 	}
 
 	// Always record the session event
-	cfg.SessionHistory = append(cfg.SessionHistory, config.SessionEvent{
+	event := config.SessionEvent{
 		Timestamp:  time.Now(),
 		UserPrompt: userPrompt,
 		ToolCalls:  sessionToolCalls,
 		AIResponse: responseContent,
-	})
+	}
+	if n := len(cfg.SessionHistory); n > 0 {
+		last := cfg.SessionHistory[n-1]
+		if strings.TrimSpace(last.UserPrompt) == strings.TrimSpace(userPrompt) && strings.TrimSpace(last.AIResponse) == "" && len(last.ToolCalls) == 0 {
+			event.Timestamp = last.Timestamp
+			cfg.SessionHistory[n-1] = event
+		} else {
+			cfg.SessionHistory = append(cfg.SessionHistory, event)
+		}
+	} else {
+		cfg.SessionHistory = append(cfg.SessionHistory, event)
+	}
 
 	return responseContent, nil
 }
@@ -1101,6 +1113,7 @@ func generateWithRetries(
 		if resp != nil && len(resp.Choices) > 0 {
 			responseContent = resp.Choices[0].Content
 			cfg.LastIncomingTokens = lib.EstimateTokens(cfg, responseContent)
+			cfg.SessionIncomingTokens += cfg.LastIncomingTokens
 		}
 
 		hasToolCalls := resp != nil && len(resp.Choices) > 0 && len(resp.Choices[0].ToolCalls) > 0

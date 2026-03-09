@@ -85,6 +85,7 @@ func NewRootCmd(streams genericiooptions.IOStreams) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(envCmd)
+	cmd.AddCommand(newSessionCommand(cfg))
 
 	return cmd
 }
@@ -145,7 +146,11 @@ func startChatSession(cfg *config.Config, args []string) error {
 	if len(args) > 0 {
 		userPrompt := strings.TrimSpace(args[0])
 		if userPrompt != "" {
-			return processUserPrompt(cfg, userPrompt, "", 1)
+			if !strings.HasPrefix(userPrompt, cfg.CommandPrefix) && !strings.HasPrefix(userPrompt, "/") {
+				cfg.LastTextPrompt = userPrompt
+				cfg.UserMsgCount++
+			}
+			return processUserPrompt(cfg, userPrompt, cfg.LastTextPrompt, cfg.UserMsgCount)
 		}
 	}
 
@@ -332,7 +337,11 @@ func startChatSession(cfg *config.Config, args []string) error {
 				rl.Close()
 			}
 		}
-		lib.CleanupAndExit(cfg, lib.CleanupOptions{Message: message, ExitCode: exitCode, CleanupFunc: cleanupFunc})
+		lib.CleanupAndExit(cfg, lib.CleanupOptions{
+			Message:     exitMessageWithSessionID(message, cfg),
+			ExitCode:    exitCode,
+			CleanupFunc: cleanupFunc,
+		})
 	}
 
 	defer cleanupAndExit("", -1) // just cleanup
@@ -362,8 +371,6 @@ func startChatSession(cfg *config.Config, args []string) error {
 
 	// Allow cancelling any in-progress prompt counter animation before starting a new one
 	var promptAnimStop chan struct{}
-	var lastTextPrompt string
-	var userMsgCount int
 	for {
 		userPrompt, err := rl.ReadLine()
 		if err != nil { // io.EOF is returned on Ctrl-C
@@ -384,9 +391,12 @@ func startChatSession(cfg *config.Config, args []string) error {
 				if action == "clear" {
 					lastDisplayedOutgoingTokens = 0
 					lastDisplayedIncomingTokens = 0
-					lastTextPrompt = ""
-					userMsgCount = 0
 					lib.CoolClearEffect(cfg)
+					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
+					rl.Refresh()
+				} else if action == "reset" || action == "session_loaded" {
+					lastDisplayedOutgoingTokens = cfg.LastOutgoingTokens
+					lastDisplayedIncomingTokens = cfg.LastIncomingTokens
 					rl.SetPrompt(lib.FormatContextPrompt(cfg, false))
 					rl.Refresh()
 				} else if action == "theme" {
@@ -406,8 +416,8 @@ func startChatSession(cfg *config.Config, args []string) error {
 		// Do not save raw input here. History saving is handled after processing to apply rules.
 
 		if !strings.HasPrefix(userPrompt, cfg.CommandPrefix) {
-			lastTextPrompt = userPrompt
-			userMsgCount++
+			cfg.LastTextPrompt = userPrompt
+			cfg.UserMsgCount++
 		}
 
 		logger.Log("info", "Processing prompt (editMode=%t, safeMode=%t, baseline=%t)", cfg.EditMode, cfg.SafeMode, !cfg.DisableBaseline)
@@ -421,54 +431,14 @@ func startChatSession(cfg *config.Config, args []string) error {
 		wasPrefixed := strings.HasPrefix(originalUserPrompt, prefix)
 		wasCommand := wasEditMode || wasPrefixed
 
-		err = processUserPrompt(cfg, userPrompt, lastTextPrompt, userMsgCount)
-		if err != nil {
-			return err
-		}
-
-		// Unified history saving: store all prompts and commands with prefixes in main history file
-		// Also save MCP prompts with queries (e.g., "/code-mode check issues")
-		isMCPPromptQuery := false
-		if cfg.MCPClientEnabled && strings.HasPrefix(originalUserPrompt, "/") {
-			_, query, isPrompt := completer.IsMCPPrompt(cfg, originalUserPrompt)
-			isMCPPromptQuery = isPrompt && query != ""
-		}
-		isPlanPrompt := false
-		if strings.Contains(strings.ToLower(originalUserPrompt), "/plan") {
-			_, isPlanPrompt = findInlinePlanWithQuery(originalUserPrompt)
-		}
-		if (!strings.HasPrefix(originalUserPrompt, "/") || isMCPPromptQuery || isPlanPrompt) && !cfg.DisableHistory && cfg.HistoryFile != "" {
-			var entryToSave string
-
-			if wasCommand {
-				// For commands, check if successful before saving
-				success := false
-				if len(cfg.StoredUserCmdResults) > 0 {
-					last := cfg.StoredUserCmdResults[len(cfg.StoredUserCmdResults)-1]
-					success = (last.Err == nil) && (strings.TrimSpace(last.Cmd) != "")
-				}
-				if success {
-					// Save command with prefix to main history file
-					entryToSave = originalUserPrompt
-					if !strings.HasPrefix(entryToSave, prefix) {
-						entryToSave = prefix + " " + entryToSave
-					}
-				}
-			} else {
-				// Save non-command prompts as-is
-				entryToSave = originalUserPrompt
+		// Save prompt/command to history immediately so it's available before any LLM response.
+		if !cfg.DisableHistory && cfg.HistoryFile != "" && shouldPersistInputToHistory(cfg, originalUserPrompt) {
+			entryToSave := originalUserPrompt
+			if wasCommand && !strings.HasPrefix(entryToSave, prefix) {
+				entryToSave = prefix + " " + entryToSave
 			}
-
-			if entryToSave != "" {
-				// Only save to main history file - don't save to readline session to avoid duplicates
-				f, err := os.OpenFile(cfg.HistoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-				if err == nil {
-					_, _ = f.WriteString(entryToSave + "\n")
-					_ = f.Close()
-
-					// Reload the appropriate history to include the new entry
-					// Note: If we're in edit mode, we still reload edit mode to show the new command
-					// When user switches to normal mode later, they'll see the prefixed version
+			if strings.TrimSpace(entryToSave) != "" {
+				if err := appendHistoryEntry(cfg.HistoryFile, entryToSave); err == nil {
 					if cfg.EditMode {
 						switchToEditMode()
 					} else {
@@ -476,6 +446,11 @@ func startChatSession(cfg *config.Config, args []string) error {
 					}
 				}
 			}
+		}
+
+		err = processUserPrompt(cfg, userPrompt, cfg.LastTextPrompt, cfg.UserMsgCount)
+		if err != nil {
+			return err
 		}
 
 		// Update prompt after processing
@@ -509,10 +484,14 @@ func startChatSession(cfg *config.Config, args []string) error {
 //   - handled: true if this slash command was fully processed here
 //   - action: hint for the caller when not handled (e.g., "prompt_query", "plan")
 func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
-	lowered := strings.ToLower(strings.TrimSpace(userPrompt))
+	trimmed := strings.TrimSpace(userPrompt)
+	lowered := strings.ToLower(trimmed)
 	if !strings.HasPrefix(lowered, "/") {
 		return false, ""
 	}
+	command, commandArgs := splitSlashCommand(trimmed)
+	command = strings.ToLower(command)
+	commandArgs = strings.TrimSpace(commandArgs)
 
 	body := config.Colors.AccentAlt
 	accent := config.Colors.Accent
@@ -521,11 +500,11 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 	warn := config.Colors.Warn
 
 	// /plan is handled by processUserPrompt so it can reuse RAG and plan execution.
-	if lowered == "/plan" || strings.HasPrefix(lowered, "/plan ") || strings.HasPrefix(lowered, "/plan\t") {
+	if command == "/plan" {
 		return false, "plan"
 	}
 
-	switch lowered {
+	switch command {
 	case "/help", "/h", "/?":
 		printInlineHelp(cfg)
 		return true, "help"
@@ -533,19 +512,37 @@ func handleSlashCommand(cfg *config.Config, userPrompt string) (bool, string) {
 		fmt.Println(info.Sprint(version.Version))
 		return true, "version"
 	case "/reset":
-		cfg.ChatMessages = nil
-		cfg.StoredUserCmdResults = nil
-		cfg.SelectedPrompt = ""
+		resetConversationContext(cfg)
+		if err := persistCurrentSession(cfg); err != nil {
+			fmt.Printf("%s %v\n", warn.Sprint("Could not save session state:"), err)
+		}
 		fmt.Println(body.Sprint("Context reset"))
 		return true, "reset"
-	case "/clear":
-		cfg.ChatMessages = nil
-		cfg.StoredUserCmdResults = nil
-		cfg.LastOutgoingTokens = 0
-		cfg.LastIncomingTokens = 0
-		cfg.SelectedPrompt = ""
-		fmt.Println(accent.Sprint("🦆 Context cleared!"))
+	case "/new", "/clear":
+		startFreshSession(cfg)
+		fmt.Println(accent.Sprint("🦆 Started a new session!"))
 		return true, "clear"
+	case "/sessions":
+		loaded, err := promptForSessionSelection(cfg)
+		if err != nil {
+			fmt.Printf("%s %v\n", warn.Sprint("Could not load session:"), err)
+			return true, "sessions"
+		}
+		if loaded {
+			return true, "session_loaded"
+		}
+		return true, "sessions"
+	case "/resume", "/continue":
+		if commandArgs == "" {
+			fmt.Printf("%s %s\n", warn.Sprint("Usage:"), body.Sprint(command+" <session-id>"))
+			return true, "sessions"
+		}
+		if err := loadSavedSession(cfg, commandArgs); err != nil {
+			fmt.Printf("%s %v\n", warn.Sprint("Could not load session:"), err)
+			return true, "sessions"
+		}
+		fmt.Printf("%s %s\n", info.Sprint("Loaded session"), accent.Sprint(commandArgs))
+		return true, "session_loaded"
 	case "/mcp":
 		if cfg.MCPClientEnabled {
 			printMCPDetails(cfg)
@@ -1205,6 +1202,7 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 			// In edit mode, normalize to "<prefix> <cmd>" so it is stored with prefix in history
 			effectiveCmd = cfg.CommandPrefix + " " + userPrompt
 		}
+		recordPendingSessionPrompt(cfg, userPrompt)
 		// Execute the command and store the result; do not run LLM
 		cmdResults, err := exec.ExecDiagCmds(cfg, []string{effectiveCmd})
 		if err != nil {
@@ -1212,6 +1210,9 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		}
 		if len(cmdResults) > 0 {
 			cfg.StoredUserCmdResults = append(cfg.StoredUserCmdResults, cmdResults...)
+			if err := persistCurrentSession(cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "%s %v\n", config.Colors.Warn.Sprint("Warning: could not save session:"), err)
+			}
 		}
 		return nil
 	}
@@ -1266,6 +1267,8 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 		fmt.Fprintln(os.Stderr, "Processing prompt (verbose mode)")
 	}
 
+	recordPendingSessionPrompt(cfg, userPrompt)
+
 	systemContent, userContent := mb.Build(cfg)
 	_, err = llm.RequestWithSystem(cfg, systemContent, userContent, true, true)
 	if err != nil {
@@ -1288,13 +1291,17 @@ func processUserPrompt(cfg *config.Config, userPrompt string, lastTextPrompt str
 	// Clear prompt server filter after LLM request completes
 	cfg.MCPPromptServer = ""
 
+	if err := persistCurrentSession(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "%s %v\n", config.Colors.Warn.Sprint("Warning: could not save session:"), err)
+	}
+
 	return nil
 }
 
 func findInlinePlanWithQuery(userPrompt string) (string, bool) {
 	re := regexp.MustCompile(`(?i)(^|\s)/plan(\s+|$)`)
 	loc := re.FindStringSubmatchIndex(userPrompt)
-	if loc == nil || len(loc) < 2 {
+	if len(loc) < 2 {
 		return "", false
 	}
 	after := strings.TrimSpace(userPrompt[loc[1]:])
@@ -1303,6 +1310,55 @@ func findInlinePlanWithQuery(userPrompt string) (string, bool) {
 	}
 	without := strings.TrimSpace(userPrompt[:loc[0]] + userPrompt[loc[1]:])
 	return without, true
+}
+
+func shouldPersistInputToHistory(cfg *config.Config, input string) bool {
+	if cfg == nil {
+		return false
+	}
+	if !strings.HasPrefix(input, "/") {
+		return true
+	}
+	if cfg.MCPClientEnabled {
+		_, query, isPrompt := completer.IsMCPPrompt(cfg, input)
+		if isPrompt && strings.TrimSpace(query) != "" {
+			return true
+		}
+	}
+	if strings.Contains(strings.ToLower(input), "/plan") {
+		_, isPlanPrompt := findInlinePlanWithQuery(input)
+		if isPlanPrompt {
+			return true
+		}
+	}
+	return false
+}
+
+func appendHistoryEntry(path string, entry string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(entry + "\n")
+	return err
+}
+
+func recordPendingSessionPrompt(cfg *config.Config, userPrompt string) {
+	if cfg == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(userPrompt)
+	if trimmed == "" {
+		return
+	}
+	cfg.SessionHistory = append(cfg.SessionHistory, config.SessionEvent{
+		Timestamp:  time.Now(),
+		UserPrompt: trimmed,
+	})
+	if err := persistCurrentSession(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "%s %v\n", config.Colors.Warn.Sprint("Warning: could not save session:"), err)
+	}
 }
 
 // printMCPDetails displays detailed MCP information with proper formatting

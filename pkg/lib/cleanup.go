@@ -26,7 +26,7 @@ func CleanupAndExit(cfg *config.Config, opts CleanupOptions) {
 	fmt.Print("\033[?25h")
 
 	// Show cost estimation only for successful normal exits
-	if opts.ExitCode == 0 && cfg != nil && (cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0) {
+	if opts.ExitCode == 0 && cfg != nil && (cfg.SessionOutgoingTokens > 0 || cfg.SessionIncomingTokens > 0 || cfg.LastOutgoingTokens > 0 || cfg.LastIncomingTokens > 0) {
 		showCostEstimation(cfg)
 	}
 
@@ -64,9 +64,16 @@ func showCostEstimation(cfg *config.Config) {
 		return
 	}
 
+	inputTokens := cfg.SessionOutgoingTokens
+	outputTokens := cfg.SessionIncomingTokens
+	if inputTokens == 0 && outputTokens == 0 {
+		inputTokens = cfg.LastOutgoingTokens
+		outputTokens = cfg.LastIncomingTokens
+	}
+
 	summary := CalculateTotalCost(
-		cfg.LastOutgoingTokens,
-		cfg.LastIncomingTokens,
+		inputTokens,
+		outputTokens,
 		currentModel.InputPrice,
 		currentModel.OutputPrice,
 		cfg.Model,

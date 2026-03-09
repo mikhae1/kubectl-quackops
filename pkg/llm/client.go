@@ -585,8 +585,11 @@ func CreateStreamingCallback(cfg *config.Config, spinnerManager *lib.SpinnerMana
 			meter.AddIncomingSilent(delta)
 			// Keep prompt's last incoming tokens updated live
 			cfg.LastIncomingTokens += delta
+			cfg.SessionIncomingTokens += delta
 		} else if len(chunk) > 0 {
-			cfg.LastIncomingTokens += lib.EstimateTokens(cfg, string(chunk))
+			delta := lib.EstimateTokens(cfg, string(chunk))
+			cfg.LastIncomingTokens += delta
+			cfg.SessionIncomingTokens += delta
 		}
 
 		if spinnerManager != nil && shouldLiveTokenSpinner(cfg) && spinnerManager.IsActive() {

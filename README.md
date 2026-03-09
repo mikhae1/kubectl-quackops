@@ -441,6 +441,8 @@ QU_MCP_CLIENT=true
 | `QU_MAX_COMPLETIONS` | int | `50` | Maximum number of completions to display |
 | `QU_HISTORY_FILE` | string | `~/.quackops/history` | Path to the history file |
 | `QU_DISABLE_HISTORY` | bool | `false` | Disable storing prompt history in a file |
+| `QU_SESSIONS_DIR` | string | `~/.quackops/sessions` | Directory used to persist saved chat sessions |
+| `QU_MAX_SAVED_SESSIONS` | int | `20` | Maximum number of persisted sessions to keep (`0` = unlimited, oldest pruned first) |
 | `QU_KUBECTL_BINARY` | string | `kubectl` | Path to the kubectl binary |
 | `QU_COMMAND_PREFIX` | string | `$` | Single-character prefix to enter command mode and mark shell commands |
 | `QU_THEME` | string | `dracula` | UI theme (`dracula`, `cyanide`); env overrides config |

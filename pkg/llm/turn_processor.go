@@ -579,6 +579,7 @@ func (tp *TurnProcessor) trackModelIncomingTokens(responseContent string) {
 	if delta < 0 {
 		delta = 0
 	}
+	tp.cfg.SessionIncomingTokens += delta
 
 	tp.tokenFlowMu.Lock()
 	tp.incomingTokens += delta

@@ -84,6 +84,8 @@ type Config struct {
 	MaxCompletions        int
 	HistoryFile           string
 	DisableHistory        bool
+	SessionsDir           string
+	MaxSavedSessions      int
 	KubectlBinaryPath     string
 	Theme                 string
 
@@ -129,10 +131,20 @@ type Config struct {
 	// Token accounting for last LLM exchange (shown in prompt)
 	LastOutgoingTokens int
 	LastIncomingTokens int
+	// Cumulative token accounting for the active session.
+	SessionOutgoingTokens int
+	SessionIncomingTokens int
 
 	// EditMode indicates the persistent shell edit mode toggled by '!'
-	EditMode      bool
-	CommandPrefix string
+	EditMode       bool
+	CommandPrefix  string
+	LastTextPrompt string
+	UserMsgCount   int
+
+	// CurrentSessionID tracks the persisted session currently loaded into memory.
+	CurrentSessionID string
+	// CurrentSessionCreatedAt preserves the original creation time across saves.
+	CurrentSessionCreatedAt time.Time
 
 	// SelectedPrompt tracks the currently selected MCP prompt for UI highlighting
 	// Format: prompt name without leading slash (e.g., "code-mode")
@@ -587,8 +599,10 @@ func LoadConfig() *Config {
 		homeDir = ""
 	}
 	defaultHistoryFile := ""
+	defaultSessionsDir := ""
 	if homeDir != "" {
-		defaultHistoryFile = fmt.Sprintf("%s/.quackops/history", homeDir)
+		defaultHistoryFile = filepath.Join(homeDir, ".quackops", "history")
+		defaultSessionsDir = filepath.Join(homeDir, ".quackops", "sessions")
 	}
 
 	config := &Config{
@@ -610,6 +624,8 @@ func LoadConfig() *Config {
 		MaxCompletions:        getEnvArg("QU_MAX_COMPLETIONS", 50).(int),
 		HistoryFile:           getEnvArg("QU_HISTORY_FILE", defaultHistoryFile).(string),
 		DisableHistory:        getEnvArg("QU_DISABLE_HISTORY", false).(bool),
+		SessionsDir:           getEnvArg("QU_SESSIONS_DIR", defaultSessionsDir).(string),
+		MaxSavedSessions:      getEnvArg("QU_MAX_SAVED_SESSIONS", 20).(int),
 		KubectlBinaryPath:     getEnvArg("QU_KUBECTL_BINARY", "kubectl").(string),
 		Theme:                 strings.ToLower(strings.TrimSpace(getEnvArg("QU_THEME", defaultTheme).(string))),
 		SuppressContentPrint:  false,
@@ -1277,14 +1293,14 @@ func defaultSlashCommands() []SlashCommand {
 			Description: "Interactive model selector for current provider",
 		},
 		{
+			Commands:    []string{"/new", "/clear"},
+			Primary:     "/new",
+			Description: "Start a fresh conversation session",
+		},
+		{
 			Commands:    []string{"/reset"},
 			Primary:     "/reset",
 			Description: "Reset conversation context",
-		},
-		{
-			Commands:    []string{"/clear"},
-			Primary:     "/clear",
-			Description: "Clear context and screen",
 		},
 		{
 			Commands:    []string{"/mcp"},
@@ -1310,6 +1326,11 @@ func defaultSlashCommands() []SlashCommand {
 			Commands:    []string{"/history"},
 			Primary:     "/history",
 			Description: "Show full session history",
+		},
+		{
+			Commands:    []string{"/sessions", "/resume", "/continue"},
+			Primary:     "/sessions",
+			Description: "List and resume saved sessions",
 		},
 		{
 			Commands:    []string{"/bye", "/exit", "/quit", "/q"},
