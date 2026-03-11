@@ -225,13 +225,17 @@ func promptForSessionSelection(cfg *config.Config) (bool, error) {
 
 	for {
 		start := page * pageSize
-		fmt.Println(formatSavedSessionsTablePage(sessions, start, pageSize))
+		fmt.Println(formatSavedSessionsTablePageWithActive(sessions, start, pageSize, cfg.CurrentSessionID))
+		hint := config.Colors.Command.Sprint("n") + config.Colors.Dim.Sprint(" next, ") +
+			config.Colors.Command.Sprint("p") + config.Colors.Dim.Sprint(" prev, ") +
+			config.Colors.Command.Sprint("q") + config.Colors.Dim.Sprint(" cancel")
 		fmt.Printf(
-			"Select session number or ID (%d-%d of %d) [%s]: ",
-			start+1,
-			minInt(start+pageSize, len(sessions)),
-			len(sessions),
-			"n next, p prev, q cancel",
+			"%s (%s-%s of %s) [%s]: ",
+			config.Colors.InfoAlt.Sprint("Select session number or ID"),
+			config.Colors.ListNumber.Sprint(start+1),
+			config.Colors.ListNumber.Sprint(minInt(start+pageSize, len(sessions))),
+			config.Colors.ListNumber.Sprint(len(sessions)),
+			hint,
 		)
 
 		var selection string
@@ -307,10 +311,14 @@ func promptForSessionSelection(cfg *config.Config) (bool, error) {
 }
 
 func formatSavedSessionsTable(sessions []quacksession.Info) string {
-	return formatSavedSessionsTablePage(sessions, 0, len(sessions))
+	return formatSavedSessionsTablePageWithActive(sessions, 0, len(sessions), "")
 }
 
 func formatSavedSessionsTablePage(sessions []quacksession.Info, start int, count int) string {
+	return formatSavedSessionsTablePageWithActive(sessions, start, count, "")
+}
+
+func formatSavedSessionsTablePageWithActive(sessions []quacksession.Info, start int, count int, activeSessionID string) string {
 	if len(sessions) == 0 {
 		return ""
 	}
@@ -341,16 +349,27 @@ func formatSavedSessionsTablePage(sessions []quacksession.Info, start int, count
 	}
 
 	var lines []string
-	header := fmt.Sprintf("#  %-*s  %-*s  %s", maxID, "Session ID", maxSummary, "First Prompt", "Updated")
-	lines = append(lines, header)
-	lines = append(lines, strings.Repeat("-", len(header)))
+	rawHeader := fmt.Sprintf("#  %-*s  %-*s  %s", maxID, "Session ID", maxSummary, "First Prompt", "Updated")
+	coloredHeader := fmt.Sprintf(
+		"%s  %s  %s  %s",
+		config.Colors.Header.Sprint("#"),
+		config.Colors.Header.Sprintf("%-*s", maxID, "Session ID"),
+		config.Colors.Header.Sprintf("%-*s", maxSummary, "First Prompt"),
+		config.Colors.Header.Sprint("Updated"),
+	)
+	lines = append(lines, coloredHeader)
+	lines = append(lines, config.Colors.Border.Sprint(strings.Repeat("-", len(rawHeader))))
 	for i, item := range visible {
 		idx := start + i + 1
-		lines = append(lines, fmt.Sprintf("%-2d %-*s  %-*s  %s",
-			idx,
-			maxID, item.ID,
-			maxSummary, item.Summary,
-			item.UpdatedAt.Local().Format(time.RFC3339)))
+		idxCell := config.Colors.ListNumber.Sprintf("%-2d", idx)
+		idCellColor := config.Colors.Accent
+		if strings.TrimSpace(activeSessionID) != "" && strings.TrimSpace(item.ID) == strings.TrimSpace(activeSessionID) {
+			idCellColor = config.Colors.AccentAlt
+		}
+		idCell := idCellColor.Sprintf("%-*s", maxID, item.ID)
+		summaryCell := config.Colors.Output.Sprintf("%-*s", maxSummary, item.Summary)
+		updatedCell := config.Colors.Dim.Sprint(item.UpdatedAt.Local().Format(time.RFC3339))
+		lines = append(lines, fmt.Sprintf("%s %s  %s  %s", idxCell, idCell, summaryCell, updatedCell))
 	}
 	return strings.Join(lines, "\n")
 }
